@@ -58,7 +58,7 @@ Returned from `Plugin.schema()`. Persisted by the SK server into `$SIGNALK_NODE_
 type PluginOptions = {
   openrouter: {
     apiKey: string                                  // required; '' on first run
-    model: string                                   // default 'anthropic/claude-haiku-4-5'
+    model: string                                   // default 'anthropic/claude-haiku-4.5'
     baseUrl: string                                 // default 'https://openrouter.ai/api/v1'
     maxCallsPerDay: number                          // default 20
     requestTimeoutMs: number                        // default 60000
@@ -473,7 +473,7 @@ Append one JSON object per line to `<dataDir>/<logFilename>`:
   "sessionStart": "...",
   "sessionEnd": "...",
   "durationSec": 1234,
-  "model": "anthropic/claude-haiku-4-5",
+  "model": "anthropic/claude-haiku-4.5",
   "promptTokens": 1234,
   "completionTokens": 567,
   "report": "..."
