@@ -1,0 +1,61 @@
+{
+  "name": "signalk-openrouter-companion",
+  "version": "0.1.0",
+  "description": "OpenRouter-powered analyzers for Signal K: engine maintenance reports and more.",
+  "main": "dist/index.js",
+  "type": "module",
+  "files": ["dist/", "README.md", "LICENSE", "CHANGELOG.md"],
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-utility",
+    "signalk-category-cloud",
+    "signalk-category-notifications",
+    "openrouter",
+    "llm",
+    "ai",
+    "marine",
+    "maintenance"
+  ],
+  "signalk-plugin-enabled-by-default": false,
+  "signalk": { "displayName": "OpenRouter Companion" },
+  "engines": { "node": ">=22" },
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Nearl Crews",
+    "email": "NearlCrews@users.noreply.github.com",
+    "url": "https://github.com/NearlCrews"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NearlCrews/signalk-openrouter-companion.git"
+  },
+  "homepage": "https://github.com/NearlCrews/signalk-openrouter-companion#readme",
+  "bugs": { "url": "https://github.com/NearlCrews/signalk-openrouter-companion/issues" },
+  "peerDependencies": { "@signalk/server-api": ">=2.24.0" },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@signalk/server-api": "^2.24.0",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.0.0"
+  },
+  "scripts": {
+    "build": "npm run clean && npm run build:types && npm run build:bundle",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build:bundle": "node esbuild.config.mjs",
+    "clean": "rm -rf dist",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "type-check": "tsc --noEmit",
+    "lint": "biome check src/ tests/",
+    "lint:fix": "biome check --write src/ tests/",
+    "format": "biome format --write src/ tests/",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run type-check && npm run lint && npm run test && npm run build"
+  }
+}
