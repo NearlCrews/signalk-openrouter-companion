@@ -1,10 +1,22 @@
+import type { BatteryEventKind } from './analyzers/Analyzer.js';
+
 export interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
   put: { enabled: boolean; path: string };
   events: string[];
 }
 
-export const MAINTENANCE_SUPPORTED_EVENTS: ReadonlyArray<string> = ['engine-stop'];
+export type MaintenanceEventKind = 'engine-stop';
+export const MAINTENANCE_SUPPORTED_EVENTS: ReadonlyArray<MaintenanceEventKind> = ['engine-stop'];
+
+export const HEALTH_SUPPORTED_EVENTS: ReadonlyArray<BatteryEventKind> = [];
+
+export const ALERTS_SUPPORTED_EVENTS: ReadonlyArray<BatteryEventKind> = [
+  'low-soc-enter',
+  'low-soc-exit',
+  'cell-imbalance-enter',
+  'cell-imbalance-exit',
+];
 
 export interface PluginOptions {
   openrouter: {
@@ -28,6 +40,18 @@ export interface PluginOptions {
       engineStartSettleSeconds: number;
       minSessionSeconds: number;
       extraWatchedPaths: string[];
+    };
+    health: {
+      enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
+    };
+    alerts: {
+      enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
+      lowSocPercent: number;
+      socExitHysteresis: number;
+      cellImbalanceV: number;
+      imbalanceSettleSec: number;
     };
   };
   output: {
@@ -61,6 +85,26 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       minSessionSeconds: 60,
       extraWatchedPaths: [],
     },
+    health: {
+      enabled: true,
+      triggers: {
+        cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.health.run' },
+        events: [],
+      },
+    },
+    alerts: {
+      enabled: true,
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: false, path: '' },
+        events: ['low-soc-enter', 'low-soc-exit', 'cell-imbalance-enter', 'cell-imbalance-exit'],
+      },
+      lowSocPercent: 30,
+      socExitHysteresis: 5,
+      cellImbalanceV: 0.1,
+      imbalanceSettleSec: 60,
+    },
   },
   output: {
     notificationPath: 'notifications.openrouter-companion.maintenance.report',
@@ -69,29 +113,52 @@ export const DEFAULT_OPTIONS: PluginOptions = {
   },
 };
 
+type PartialTriggerCfg = {
+  cron?: Partial<AnalyzerTriggerCfg['cron']>;
+  put?: Partial<AnalyzerTriggerCfg['put']>;
+  events?: string[];
+};
+
+type WithPartialTriggers<T extends { triggers: AnalyzerTriggerCfg }> = Partial<
+  Omit<T, 'triggers'>
+> & { triggers?: PartialTriggerCfg };
+
+function mergeAnalyzerCfg<T extends { triggers: AnalyzerTriggerCfg }>(
+  defaults: T,
+  input: WithPartialTriggers<T> | undefined,
+): T {
+  if (!input) return clone(defaults);
+  const inputTriggers = input.triggers ?? {};
+  return {
+    ...defaults,
+    ...input,
+    triggers: {
+      cron: { ...defaults.triggers.cron, ...(inputTriggers.cron ?? {}) },
+      put: { ...defaults.triggers.put, ...(inputTriggers.put ?? {}) },
+      events: inputTriggers.events ?? defaults.triggers.events,
+    },
+  };
+}
+
 export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): PluginOptions {
   if (!input) return clone(DEFAULT_OPTIONS);
-  const inputMaintenance = input.analyzers?.maintenance;
-  const inputTriggers = (inputMaintenance as { triggers?: Partial<AnalyzerTriggerCfg> })?.triggers;
+  const inputAnalyzers = input.analyzers as
+    | {
+        maintenance?: WithPartialTriggers<PluginOptions['analyzers']['maintenance']>;
+        health?: WithPartialTriggers<PluginOptions['analyzers']['health']>;
+        alerts?: WithPartialTriggers<PluginOptions['analyzers']['alerts']>;
+      }
+    | undefined;
   return {
     openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(input.openrouter ?? {}) },
     questdb: { ...DEFAULT_OPTIONS.questdb, ...(input.questdb ?? {}) },
     analyzers: {
-      maintenance: {
-        ...DEFAULT_OPTIONS.analyzers.maintenance,
-        ...(inputMaintenance ?? {}),
-        triggers: {
-          cron: {
-            ...DEFAULT_OPTIONS.analyzers.maintenance.triggers.cron,
-            ...(inputTriggers?.cron ?? {}),
-          },
-          put: {
-            ...DEFAULT_OPTIONS.analyzers.maintenance.triggers.put,
-            ...(inputTriggers?.put ?? {}),
-          },
-          events: inputTriggers?.events ?? DEFAULT_OPTIONS.analyzers.maintenance.triggers.events,
-        },
-      },
+      maintenance: mergeAnalyzerCfg(
+        DEFAULT_OPTIONS.analyzers.maintenance,
+        inputAnalyzers?.maintenance,
+      ),
+      health: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.health, inputAnalyzers?.health),
+      alerts: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.alerts, inputAnalyzers?.alerts),
     },
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
   };

@@ -130,4 +130,74 @@ describe('TriggerRouter', () => {
     );
     expect(a.collectContext).not.toHaveBeenCalled();
   });
+
+  it('matches cron triggers by pattern', async () => {
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
+    });
+    const deps = makeDeps();
+    const router = new TriggerRouter([a], deps);
+    await router.dispatch(
+      'cron',
+      { kind: 'cron', firedAt: new Date() },
+      { cronPattern: '0 8 * * *' },
+    );
+    expect(a.collectContext).toHaveBeenCalled();
+  });
+
+  it('does not match cron triggers with a different pattern', async () => {
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
+    });
+    const deps = makeDeps();
+    const router = new TriggerRouter([a], deps);
+    await router.dispatch(
+      'cron',
+      { kind: 'cron', firedAt: new Date() },
+      { cronPattern: '0 9 * * *' },
+    );
+    expect(a.collectContext).not.toHaveBeenCalled();
+  });
+
+  it('matches battery-event triggers by subkind', async () => {
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
+    });
+    const deps = makeDeps();
+    const router = new TriggerRouter([a], deps);
+    await router.dispatch(
+      'battery-event',
+      {
+        kind: 'battery-event',
+        firedAt: new Date(),
+        bankId: 'house',
+        batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+      },
+      { batterySubkind: 'low-soc-enter' },
+    );
+    expect(a.collectContext).toHaveBeenCalled();
+  });
+
+  it('does not match battery-event triggers with a different subkind', async () => {
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
+    });
+    const deps = makeDeps();
+    const router = new TriggerRouter([a], deps);
+    await router.dispatch(
+      'battery-event',
+      {
+        kind: 'battery-event',
+        firedAt: new Date(),
+        bankId: 'house',
+        batteryEvent: { subkind: 'cell-imbalance-enter' },
+      },
+      { batterySubkind: 'cell-imbalance-enter' },
+    );
+    expect(a.collectContext).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,8 @@
 const ENGINE_RPM_PATTERN = /^propulsion\.([^.]+)\.revolutions$/;
+const BANK_PATTERN = /^electrical\.batteries\.([^.]+)\./;
+
+export const SOC_PATH_RE = /^electrical\.batteries\.([^.]+)\.capacity\.stateOfCharge$/;
+export const CELL_VOLT_PATH_RE = /^electrical\.batteries\.([^.]+)\.cell(\d+)\.voltage$/;
 
 export function discoverEngineIds(paths: string[]): string[] {
   const out = new Set<string>();
@@ -9,7 +13,16 @@ export function discoverEngineIds(paths: string[]): string[] {
   return Array.from(out).sort();
 }
 
-const WATCH_PREFIXES = [
+export function discoverBankIds(paths: string[]): string[] {
+  const out = new Set<string>();
+  for (const p of paths) {
+    const m = p.match(BANK_PATTERN);
+    if (m?.[1]) out.add(m[1]);
+  }
+  return Array.from(out).sort();
+}
+
+export const WATCH_PREFIXES: ReadonlyArray<string> = [
   'propulsion.',
   'electrical.batteries.',
   'electrical.alternators.',
@@ -22,5 +35,13 @@ export function discoverWatchedPaths(paths: string[], extras: string[]): string[
     if (WATCH_PREFIXES.some((prefix) => p.startsWith(prefix))) out.add(p);
   }
   for (const e of extras) out.add(e);
+  return Array.from(out).sort();
+}
+
+export function discoverBatteryWatchedPaths(paths: string[]): string[] {
+  const out = new Set<string>();
+  for (const p of paths) {
+    if (p.startsWith('electrical.batteries.')) out.add(p);
+  }
   return Array.from(out).sort();
 }

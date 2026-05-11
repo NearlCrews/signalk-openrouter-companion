@@ -1,6 +1,7 @@
 import type {
   Analyzer,
   AnalyzerDeps,
+  BatteryEventKind,
   TriggerCtx,
   TriggerKind,
   TriggerSpec,
@@ -10,22 +11,40 @@ import { stringify } from './logger.js';
 export interface DispatchExtras {
   putPath?: string;
   cronPattern?: string;
+  batterySubkind?: BatteryEventKind;
+}
+
+type PublishFn = (text: string, ctx: TriggerCtx, deps: AnalyzerDeps) => Promise<void>;
+
+interface AnalyzerEntry {
+  analyzer: Analyzer;
+  publish: PublishFn;
 }
 
 export class TriggerRouter {
-  constructor(
-    private analyzers: Analyzer[],
-    private deps: AnalyzerDeps,
-  ) {}
+  private entries: AnalyzerEntry[];
 
-  async dispatch(kind: TriggerKind, ctx: TriggerCtx, extras: DispatchExtras = {}): Promise<void> {
-    const matches = this.analyzers.filter((a) =>
-      a.triggers.some((t) => triggerMatches(t, kind, extras)),
-    );
-    await Promise.allSettled(matches.map((a) => this.runOne(a, ctx)));
+  constructor(
+    analyzers: Analyzer[],
+    private deps: AnalyzerDeps,
+  ) {
+    this.entries = analyzers.map((a) => ({
+      analyzer: a,
+      publish: a.publishOutput
+        ? a.publishOutput.bind(a)
+        : async (text, ctx, deps) => deps.publisher.publish(text, { analyzerId: a.id, ctx }),
+    }));
   }
 
-  private async runOne(a: Analyzer, ctx: TriggerCtx): Promise<void> {
+  async dispatch(kind: TriggerKind, ctx: TriggerCtx, extras: DispatchExtras = {}): Promise<void> {
+    const matches = this.entries.filter((e) =>
+      e.analyzer.triggers.some((t) => triggerMatches(t, kind, extras)),
+    );
+    await Promise.allSettled(matches.map((e) => this.runOne(e, ctx)));
+  }
+
+  private async runOne(entry: AnalyzerEntry, ctx: TriggerCtx): Promise<void> {
+    const a = entry.analyzer;
     try {
       const input = await a.collectContext(ctx, this.deps);
       if (input == null) return;
@@ -38,11 +57,7 @@ export class TriggerRouter {
       const { text } = await this.deps.llm.complete({ system, user });
       await this.deps.budget.recordCall();
       this.deps.setStatus?.('Running');
-      const publish = a.publishOutput
-        ? a.publishOutput.bind(a)
-        : async (t: string, c: TriggerCtx, d: AnalyzerDeps) =>
-            d.publisher.publish(t, { analyzerId: a.id, ctx: c });
-      await publish(text, ctx, this.deps);
+      await entry.publish(text, ctx, this.deps);
     } catch (err) {
       this.deps.logger.error(`${a.id}: ${stringify(err)}`);
       await this.deps.publisher.publishFailure(a.id, ctx, err).catch(() => {});
@@ -54,5 +69,6 @@ function triggerMatches(t: TriggerSpec, kind: TriggerKind, extras: DispatchExtra
   if (t.kind !== kind) return false;
   if (t.kind === 'put') return t.path === extras.putPath;
   if (t.kind === 'cron') return t.pattern === extras.cronPattern;
+  if (t.kind === 'battery-event') return t.subkind === extras.batterySubkind;
   return true;
 }

@@ -1,10 +1,19 @@
 import { join } from 'node:path';
-import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
+import type { Analyzer, BatteryEventKind, TriggerCtx } from './analyzers/Analyzer.js';
+import { AlertAnalyzer } from './analyzers/alerts.js';
+import { HealthAnalyzer } from './analyzers/health.js';
 import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
+import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
 import { BudgetTracker } from './core/budget.js';
 import { RollingBuffer } from './core/buffer.js';
 import { CronScheduler } from './core/cronScheduler.js';
-import { discoverEngineIds, discoverWatchedPaths } from './core/discovery.js';
+import {
+  CELL_VOLT_PATH_RE,
+  discoverBankIds,
+  discoverEngineIds,
+  discoverWatchedPaths,
+  SOC_PATH_RE,
+} from './core/discovery.js';
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
@@ -16,6 +25,22 @@ import { mergeWithDefaults, type PluginOptions } from './types.js';
 
 const PLUGIN_ID = 'signalk-openrouter-companion';
 const PLUGIN_NAME = 'OpenRouter Companion';
+
+const BUFFER_MAX_AGE_MS = 26 * 3600 * 1000;
+const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
+const SOURCE_WINDOW_MS = 1000;
+const MONITOR_SOURCE_WINDOW_MS = 5000;
+const MONITOR_TICK_MS = 5000;
+const WATCHDOG_TICK_MS = 5000;
+const WATCHDOG_SEC = 30;
+const RESCAN_INTERVAL_MS = 60_000;
+
+const BATTERY_SUBKINDS: ReadonlyArray<BatteryEventKind> = [
+  'low-soc-enter',
+  'low-soc-exit',
+  'cell-imbalance-enter',
+  'cell-imbalance-exit',
+];
 
 interface ServerApiLike {
   streambundle: {
@@ -53,7 +78,7 @@ export default function createPlugin(app: ServerApiLike): {
 } {
   const logger = new Logger(app);
   const unsubs: Array<() => void> = [];
-  let intervalHandles: NodeJS.Timeout[] = [];
+  const intervalHandles: NodeJS.Timeout[] = [];
   let lifecycleController: AbortController | null = null;
   let restartFn: (() => void) | null = null;
   let scheduler: CronScheduler | null = null;
@@ -61,7 +86,8 @@ export default function createPlugin(app: ServerApiLike): {
   return {
     id: PLUGIN_ID,
     name: PLUGIN_NAME,
-    description: 'OpenRouter-powered analyzers for Signal K: maintenance reports and more.',
+    description:
+      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, and threshold alerts.',
     enabledByDefault: false,
     schema: () => buildSchema(),
     uiSchema: () => buildUiSchema(),
@@ -84,14 +110,24 @@ export default function createPlugin(app: ServerApiLike): {
         const logPath = join(dataDir, cfg.output.logFilename);
         const budgetPath = join(dataDir, 'budget.json');
 
-        const buffer = new RollingBuffer({ maxAgeMs: 6 * 3600 * 1000, maxEntriesPerPath: 10_000 });
+        const buffer = new RollingBuffer({
+          maxAgeMs: BUFFER_MAX_AGE_MS,
+          maxEntriesPerPath: BUFFER_MAX_ENTRIES_PER_PATH,
+        });
         const detector = new EngineDetector({
           stopRpmHz: cfg.analyzers.maintenance.engineStopRpmHzThreshold,
           stopSettleSec: cfg.analyzers.maintenance.engineStopSettleSeconds,
           startRpmHz: cfg.analyzers.maintenance.engineStartRpmHzThreshold,
           startSettleSec: cfg.analyzers.maintenance.engineStartSettleSeconds,
-          watchdogSec: 30,
-          sourceWindowMs: 1000,
+          watchdogSec: WATCHDOG_SEC,
+          sourceWindowMs: SOURCE_WINDOW_MS,
+        });
+        const monitor = new BatteryMonitor({
+          lowSocPercent: cfg.analyzers.alerts.lowSocPercent,
+          socExitHysteresis: cfg.analyzers.alerts.socExitHysteresis,
+          cellImbalanceV: cfg.analyzers.alerts.cellImbalanceV,
+          imbalanceSettleSec: cfg.analyzers.alerts.imbalanceSettleSec,
+          sourceWindowMs: MONITOR_SOURCE_WINDOW_MS,
         });
         const llm = new OpenRouterClient({
           apiKey: cfg.openrouter.apiKey,
@@ -118,13 +154,21 @@ export default function createPlugin(app: ServerApiLike): {
           logPath,
         });
 
-        const maintenance = cfg.analyzers.maintenance.enabled
-          ? new MaintenanceAnalyzer({
+        const analyzers: Analyzer[] = [];
+        if (cfg.analyzers.maintenance.enabled) {
+          analyzers.push(
+            new MaintenanceAnalyzer({
               triggers: cfg.analyzers.maintenance.triggers,
               minSessionSeconds: cfg.analyzers.maintenance.minSessionSeconds,
-            })
-          : null;
-        const analyzers: Analyzer[] = maintenance ? [maintenance] : [];
+            }),
+          );
+        }
+        if (cfg.analyzers.health.enabled) {
+          analyzers.push(new HealthAnalyzer({ triggers: cfg.analyzers.health.triggers }));
+        }
+        if (cfg.analyzers.alerts.enabled) {
+          analyzers.push(new AlertAnalyzer({ triggers: cfg.analyzers.alerts.triggers }));
+        }
 
         const budgetPromise = BudgetTracker.load({
           maxPerDay: cfg.openrouter.maxCallsPerDay,
@@ -181,13 +225,32 @@ export default function createPlugin(app: ServerApiLike): {
         });
 
         detector.on('possible-stop', (e) => {
-          logger.debug(`possible-stop: engine ${e.engineId} silent for >${30}s while running`);
+          logger.debug(
+            `possible-stop: engine ${e.engineId} silent for >${WATCHDOG_SEC}s while running`,
+          );
         });
+
+        const dispatchBatteryEvent = (e: BatteryEvent): void => {
+          if (!router) return;
+          const batteryEvent =
+            e.kind === 'low-soc-enter' || e.kind === 'low-soc-exit'
+              ? { subkind: e.kind, soc: e.soc }
+              : { subkind: e.kind, imbalanceV: e.imbalanceV };
+          const ctx: TriggerCtx = {
+            kind: 'battery-event',
+            firedAt: new Date(e.ts),
+            bankId: e.bankId,
+            batteryEvent,
+          };
+          void router.dispatch('battery-event', ctx, { batterySubkind: e.kind });
+        };
+        for (const k of BATTERY_SUBKINDS) monitor.on(k, dispatchBatteryEvent);
 
         const available = app.streambundle.getAvailablePaths();
         const engineIds = discoverEngineIds(available);
-        if (engineIds.length === 0) {
-          app.setPluginStatus('Running, no engine data detected');
+        const bankIds = discoverBankIds(available);
+        if (engineIds.length === 0 && bankIds.length === 0) {
+          app.setPluginStatus('Running, no engine or battery data detected');
           return;
         }
         const watched = discoverWatchedPaths(
@@ -195,9 +258,8 @@ export default function createPlugin(app: ServerApiLike): {
           cfg.analyzers.maintenance.extraWatchedPaths,
         );
 
-        for (const engineId of engineIds) {
-          const rpmPath = `propulsion.${engineId}.revolutions`;
-          const bus = app.streambundle.getSelfBus(rpmPath);
+        const subscribeEnginePath = (engineId: string, path: string): void => {
+          const bus = app.streambundle.getSelfBus(path);
           const unsub = bus.onValue((delta) => {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
             const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
@@ -205,96 +267,75 @@ export default function createPlugin(app: ServerApiLike): {
             const v = typeof d.value === 'number' ? d.value : null;
             if (v != null) {
               detector.observe(engineId, src, v, ts);
-              buffer.record(rpmPath, v, ts, src);
+              buffer.record(path, v, ts, src);
             }
           });
           if (unsub) unsubs.push(unsub);
-        }
+        };
 
-        for (const path of watched) {
-          if (path.endsWith('.revolutions') && discoverEngineIds([path]).length > 0) continue;
+        const subscribeWatchedPath = (path: string): void => {
           const bus = app.streambundle.getSelfBus(path);
           const unsub = bus.onValue((delta) => {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
             const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
             const src = d.$source ?? 'unknown';
             buffer.record(path, d.value, ts, src);
+            if (typeof d.value !== 'number') return;
+            const socMatch = path.match(SOC_PATH_RE);
+            if (socMatch) {
+              monitor.observeSoc(socMatch[1]!, src, d.value, ts);
+              return;
+            }
+            const cellMatch = path.match(CELL_VOLT_PATH_RE);
+            if (cellMatch) {
+              monitor.observeCellV(cellMatch[1]!, Number.parseInt(cellMatch[2]!, 10), d.value, ts);
+            }
           });
           if (unsub) unsubs.push(unsub);
+        };
+
+        for (const engineId of engineIds) {
+          subscribeEnginePath(engineId, `propulsion.${engineId}.revolutions`);
         }
 
-        app.subscriptionmanager.subscribe(
-          {
-            context: 'vessels.self',
-            subscribe: [{ path: 'notifications.propulsion.*', policy: 'instant' }],
-          },
-          unsubs,
-          (err) => logger.error(stringify(err)),
-          () => {
-            /* captured by analyzers via getSelfPath snapshot */
-          },
+        const engineRpmPaths = new Set(engineIds.map((id) => `propulsion.${id}.revolutions`));
+        for (const path of watched) {
+          if (engineRpmPaths.has(path)) continue;
+          subscribeWatchedPath(path);
+        }
+
+        registerAnalyzerPut(app, cfg.analyzers.maintenance, () => router, PLUGIN_ID);
+        registerAnalyzerPut(app, cfg.analyzers.health, () => router, PLUGIN_ID);
+        registerAnalyzerPut(app, cfg.analyzers.alerts, () => router, PLUGIN_ID);
+
+        intervalHandles.push(
+          setInterval(() => detector.tickWatchdog(Date.now()), WATCHDOG_TICK_MS),
         );
-
-        if (
-          maintenance &&
-          cfg.analyzers.maintenance.triggers.put.enabled &&
-          cfg.analyzers.maintenance.triggers.put.path
-        ) {
-          const putPath = cfg.analyzers.maintenance.triggers.put.path;
-          app.registerPutHandler(
-            'vessels.self',
-            putPath,
-            (
-              _context: string,
-              _path: string,
-              value: unknown,
-              cb: (r: { state: string; statusCode?: number; message?: string }) => void,
-            ): { state: string } => {
-              void (async () => {
-                try {
-                  if (!router) {
-                    cb({
-                      state: 'COMPLETED',
-                      statusCode: 503,
-                      message: 'plugin not fully started',
-                    });
-                    return;
-                  }
-                  const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(), put: { value } };
-                  await router.dispatch('put', ctx, { putPath });
-                  cb({ state: 'COMPLETED', statusCode: 200 });
-                } catch (err) {
-                  cb({ state: 'COMPLETED', statusCode: 500, message: stringify(err) });
-                }
-              })();
-              return { state: 'PENDING' };
-            },
-            PLUGIN_ID,
-          );
-        }
-
-        intervalHandles.push(setInterval(() => detector.tickWatchdog(Date.now()), 5000));
+        intervalHandles.push(setInterval(() => monitor.tick(Date.now()), MONITOR_TICK_MS));
         intervalHandles.push(
           setInterval(() => {
             const fresh = app.streambundle.getAvailablePaths();
             const newEngines = discoverEngineIds(fresh).filter((id) => !engineIds.includes(id));
             for (const id of newEngines) {
               engineIds.push(id);
-              const path = `propulsion.${id}.revolutions`;
-              const bus = app.streambundle.getSelfBus(path);
-              const u = bus.onValue((delta) => {
-                const d = delta as { value?: unknown; timestamp?: string; $source?: string };
-                const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
-                const src = d.$source ?? 'unknown';
-                const v = typeof d.value === 'number' ? d.value : null;
-                if (v != null) {
-                  detector.observe(id, src, v, ts);
-                  buffer.record(path, v, ts, src);
-                }
-              });
-              if (u) unsubs.push(u);
+              subscribeEnginePath(id, `propulsion.${id}.revolutions`);
             }
-          }, 60_000),
+            const newBanks = discoverBankIds(fresh).filter((id) => !bankIds.includes(id));
+            if (newBanks.length > 0) {
+              const freshWatched = discoverWatchedPaths(
+                fresh,
+                cfg.analyzers.maintenance.extraWatchedPaths,
+              );
+              for (const id of newBanks) {
+                bankIds.push(id);
+                const prefix = `electrical.batteries.${id}.`;
+                for (const path of freshWatched) {
+                  if (engineRpmPaths.has(path)) continue;
+                  if (path.startsWith(prefix)) subscribeWatchedPath(path);
+                }
+              }
+            }
+          }, RESCAN_INTERVAL_MS),
         );
 
         app.setPluginStatus('Running');
@@ -304,11 +345,11 @@ export default function createPlugin(app: ServerApiLike): {
     },
 
     stop: async () => {
+      restartFn = null;
       if (lifecycleController) {
         lifecycleController.abort();
         lifecycleController = null;
       }
-      restartFn = null;
       if (scheduler) {
         scheduler.stopAll();
         scheduler = null;
@@ -321,8 +362,55 @@ export default function createPlugin(app: ServerApiLike): {
         }
       }
       for (const h of intervalHandles) clearInterval(h);
-      intervalHandles = [];
+      intervalHandles.length = 0;
       app.setPluginStatus('Stopped');
     },
   };
+}
+
+interface AnalyzerSectionLike {
+  enabled: boolean;
+  triggers: { put: { enabled: boolean; path: string } };
+}
+
+function registerAnalyzerPut(
+  app: ServerApiLike,
+  section: AnalyzerSectionLike,
+  getRouter: () => TriggerRouter | null,
+  pluginId: string,
+): void {
+  if (!section.enabled) return;
+  const { enabled, path } = section.triggers.put;
+  if (!enabled || !path) return;
+  app.registerPutHandler(
+    'vessels.self',
+    path,
+    (
+      _context: string,
+      _path: string,
+      value: unknown,
+      cb: (r: { state: string; statusCode?: number; message?: string }) => void,
+    ): { state: string } => {
+      void (async () => {
+        try {
+          const router = getRouter();
+          if (!router) {
+            cb({
+              state: 'COMPLETED',
+              statusCode: 503,
+              message: 'plugin not fully started',
+            });
+            return;
+          }
+          const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(), put: { value } };
+          await router.dispatch('put', ctx, { putPath: path });
+          cb({ state: 'COMPLETED', statusCode: 200 });
+        } catch (err) {
+          cb({ state: 'COMPLETED', statusCode: 500, message: stringify(err) });
+        }
+      })();
+      return { state: 'PENDING' };
+    },
+    pluginId,
+  );
 }

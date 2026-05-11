@@ -30,8 +30,8 @@ export class RollingBuffer {
     return arr.filter((e) => e.ts >= fromTs && e.ts <= toTs);
   }
 
-  paths(): IterableIterator<[string, BufferEntry[]]> {
-    return this.store.entries();
+  pathKeys(): IterableIterator<string> {
+    return this.store.keys();
   }
 
   summarize(
@@ -65,13 +65,17 @@ export class RollingBuffer {
 
   private evict(arr: BufferEntry[], now: number): void {
     const cutoff = now - this.opts.maxAgeMs;
-    while (arr.length > 0) {
-      const first = arr[0];
-      if (!first || first.ts >= cutoff) break;
-      arr.shift();
+    // Age eviction: find first non-stale index in one pass, splice once.
+    let firstFresh = 0;
+    while (firstFresh < arr.length) {
+      const e = arr[firstFresh];
+      if (!e || e.ts >= cutoff) break;
+      firstFresh += 1;
     }
-    while (arr.length > this.opts.maxEntriesPerPath) {
-      arr.shift();
+    if (firstFresh > 0) arr.splice(0, firstFresh);
+    // Count eviction: drop oldest excess in one shot.
+    if (arr.length > this.opts.maxEntriesPerPath) {
+      arr.splice(0, arr.length - this.opts.maxEntriesPerPath);
     }
   }
 }

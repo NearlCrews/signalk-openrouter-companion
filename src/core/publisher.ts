@@ -2,7 +2,21 @@ import { appendFile } from 'node:fs/promises';
 import type { TriggerCtx } from '../analyzers/Analyzer.js';
 import { stringify } from './logger.js';
 
-export type NotificationState = 'normal' | 'nominal' | 'warn';
+export type NotificationState = 'normal' | 'nominal' | 'warn' | 'alert';
+
+export interface SignalKNotificationValue {
+  state: NotificationState;
+  method: string[];
+  message: string;
+  id: string;
+}
+
+export interface SignalKNotificationDelta {
+  updates: Array<{
+    timestamp: string;
+    values: Array<{ path: string; value: SignalKNotificationValue }>;
+  }>;
+}
 
 export interface PublisherCfg {
   app: { handleMessage(pluginId: string, delta: unknown): void };
@@ -55,14 +69,33 @@ export class ReportPublisher {
     });
   }
 
-  private makeDelta(text: string, state: NotificationState, now: Date, meta: PublishMeta): unknown {
+  async publishOnPath(
+    text: string,
+    meta: PublishMeta,
+    override: { path: string; state: NotificationState },
+  ): Promise<void> {
+    const now = new Date();
+    this.cfg.app.handleMessage(
+      this.cfg.pluginId,
+      this.makeDelta(text, override.state, now, meta, override.path),
+    );
+    await this.appendLog(this.buildEntry(text, meta, now));
+  }
+
+  private makeDelta(
+    text: string,
+    state: NotificationState,
+    now: Date,
+    meta: PublishMeta,
+    path: string = this.cfg.notificationPath,
+  ): SignalKNotificationDelta {
     return {
       updates: [
         {
           timestamp: now.toISOString(),
           values: [
             {
-              path: this.cfg.notificationPath,
+              path,
               value: {
                 state,
                 method: ['visual'],

@@ -20,11 +20,13 @@ describe('plugin lifecycle', () => {
     expect(app.registeredPuts).toHaveLength(0);
   });
 
-  it('reports "no engine data detected" when no propulsion paths exist', async () => {
+  it('reports "no engine or battery data detected" when neither domain has data', async () => {
     app.availablePaths = ['environment.water.temperature'];
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
-    expect(app.statusMessages.some((m) => m.includes('no engine data detected'))).toBe(true);
+    expect(app.statusMessages.some((m) => m.includes('no engine or battery data detected'))).toBe(
+      true,
+    );
   });
 
   it('subscribes to discovered engine RPM paths and registers PUT handler', () => {
@@ -39,6 +41,33 @@ describe('plugin lifecycle', () => {
           r.path === 'plugins.openrouter-companion.maintenance.run' && r.context === 'vessels.self',
       ),
     ).toBe(true);
+  });
+
+  it('subscribes to discovered bank paths and registers health PUT handler', () => {
+    app.availablePaths = [
+      'electrical.batteries.house.voltage',
+      'electrical.batteries.house.current',
+      'electrical.batteries.house.capacity.stateOfCharge',
+      'electrical.batteries.starter.voltage',
+    ];
+    const plugin = createPlugin(app as never);
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    expect(app.buses.has('electrical.batteries.house.voltage')).toBe(true);
+    expect(app.buses.has('electrical.batteries.house.capacity.stateOfCharge')).toBe(true);
+    expect(app.buses.has('electrical.batteries.starter.voltage')).toBe(true);
+    expect(
+      app.registeredPuts.some(
+        (r) => r.path === 'plugins.openrouter-companion.health.run' && r.context === 'vessels.self',
+      ),
+    ).toBe(true);
+  });
+
+  it('subscribes to both engine and battery paths when both domains are present', () => {
+    app.availablePaths = ['propulsion.port.revolutions', 'electrical.batteries.house.voltage'];
+    const plugin = createPlugin(app as never);
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    expect(app.buses.has('propulsion.port.revolutions')).toBe(true);
+    expect(app.buses.has('electrical.batteries.house.voltage')).toBe(true);
   });
 
   it('drains subscriptions on stop()', async () => {

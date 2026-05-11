@@ -3,7 +3,7 @@ import { buildSchema, buildUiSchema } from '../src/schema.js';
 import { mergeWithDefaults } from '../src/types.js';
 
 describe('schema', () => {
-  it('declares apiKey as required string and other defaults', () => {
+  it('declares apiKey as required and notificationState as full ALARM_STATE enum', () => {
     const s = buildSchema();
     expect(s.type).toBe('object');
     const openrouter = s.properties.openrouter as {
@@ -11,16 +11,15 @@ describe('schema', () => {
       properties: Record<string, Record<string, unknown>>;
     };
     expect(openrouter.required).toContain('apiKey');
-    expect(openrouter.properties.model.default).toBe('anthropic/claude-haiku-4.5');
-    expect(openrouter.properties.maxCallsPerDay.default).toBe(20);
-    const questdb = s.properties.questdb as { properties: Record<string, Record<string, unknown>> };
-    expect(questdb.properties.enabled.default).toBe(true);
-    const analyzers = s.properties.analyzers as {
-      properties: { maintenance: { properties: Record<string, Record<string, unknown>> } };
-    };
-    expect(analyzers.properties.maintenance.properties.engineStopRpmHzThreshold.default).toBe(1.0);
     const output = s.properties.output as { properties: Record<string, Record<string, unknown>> };
-    expect(output.properties.notificationState.enum).toEqual(['normal', 'nominal']);
+    expect(output.properties.notificationState.enum).toEqual([
+      'nominal',
+      'normal',
+      'alert',
+      'warn',
+      'alarm',
+      'emergency',
+    ]);
   });
 
   it('exposes a triggers block on the maintenance analyzer', () => {

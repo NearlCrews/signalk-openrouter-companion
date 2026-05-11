@@ -1,4 +1,10 @@
-import { type AnalyzerTriggerCfg, DEFAULT_OPTIONS, MAINTENANCE_SUPPORTED_EVENTS } from './types.js';
+import {
+  ALERTS_SUPPORTED_EVENTS,
+  type AnalyzerTriggerCfg,
+  DEFAULT_OPTIONS,
+  HEALTH_SUPPORTED_EVENTS,
+  MAINTENANCE_SUPPORTED_EVENTS,
+} from './types.js';
 
 function triggerSchema(
   defaults: AnalyzerTriggerCfg,
@@ -158,6 +164,62 @@ export function buildSchema(): {
               },
             },
           },
+          health: {
+            type: 'object',
+            title: 'Daily Battery Health Summary',
+            properties: {
+              enabled: {
+                type: 'boolean',
+                title: 'Enabled',
+                default: DEFAULT_OPTIONS.analyzers.health.enabled,
+              },
+              triggers: triggerSchema(
+                DEFAULT_OPTIONS.analyzers.health.triggers,
+                HEALTH_SUPPORTED_EVENTS,
+              ),
+            },
+          },
+          alerts: {
+            type: 'object',
+            title: 'Battery Threshold Alerts',
+            properties: {
+              enabled: {
+                type: 'boolean',
+                title: 'Enabled',
+                default: DEFAULT_OPTIONS.analyzers.alerts.enabled,
+              },
+              triggers: triggerSchema(
+                DEFAULT_OPTIONS.analyzers.alerts.triggers,
+                ALERTS_SUPPORTED_EVENTS,
+              ),
+              lowSocPercent: {
+                type: 'number',
+                title: 'Low-SoC threshold (%)',
+                default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
+                minimum: 0,
+                maximum: 100,
+              },
+              socExitHysteresis: {
+                type: 'number',
+                title: 'Low-SoC exit hysteresis (%)',
+                default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
+                minimum: 0,
+                maximum: 50,
+              },
+              cellImbalanceV: {
+                type: 'number',
+                title: 'Cell imbalance threshold (V)',
+                default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
+                minimum: 0,
+              },
+              imbalanceSettleSec: {
+                type: 'integer',
+                title: 'Cell imbalance settle time (s)',
+                default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
+                minimum: 0,
+              },
+            },
+          },
         },
       },
       output: {
@@ -167,7 +229,7 @@ export function buildSchema(): {
           notificationPath: { type: 'string', default: DEFAULT_OPTIONS.output.notificationPath },
           notificationState: {
             type: 'string',
-            enum: ['normal', 'nominal'],
+            enum: ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'],
             default: DEFAULT_OPTIONS.output.notificationState,
           },
           logFilename: { type: 'string', default: DEFAULT_OPTIONS.output.logFilename },

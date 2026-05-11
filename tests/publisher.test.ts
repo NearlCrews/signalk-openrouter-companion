@@ -59,6 +59,39 @@ describe('ReportPublisher', () => {
     expect(entry.report).toBe('the report text');
   });
 
+  it('publishOnPath emits on the override path with the override state', async () => {
+    const logPath = join(dir, 'reports.jsonl');
+    const p = new ReportPublisher({
+      app,
+      pluginId: 'orc',
+      notificationPath: 'notifications.default.report',
+      notificationState: 'normal',
+      logPath,
+    });
+    await p.publishOnPath(
+      'soc dropped',
+      {
+        analyzerId: 'alerts',
+        ctx: {
+          kind: 'battery-event',
+          firedAt: new Date('2026-05-10T10:00:00Z'),
+          bankId: 'house',
+          batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+        },
+      },
+      { path: 'notifications.openrouter-companion.alert.low-soc-enter', state: 'alert' },
+    );
+    expect(app.published).toHaveLength(1);
+    const d = app.published[0]!.delta as {
+      updates: { values: { path: string; value: { state: string; message: string } }[] }[];
+    };
+    expect(d.updates[0]!.values[0]!.path).toBe(
+      'notifications.openrouter-companion.alert.low-soc-enter',
+    );
+    expect(d.updates[0]!.values[0]!.value.state).toBe('alert');
+    expect(d.updates[0]!.values[0]!.value.message).toBe('soc dropped');
+  });
+
   it('publishFailure emits a warn-state notification', async () => {
     const logPath = join(dir, 'reports.jsonl');
     const p = new ReportPublisher({

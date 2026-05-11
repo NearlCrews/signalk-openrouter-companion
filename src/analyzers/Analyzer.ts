@@ -4,7 +4,14 @@ export type TriggerSpec =
   | { kind: 'possible-stop' }
   | { kind: 'put'; path: string }
   | { kind: 'cron'; pattern: string }
-  | { kind: 'sk-notification'; pathPattern: string };
+  | { kind: 'sk-notification'; pathPattern: string }
+  | { kind: 'battery-event'; subkind: BatteryEventKind };
+
+export type BatteryEventKind =
+  | 'low-soc-enter'
+  | 'low-soc-exit'
+  | 'cell-imbalance-enter'
+  | 'cell-imbalance-exit';
 
 export type TriggerKind = TriggerSpec['kind'];
 
@@ -21,6 +28,8 @@ export interface TriggerCtx {
   engineSession?: EngineSessionCtx;
   put?: { value: unknown };
   notification?: { path: string; value: unknown };
+  bankId?: string;
+  batteryEvent?: { subkind: BatteryEventKind; soc?: number; imbalanceV?: number };
 }
 
 export type AnalysisInput = Record<string, unknown>;
@@ -42,11 +51,11 @@ export interface AnalyzerDeps {
   requestRestart?: () => void;
 }
 
-export interface Analyzer {
+export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly id: string;
   readonly title: string;
   readonly triggers: ReadonlyArray<TriggerSpec>;
-  collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AnalysisInput | null>;
-  buildPrompt(input: AnalysisInput): { system: string; user: string };
+  collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
+  buildPrompt(input: I): { system: string; user: string };
   publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
 }
