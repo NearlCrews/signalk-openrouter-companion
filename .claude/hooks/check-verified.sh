@@ -1,14 +1,20 @@
 #!/bin/bash
 # Reads the Bash tool's command from stdin (Claude Code hook contract).
-# If the command is git push or npm publish, ensure .last-verified-sha matches HEAD.
+# Blocks git push or npm publish unless .last-verified-sha matches HEAD.
+#
+# Strips quoted strings from the command first so that commands which merely
+# mention "git push" inside an echoed message do not trigger a false block.
 set -euo pipefail
 
-# Hook input arrives as JSON on stdin per the Claude Code hook spec.
 input=$(cat)
 cmd=$(echo "$input" | jq -r '.tool_input.command // ""')
 
-# Only act on push or publish
-if echo "$cmd" | grep -qE '(git[[:space:]]+push|npm[[:space:]]+publish)'; then
+# Drop single-quoted and double-quoted substrings so embedded literals in echo,
+# comments, and heredocs do not match. Then look for the dangerous verbs at the
+# start of the command or right after a chaining operator.
+stripped=$(printf '%s' "$cmd" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')
+
+if printf '%s' "$stripped" | grep -qE '(^|[;&|`(][[:space:]]*)(git[[:space:]]+push|npm[[:space:]]+publish)\b'; then
   cd "$(git rev-parse --show-toplevel)"
   head=$(git rev-parse HEAD 2>/dev/null || true)
   marker_path=.last-verified-sha
