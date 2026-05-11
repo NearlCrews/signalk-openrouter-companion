@@ -30,11 +30,13 @@ export class TriggerRouter {
       if (input == null) return;
       if (!this.deps.budget.canSpend()) {
         this.deps.logger.debug(`${a.id}: budget exhausted, skipping`);
+        this.deps.setStatus?.('Running, budget exhausted for today');
         return;
       }
       const { system, user } = a.buildPrompt(input);
       const { text } = await this.deps.llm.complete({ system, user });
       await this.deps.budget.recordCall();
+      this.deps.setStatus?.('Running');
       const publish = a.publishOutput
         ? a.publishOutput.bind(a)
         : async (t: string, c: TriggerCtx, d: AnalyzerDeps) =>

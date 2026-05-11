@@ -99,6 +99,23 @@ describe('TriggerRouter', () => {
     expect(a.collectContext).toHaveBeenCalled();
   });
 
+  it('sets status when budget exhausts and resets after a successful call', async () => {
+    const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-stop' }] });
+    const setStatus = vi.fn();
+    const deps = { ...makeDeps(), setStatus };
+    // First call: budget exhausted
+    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+    let router = new TriggerRouter([a], deps);
+    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    expect(setStatus).toHaveBeenCalledWith('Running, budget exhausted for today');
+    // Second call: budget available
+    setStatus.mockClear();
+    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    router = new TriggerRouter([a], deps);
+    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    expect(setStatus).toHaveBeenCalledWith('Running');
+  });
+
   it('does not match put triggers when path differs', async () => {
     const a = makeAnalyzer({
       id: 'a',

@@ -54,6 +54,8 @@ export default function createPlugin(app: ServerApiLike): {
   const logger = new Logger(app);
   const unsubs: Array<() => void> = [];
   let intervalHandles: NodeJS.Timeout[] = [];
+  let lifecycleController: AbortController | null = null;
+  let restartFn: (() => void) | null = null;
 
   return {
     id: PLUGIN_ID,
@@ -63,7 +65,7 @@ export default function createPlugin(app: ServerApiLike): {
     schema: () => buildSchema(),
     uiSchema: () => buildUiSchema(),
 
-    start: (rawSettings, _restart) => {
+    start: (rawSettings, restart) => {
       try {
         app.setPluginStatus('Starting');
         const cfg = mergeWithDefaults(rawSettings);
@@ -71,6 +73,8 @@ export default function createPlugin(app: ServerApiLike): {
           app.setPluginStatus('Awaiting API key configuration');
           return;
         }
+        lifecycleController = new AbortController();
+        restartFn = restart;
 
         const dataDir = app.getDataDirPath();
         const logPath = join(dataDir, cfg.output.logFilename);
@@ -97,7 +101,7 @@ export default function createPlugin(app: ServerApiLike): {
           ? new QuestDBClient({ url: cfg.questdb.url })
           : null;
         const probePromise: Promise<QuestDBClient | null> = questdbCandidate
-          ? questdbCandidate.probe().then((ok) => {
+          ? questdbCandidate.probe(lifecycleController.signal).then((ok) => {
               if (!ok) logger.debug('QuestDB unreachable; baselines disabled for this run');
               return ok ? questdbCandidate : null;
             })
@@ -124,17 +128,21 @@ export default function createPlugin(app: ServerApiLike): {
         });
 
         let router: TriggerRouter | null = null;
-        void Promise.all([probePromise, budgetPromise]).then(([questdbLive, budget]) => {
-          router = new TriggerRouter(analyzers, {
-            buffer,
-            questdb: questdbLive,
-            publisher,
-            budget,
-            llm,
-            logger,
-            app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
-          });
-        });
+        void Promise.all([probePromise, budgetPromise])
+          .then(([questdbLive, budget]) => {
+            router = new TriggerRouter(analyzers, {
+              buffer,
+              questdb: questdbLive,
+              publisher,
+              budget,
+              llm,
+              logger,
+              app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
+              setStatus: (m) => app.setPluginStatus(m),
+              requestRestart: () => restartFn?.(),
+            });
+          })
+          .catch((err) => logger.debug(`startup aborted: ${stringify(err)}`));
 
         detector.on('engine-stop', (e: EngineEvent) => {
           if (!router) return;
@@ -151,6 +159,10 @@ export default function createPlugin(app: ServerApiLike): {
             },
           };
           void router.dispatch('engine-stop', ctx);
+        });
+
+        detector.on('possible-stop', (e) => {
+          logger.debug(`possible-stop: engine ${e.engineId} silent for >${30}s while running`);
         });
 
         const available = app.streambundle.getAvailablePaths();
@@ -268,6 +280,11 @@ export default function createPlugin(app: ServerApiLike): {
     },
 
     stop: async () => {
+      if (lifecycleController) {
+        lifecycleController.abort();
+        lifecycleController = null;
+      }
+      restartFn = null;
       while (unsubs.length > 0) {
         try {
           unsubs.pop()?.();

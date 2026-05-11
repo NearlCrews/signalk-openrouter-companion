@@ -38,6 +38,8 @@ export interface AnalyzerDeps {
   llm: import('../core/openrouter.js').OpenRouterClient;
   logger: import('../core/logger.js').Logger;
   app: AppForAnalyzer;
+  setStatus?: (msg: string) => void;
+  requestRestart?: () => void;
 }
 
 export interface Analyzer {
