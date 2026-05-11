@@ -103,7 +103,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
       'Rank banks by capacity loss per 100 cycles, worst first. Flag any bank degrading 3 to 4 times the median rate as an outlier worth investigating.',
       'When the 90-day window has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient.',
       'Stay with the numbers in the data. If a bank is degrading within normal LiFePO4 expectations, say so plainly.',
-      'Stay under 350 words. Format as markdown with a 1-line summary followed by a section per bank.',
+      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which bank is aging fastest, or "all banks within normal range"), then mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
     ].join(' ');
 
     const lines: string[] = [];

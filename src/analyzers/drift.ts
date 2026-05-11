@@ -148,7 +148,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
       "Do not restate per-session details. That is the maintenance analyzer's job. Focus only on this-week vs baseline drift.",
       'Identify (1) which band moved most, (2) what the drift suggests: fouled prop, dirty hull, fuel quality, alternator load creep, or a transducer or sensor issue, (3) whether the magnitude warrants action this season or just monitoring.',
       'If a bin has too few samples, say so rather than guess. If the cause is not determinable from the fields shown, say "cause not determinable from telemetry".',
-      'Stay under 350 words. Format as markdown with a 1-line summary, a per-engine section, and a short interpretation.',
+      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which RPM band drifted most or "no significant drift"), then name the engine, the magnitude of the change, and a short interpretation of the likely cause.',
     ].join(' ');
 
     const lines: string[] = [];

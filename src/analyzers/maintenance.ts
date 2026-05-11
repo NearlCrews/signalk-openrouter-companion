@@ -105,8 +105,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s). Do not invent unit conversions you cannot derive.',
       'If any engine notification slot is non-normal, surface it prominently.',
       'If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing. Any claim must cite the field that supports it.',
-      'Format the response as markdown with a 1-line summary, then short sections for Telemetry, Alarms, and Batteries.',
-      'Stay under 350 words.',
+      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the session headline (engine, duration, what happened), then weave in alarm state and battery state if there is anything worth noting.',
     ].join(' ');
 
     const { session, telemetry, engineNotifications: alarms, batteries } = input;
