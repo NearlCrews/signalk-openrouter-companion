@@ -9,6 +9,7 @@ import { stringify } from './logger.js';
 
 export interface DispatchExtras {
   putPath?: string;
+  cronPattern?: string;
 }
 
 export class TriggerRouter {
@@ -52,5 +53,6 @@ export class TriggerRouter {
 function triggerMatches(t: TriggerSpec, kind: TriggerKind, extras: DispatchExtras): boolean {
   if (t.kind !== kind) return false;
   if (t.kind === 'put') return t.path === extras.putPath;
+  if (t.kind === 'cron') return t.pattern === extras.cronPattern;
   return true;
 }

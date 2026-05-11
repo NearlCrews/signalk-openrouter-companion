@@ -41,8 +41,12 @@ describe('MaintenanceAnalyzer.collectContext', () => {
   it('returns null when session is shorter than minSessionSeconds', async () => {
     const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
     const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        events: ['engine-stop'],
+      },
       minSessionSeconds: 60,
-      putTriggerPath: 'plugins.openrouter-companion.maintenance.run',
     });
     const r = await a.collectContext(engineStopCtx(30), makeDeps(app, buf));
     expect(r).toBeNull();
@@ -73,8 +77,12 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     });
 
     const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        events: ['engine-stop'],
+      },
       minSessionSeconds: 60,
-      putTriggerPath: 'plugins.openrouter-companion.maintenance.run',
     });
     const r = await a.collectContext(engineStopCtx(3600), makeDeps(app, buf));
     expect(r).not.toBeNull();
@@ -106,8 +114,12 @@ describe('MaintenanceAnalyzer.collectContext', () => {
 describe('MaintenanceAnalyzer.buildPrompt', () => {
   it('produces a stable system + user prompt from a representative input', () => {
     const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        events: ['engine-stop'],
+      },
       minSessionSeconds: 60,
-      putTriggerPath: 'plugins.openrouter-companion.maintenance.run',
     });
     const out = a.buildPrompt({
       session: {

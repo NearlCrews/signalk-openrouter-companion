@@ -1,29 +1,65 @@
-import { DEFAULT_OPTIONS } from './types.js';
+import { type AnalyzerTriggerCfg, DEFAULT_OPTIONS, MAINTENANCE_SUPPORTED_EVENTS } from './types.js';
+
+function triggerSchema(
+  defaults: AnalyzerTriggerCfg,
+  supportedEvents: ReadonlyArray<string>,
+): Record<string, unknown> {
+  return {
+    type: 'object',
+    title: 'Triggers',
+    description:
+      'How this analyzer is invoked. Cron and PUT triggers are universal across all plugins; event triggers depend on the analyzer.',
+    properties: {
+      cron: {
+        type: 'object',
+        title: 'Cron schedule',
+        properties: {
+          enabled: { type: 'boolean', title: 'Enabled', default: defaults.cron.enabled },
+          pattern: {
+            type: 'string',
+            title: 'Cron pattern (5-field)',
+            default: defaults.cron.pattern,
+          },
+          timezone: {
+            type: 'string',
+            title: 'Timezone (IANA, empty = system)',
+            default: defaults.cron.timezone,
+          },
+        },
+      },
+      put: {
+        type: 'object',
+        title: 'On-demand PUT',
+        properties: {
+          enabled: { type: 'boolean', title: 'Enabled', default: defaults.put.enabled },
+          path: {
+            type: 'string',
+            title: 'Signal K PUT path under vessels.self',
+            default: defaults.put.path,
+          },
+        },
+      },
+      events: {
+        type: 'array',
+        title: 'Event subscriptions',
+        description:
+          supportedEvents.length === 0
+            ? 'This analyzer does not subscribe to event triggers.'
+            : 'Select which event subkinds invoke this analyzer.',
+        items:
+          supportedEvents.length === 0
+            ? { type: 'string' }
+            : { type: 'string', enum: supportedEvents as string[] },
+        default: defaults.events,
+      },
+    },
+  };
+}
 
 export function buildSchema(): {
   type: 'object';
   required: string[];
-  properties: {
-    openrouter: {
-      type: 'object';
-      title: string;
-      required: string[];
-      properties: Record<string, Record<string, unknown>>;
-    };
-    questdb: { type: 'object'; title: string; properties: Record<string, Record<string, unknown>> };
-    analyzers: {
-      type: 'object';
-      title: string;
-      properties: {
-        maintenance: {
-          type: 'object';
-          title: string;
-          properties: Record<string, Record<string, unknown>>;
-        };
-      };
-    };
-    output: { type: 'object'; title: string; properties: Record<string, Record<string, unknown>> };
-  };
+  properties: Record<string, Record<string, unknown>>;
 } {
   return {
     type: 'object',
@@ -87,6 +123,10 @@ export function buildSchema(): {
             title: 'Maintenance Advisor',
             properties: {
               enabled: { type: 'boolean', default: DEFAULT_OPTIONS.analyzers.maintenance.enabled },
+              triggers: triggerSchema(
+                DEFAULT_OPTIONS.analyzers.maintenance.triggers,
+                MAINTENANCE_SUPPORTED_EVENTS,
+              ),
               engineStopRpmHzThreshold: {
                 type: 'number',
                 title: 'Engine-off RPM threshold (Hz, 1.0 = 60 RPM)',

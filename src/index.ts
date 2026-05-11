@@ -3,6 +3,7 @@ import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
 import { BudgetTracker } from './core/budget.js';
 import { RollingBuffer } from './core/buffer.js';
+import { CronScheduler } from './core/cronScheduler.js';
 import { discoverEngineIds, discoverWatchedPaths } from './core/discovery.js';
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { Logger, stringify } from './core/logger.js';
@@ -15,7 +16,6 @@ import { mergeWithDefaults, type PluginOptions } from './types.js';
 
 const PLUGIN_ID = 'signalk-openrouter-companion';
 const PLUGIN_NAME = 'OpenRouter Companion';
-const PUT_PATH_MAINTENANCE = 'plugins.openrouter-companion.maintenance.run';
 
 interface ServerApiLike {
   streambundle: {
@@ -56,6 +56,7 @@ export default function createPlugin(app: ServerApiLike): {
   let intervalHandles: NodeJS.Timeout[] = [];
   let lifecycleController: AbortController | null = null;
   let restartFn: (() => void) | null = null;
+  let scheduler: CronScheduler | null = null;
 
   return {
     id: PLUGIN_ID,
@@ -75,6 +76,9 @@ export default function createPlugin(app: ServerApiLike): {
         }
         lifecycleController = new AbortController();
         restartFn = restart;
+        scheduler = new CronScheduler({
+          tz: cfg.analyzers.maintenance.triggers.cron.timezone || undefined,
+        });
 
         const dataDir = app.getDataDirPath();
         const logPath = join(dataDir, cfg.output.logFilename);
@@ -116,8 +120,8 @@ export default function createPlugin(app: ServerApiLike): {
 
         const maintenance = cfg.analyzers.maintenance.enabled
           ? new MaintenanceAnalyzer({
+              triggers: cfg.analyzers.maintenance.triggers,
               minSessionSeconds: cfg.analyzers.maintenance.minSessionSeconds,
-              putTriggerPath: PUT_PATH_MAINTENANCE,
             })
           : null;
         const analyzers: Analyzer[] = maintenance ? [maintenance] : [];
@@ -141,6 +145,21 @@ export default function createPlugin(app: ServerApiLike): {
               setStatus: (m) => app.setPluginStatus(m),
               requestRestart: () => restartFn?.(),
             });
+            for (const a of analyzers) {
+              for (const t of a.triggers) {
+                if (t.kind === 'cron' && scheduler) {
+                  try {
+                    scheduler.register(t.pattern, () => {
+                      if (!router) return;
+                      const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
+                      void router.dispatch('cron', ctx, { cronPattern: t.pattern });
+                    });
+                  } catch (err) {
+                    logger.error(`failed to register cron '${t.pattern}': ${stringify(err)}`);
+                  }
+                }
+              }
+            }
           })
           .catch((err) => logger.debug(`startup aborted: ${stringify(err)}`));
 
@@ -216,10 +235,15 @@ export default function createPlugin(app: ServerApiLike): {
           },
         );
 
-        if (maintenance) {
+        if (
+          maintenance &&
+          cfg.analyzers.maintenance.triggers.put.enabled &&
+          cfg.analyzers.maintenance.triggers.put.path
+        ) {
+          const putPath = cfg.analyzers.maintenance.triggers.put.path;
           app.registerPutHandler(
             'vessels.self',
-            PUT_PATH_MAINTENANCE,
+            putPath,
             (
               _context: string,
               _path: string,
@@ -237,7 +261,7 @@ export default function createPlugin(app: ServerApiLike): {
                     return;
                   }
                   const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(), put: { value } };
-                  await router.dispatch('put', ctx, { putPath: PUT_PATH_MAINTENANCE });
+                  await router.dispatch('put', ctx, { putPath });
                   cb({ state: 'COMPLETED', statusCode: 200 });
                 } catch (err) {
                   cb({ state: 'COMPLETED', statusCode: 500, message: stringify(err) });
@@ -285,6 +309,10 @@ export default function createPlugin(app: ServerApiLike): {
         lifecycleController = null;
       }
       restartFn = null;
+      if (scheduler) {
+        scheduler.stopAll();
+        scheduler = null;
+      }
       while (unsubs.length > 0) {
         try {
           unsubs.pop()?.();

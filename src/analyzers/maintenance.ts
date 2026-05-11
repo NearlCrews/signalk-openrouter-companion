@@ -1,8 +1,9 @@
+import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
 export interface MaintenanceCfg {
+  triggers: AnalyzerTriggerCfg;
   minSessionSeconds: number;
-  putTriggerPath: string;
 }
 
 export class MaintenanceAnalyzer implements Analyzer {
@@ -11,7 +12,17 @@ export class MaintenanceAnalyzer implements Analyzer {
   readonly triggers: ReadonlyArray<TriggerSpec>;
 
   constructor(private cfg: MaintenanceCfg) {
-    this.triggers = [{ kind: 'engine-stop' }, { kind: 'put', path: cfg.putTriggerPath }];
+    const triggers: TriggerSpec[] = [];
+    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
+      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
+    }
+    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
+      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
+    }
+    if (cfg.triggers.events.includes('engine-stop')) {
+      triggers.push({ kind: 'engine-stop' });
+    }
+    this.triggers = triggers;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AnalysisInput | null> {
@@ -24,7 +35,7 @@ export class MaintenanceAnalyzer implements Analyzer {
       engineId = sess.engineId;
       startMs = sess.start.getTime();
       endMs = sess.end.getTime();
-    } else if (ctx.kind === 'put') {
+    } else if (ctx.kind === 'put' || ctx.kind === 'cron') {
       endMs = ctx.firedAt.getTime();
       startMs = endMs - 30 * 60 * 1000;
       engineId = 'unknown';

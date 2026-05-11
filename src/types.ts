@@ -1,3 +1,11 @@
+export interface AnalyzerTriggerCfg {
+  cron: { enabled: boolean; pattern: string; timezone: string };
+  put: { enabled: boolean; path: string };
+  events: string[];
+}
+
+export const MAINTENANCE_SUPPORTED_EVENTS: ReadonlyArray<string> = ['engine-stop'];
+
 export interface PluginOptions {
   openrouter: {
     apiKey: string;
@@ -13,6 +21,7 @@ export interface PluginOptions {
   analyzers: {
     maintenance: {
       enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
       engineStopRpmHzThreshold: number;
       engineStopSettleSeconds: number;
       engineStartRpmHzThreshold: number;
@@ -40,6 +49,11 @@ export const DEFAULT_OPTIONS: PluginOptions = {
   analyzers: {
     maintenance: {
       enabled: true,
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        events: ['engine-stop'],
+      },
       engineStopRpmHzThreshold: 1.0,
       engineStopSettleSeconds: 10,
       engineStartRpmHzThreshold: 5.0,
@@ -57,13 +71,26 @@ export const DEFAULT_OPTIONS: PluginOptions = {
 
 export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): PluginOptions {
   if (!input) return clone(DEFAULT_OPTIONS);
+  const inputMaintenance = input.analyzers?.maintenance;
+  const inputTriggers = (inputMaintenance as { triggers?: Partial<AnalyzerTriggerCfg> })?.triggers;
   return {
     openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(input.openrouter ?? {}) },
     questdb: { ...DEFAULT_OPTIONS.questdb, ...(input.questdb ?? {}) },
     analyzers: {
       maintenance: {
         ...DEFAULT_OPTIONS.analyzers.maintenance,
-        ...(input.analyzers?.maintenance ?? {}),
+        ...(inputMaintenance ?? {}),
+        triggers: {
+          cron: {
+            ...DEFAULT_OPTIONS.analyzers.maintenance.triggers.cron,
+            ...(inputTriggers?.cron ?? {}),
+          },
+          put: {
+            ...DEFAULT_OPTIONS.analyzers.maintenance.triggers.put,
+            ...(inputTriggers?.put ?? {}),
+          },
+          events: inputTriggers?.events ?? DEFAULT_OPTIONS.analyzers.maintenance.triggers.events,
+        },
       },
     },
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
