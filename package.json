@@ -4,7 +4,7 @@
   "description": "OpenRouter-powered analyzers for Signal K: engine maintenance reports and more.",
   "main": "dist/index.js",
   "type": "module",
-  "files": ["dist/", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": ["dist/", "assets/icons/", "README.md", "LICENSE", "CHANGELOG.md"],
   "keywords": [
     "signalk-node-server-plugin",
     "signalk-category-utility",
@@ -17,7 +17,10 @@
     "maintenance"
   ],
   "signalk-plugin-enabled-by-default": false,
-  "signalk": { "displayName": "OpenRouter Companion" },
+  "signalk": {
+    "displayName": "OpenRouter Companion",
+    "appIcon": "./assets/icons/icon-192.png"
+  },
   "engines": { "node": ">=22" },
   "license": "Apache-2.0",
   "author": {
