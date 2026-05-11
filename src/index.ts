@@ -242,10 +242,6 @@ export default function createPlugin(app: ServerApiLike): {
         const available = app.streambundle.getAvailablePaths();
         const engineIds = discoverEngineIds(available);
         const bankIds = discoverBankIds(available);
-        if (engineIds.length === 0 && bankIds.length === 0) {
-          app.setPluginStatus('Running, no engine or battery data detected');
-          return;
-        }
         const watched = discoverWatchedPaths(
           available,
           cfg.analyzers.maintenance.extraWatchedPaths,
@@ -328,10 +324,17 @@ export default function createPlugin(app: ServerApiLike): {
                 }
               }
             }
+            if (engineIds.length > 0 || bankIds.length > 0) {
+              app.setPluginStatus('Running');
+            }
           }, RESCAN_INTERVAL_MS),
         );
 
-        app.setPluginStatus('Running');
+        app.setPluginStatus(
+          engineIds.length === 0 && bankIds.length === 0
+            ? 'Running, no engine or battery data yet (re-scanning every 60s)'
+            : 'Running',
+        );
       } catch (err) {
         app.setPluginError(stringify(err));
       }

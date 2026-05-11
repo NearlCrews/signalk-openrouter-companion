@@ -20,13 +20,12 @@ describe('plugin lifecycle', () => {
     expect(app.registeredPuts).toHaveLength(0);
   });
 
-  it('reports "no engine or battery data detected" when neither domain has data', async () => {
+  it('reports "no engine or battery data yet" when neither domain has data, and still sets up rescan', async () => {
     app.availablePaths = ['environment.water.temperature'];
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
-    expect(app.statusMessages.some((m) => m.includes('no engine or battery data detected'))).toBe(
-      true,
-    );
+    expect(app.statusMessages.some((m) => m.includes('no engine or battery data yet'))).toBe(true);
+    expect(app.registeredPuts.length).toBeGreaterThan(0);
   });
 
   it('subscribes to discovered engine RPM paths and registers PUT handler', () => {
