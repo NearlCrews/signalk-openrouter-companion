@@ -1,4 +1,5 @@
 import { WATCH_PREFIXES } from '../core/discovery.js';
+import { readNumberAt } from '../core/skNode.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -126,14 +127,11 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     lines.push('## Telemetry');
     for (const path of Object.keys(telemetry).sort()) {
       const s = telemetry[path];
+      if (!s || s.count === 0) continue;
       const unit = unitForPath(path);
-      const unitSuffix = unit ? ` [${unit}]` : '';
-      if (!s || s.count === 0) {
-        lines.push(`- ${path}${unitSuffix}: n/a (no samples)`);
-        continue;
-      }
+      const unitSuffix = unit ? ` ${unit}` : '';
       lines.push(
-        `- ${path}${unitSuffix}: min=${fmt(s.min)} max=${fmt(s.max)} mean=${fmt(s.mean)} count=${fmt(s.count)} sources=${JSON.stringify(s.sources)}`,
+        `- ${path}: min=${fmt(s.min)} max=${fmt(s.max)} mean=${fmt(s.mean)}${unitSuffix} count=${fmt(s.count)} sources=${JSON.stringify(s.sources)}`,
       );
     }
     lines.push('');
@@ -237,19 +235,5 @@ function unitForPath(path: string): string | null {
   if (path.endsWith('.fuel.rate')) return 'm3/s';
   if (path.endsWith('.fuel.level') || path.endsWith('.fuel.used')) return 'ratio';
   if (path.endsWith('.oilPressure')) return 'Pa';
-  return null;
-}
-
-function readNumberAt(node: unknown, subpath: string): number | null {
-  const segs = subpath.split('.');
-  let cur: unknown = node;
-  for (const seg of segs) {
-    if (!cur || typeof cur !== 'object') return null;
-    cur = (cur as Record<string, unknown>)[seg];
-  }
-  if (cur && typeof cur === 'object' && 'value' in (cur as Record<string, unknown>)) {
-    const v = (cur as { value: unknown }).value;
-    return typeof v === 'number' ? v : null;
-  }
   return null;
 }

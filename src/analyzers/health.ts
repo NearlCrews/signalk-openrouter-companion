@@ -1,3 +1,4 @@
+import { readNumberAt } from '../core/skNode.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -113,6 +114,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
       'Produce a concise plain-English daily report covering every battery bank.',
       'For each bank: state of charge, voltage and current trends, cycle count, cell balance (if cell data is present), and any drift vs the 30-day baseline if baselines are present.',
       'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
+      'If you cannot identify a cause from the data, say so rather than guess.',
       'Surface anything that looks unusual: voltage outside an obvious range for the bank, cell imbalance over the configured threshold, SoC drifting low.',
       'Format the response as markdown with a 1-line summary, then a section per bank.',
       'Stay under 400 words.',
@@ -174,18 +176,4 @@ function fmt(v: unknown): string {
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(3);
   if (v == null) return 'n/a';
   return String(v);
-}
-
-export function readNumberAt(node: unknown, subpath: string): number | null {
-  const segs = subpath.split('.');
-  let cur: unknown = node;
-  for (const seg of segs) {
-    if (!cur || typeof cur !== 'object') return null;
-    cur = (cur as Record<string, unknown>)[seg];
-  }
-  if (cur && typeof cur === 'object' && 'value' in (cur as Record<string, unknown>)) {
-    const v = (cur as { value: unknown }).value;
-    return typeof v === 'number' ? v : null;
-  }
-  return null;
 }

@@ -28,8 +28,8 @@ const PLUGIN_NAME = 'OpenRouter Companion';
 
 const BUFFER_MAX_AGE_MS = 26 * 3600 * 1000;
 const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
-const SOURCE_WINDOW_MS = 1000;
-const MONITOR_SOURCE_WINDOW_MS = 5000;
+const ENGINE_SOURCE_WINDOW_MS = 1000;
+const BATTERY_SOURCE_WINDOW_MS = 5000;
 const MONITOR_TICK_MS = 5000;
 const WATCHDOG_TICK_MS = 5000;
 const WATCHDOG_SEC = 30;
@@ -120,14 +120,14 @@ export default function createPlugin(app: ServerApiLike): {
           startRpmHz: cfg.analyzers.maintenance.engineStartRpmHzThreshold,
           startSettleSec: cfg.analyzers.maintenance.engineStartSettleSeconds,
           watchdogSec: WATCHDOG_SEC,
-          sourceWindowMs: SOURCE_WINDOW_MS,
+          sourceWindowMs: ENGINE_SOURCE_WINDOW_MS,
         });
         const monitor = new BatteryMonitor({
           lowSocPercent: cfg.analyzers.alerts.lowSocPercent,
           socExitHysteresis: cfg.analyzers.alerts.socExitHysteresis,
           cellImbalanceV: cfg.analyzers.alerts.cellImbalanceV,
           imbalanceSettleSec: cfg.analyzers.alerts.imbalanceSettleSec,
-          sourceWindowMs: MONITOR_SOURCE_WINDOW_MS,
+          sourceWindowMs: BATTERY_SOURCE_WINDOW_MS,
         });
         const llm = new OpenRouterClient({
           apiKey: cfg.openrouter.apiKey,

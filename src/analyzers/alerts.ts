@@ -1,3 +1,4 @@
+import { readNumberAt } from '../core/skNode.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type {
   Analyzer,
@@ -6,7 +7,6 @@ import type {
   TriggerCtx,
   TriggerSpec,
 } from './Analyzer.js';
-import { readNumberAt } from './health.js';
 
 const ENTER_SUBKINDS: ReadonlyArray<BatteryEventKind> = ['low-soc-enter', 'cell-imbalance-enter'];
 

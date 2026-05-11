@@ -1,22 +1,20 @@
-import type { BatteryEventKind } from './analyzers/Analyzer.js';
-
 export interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
   put: { enabled: boolean; path: string };
   events: string[];
 }
 
-export type MaintenanceEventKind = 'engine-stop';
-export const MAINTENANCE_SUPPORTED_EVENTS: ReadonlyArray<MaintenanceEventKind> = ['engine-stop'];
+export const MAINTENANCE_SUPPORTED_EVENTS = ['engine-stop'] as const;
+export type MaintenanceEventKind = (typeof MAINTENANCE_SUPPORTED_EVENTS)[number];
 
-export const HEALTH_SUPPORTED_EVENTS: ReadonlyArray<BatteryEventKind> = [];
+export const HEALTH_SUPPORTED_EVENTS = [] as const;
 
-export const ALERTS_SUPPORTED_EVENTS: ReadonlyArray<BatteryEventKind> = [
+export const ALERTS_SUPPORTED_EVENTS = [
   'low-soc-enter',
   'low-soc-exit',
   'cell-imbalance-enter',
   'cell-imbalance-exit',
-];
+] as const;
 
 export interface PluginOptions {
   openrouter: {
@@ -56,7 +54,7 @@ export interface PluginOptions {
   };
   output: {
     notificationPath: string;
-    notificationState: 'normal' | 'nominal';
+    notificationState: 'nominal' | 'normal' | 'alert' | 'warn' | 'alarm' | 'emergency';
     logFilename: string;
   };
 }

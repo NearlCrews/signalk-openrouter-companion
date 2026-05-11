@@ -1,5 +1,7 @@
 import type { BatteryEventKind } from '../analyzers/Analyzer.js';
 
+export type { BatteryEventKind } from '../analyzers/Analyzer.js';
+
 export type BatteryEvent =
   | { kind: 'low-soc-enter'; bankId: string; ts: number; soc: number }
   | { kind: 'low-soc-exit'; bankId: string; ts: number; soc: number }
