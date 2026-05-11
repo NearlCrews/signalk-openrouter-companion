@@ -35,9 +35,17 @@ export interface RegisteredPut {
   source?: string;
 }
 
+export interface RegisteredSubscription {
+  msg: unknown;
+  errCb: (err: unknown) => void;
+  deltaCb: (delta: unknown) => void;
+}
+
 export interface MockApp {
   published: PublishedDelta[];
   registeredPuts: RegisteredPut[];
+  registeredSubscriptions: RegisteredSubscription[];
+  pushSubscriptionDelta(pathFilter: string, delta: unknown): void;
   statusMessages: string[];
   errorMessages: string[];
   debugMessages: unknown[];
@@ -80,6 +88,16 @@ export function makeMockApp(dataDir: string): MockApp {
   const app: MockApp = {
     published: [],
     registeredPuts: [],
+    registeredSubscriptions: [],
+    pushSubscriptionDelta(pathFilter, delta) {
+      for (const sub of app.registeredSubscriptions) {
+        const msg = sub.msg as { subscribe?: Array<{ path?: string }> } | undefined;
+        const subs = msg?.subscribe ?? [];
+        if (subs.length === 0 || subs.some((s) => s.path === pathFilter || s.path === '*')) {
+          sub.deltaCb(delta);
+        }
+      }
+    },
     statusMessages: [],
     errorMessages: [],
     debugMessages: [],
@@ -103,10 +121,15 @@ export function makeMockApp(dataDir: string): MockApp {
       },
     },
     subscriptionmanager: {
-      subscribe(_msg, unsubs, _errCb, _deltaCb) {
-        const noop = () => {};
-        unsubs.push(noop);
-        app.unsubscribes.push(noop);
+      subscribe(msg, unsubs, errCb, deltaCb) {
+        const entry: RegisteredSubscription = { msg, errCb, deltaCb };
+        app.registeredSubscriptions.push(entry);
+        const removeReg = () => {
+          const i = app.registeredSubscriptions.indexOf(entry);
+          if (i >= 0) app.registeredSubscriptions.splice(i, 1);
+        };
+        unsubs.push(removeReg);
+        app.unsubscribes.push(removeReg);
       },
     },
     handleMessage(pluginId, delta) {

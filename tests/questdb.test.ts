@@ -91,4 +91,31 @@ describe('QuestDBClient', () => {
       /HTTP 500/,
     );
   });
+
+  it('baselineFor throws when days is NaN', async () => {
+    const q = new QuestDBClient({ url: 'http://localhost:9000' });
+    await expect(
+      q.baselineFor('propulsion.port.revolutions', 'vessels.self', Number.NaN),
+    ).rejects.toThrow(/days must be a finite number/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('baselineFor returns null when QuestDB row contains nulls for all aggregates', async () => {
+    fetchMock.mockResolvedValueOnce(
+      ok({
+        columns: [
+          { name: 'min', type: 'DOUBLE' },
+          { name: 'max', type: 'DOUBLE' },
+          { name: 'mean', type: 'DOUBLE' },
+          { name: 'p10', type: 'DOUBLE' },
+          { name: 'p50', type: 'DOUBLE' },
+          { name: 'p90', type: 'DOUBLE' },
+        ],
+        dataset: [[null, null, null, null, null, null]],
+      }),
+    );
+    const q = new QuestDBClient({ url: 'http://localhost:9000' });
+    const r = await q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30);
+    expect(r).toBeNull();
+  });
 });

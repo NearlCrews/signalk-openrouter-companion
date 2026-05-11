@@ -85,4 +85,23 @@ describe('EngineDetector', () => {
     expect(events.filter((e) => e.engineId === 'port')).toHaveLength(1);
     expect(events.filter((e) => e.engineId === 'starboard')).toHaveLength(0);
   });
+
+  it('emits a fresh engine-start after a stall and immediate restart', () => {
+    const { det, events } = makeDetector();
+    // Initial start-stop cycle.
+    det.observe('port', 's1', 10, 1_000_000);
+    det.observe('port', 's1', 10, 1_006_000);
+    det.observe('port', 's1', 10, 1_010_000);
+    det.observe('port', 's1', 0, 2_000_000);
+    det.observe('port', 's1', 0, 2_011_000);
+    expect(events.map((e) => e.kind)).toEqual(['engine-start', 'engine-stop']);
+    // Immediately rises again above start threshold and sustains.
+    det.observe('port', 's1', 10, 2_012_000);
+    det.observe('port', 's1', 10, 2_018_000);
+    expect(events.map((e) => e.kind)).toEqual(['engine-start', 'engine-stop', 'engine-start']);
+    // The two engine-start events bracket distinct sessions.
+    const starts = events.filter((e) => e.kind === 'engine-start');
+    expect(starts[0]?.ts).toBe(1_000_000);
+    expect(starts[1]?.ts).toBe(2_012_000);
+  });
 });

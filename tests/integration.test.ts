@@ -4,6 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
 
+// Drain the microtask queue a few times so the deferred router init
+// (Promise.all([probe, budgetLoad]).then(...)) has settled before tests
+// drive deltas. setImmediate gives macrotask boundaries in between.
+async function waitForRouterReady(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
 describe('integration: engine session -> report', () => {
   let dir: string;
   let app: MockApp;
@@ -49,7 +58,7 @@ describe('integration: engine session -> report', () => {
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
 
     // Wait for the deferred router init (.then on Promise.all([probe, budgetLoad])) to settle.
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForRouterReady();
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'propulsion.port.revolutions',
@@ -107,7 +116,7 @@ describe('integration: engine session -> report', () => {
       () => {},
     );
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForRouterReady();
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'propulsion.port.revolutions',
@@ -166,7 +175,7 @@ describe('integration: engine session -> report', () => {
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForRouterReady();
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'electrical.batteries.house.capacity.stateOfCharge',

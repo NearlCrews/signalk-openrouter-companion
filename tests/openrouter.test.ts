@@ -148,4 +148,56 @@ describe('OpenRouterClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
     vi.useRealTimers();
   });
+
+  it('retries on transient 500 and eventually succeeds', async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(500, { error: { code: 500, message: 'oops' } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'after-retry' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    const c = new OpenRouterClient({
+      apiKey: 'k',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'm',
+      requestTimeoutMs: 60_000,
+      referer: 'r',
+      title: 't',
+    });
+    const p = c.complete({ system: 's', user: 'u' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r.text).toBe('after-retry');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('retries on transient 502 and eventually succeeds', async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(502, { error: { code: 502, message: 'bad gateway' } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'after-502' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    const c = new OpenRouterClient({
+      apiKey: 'k',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'm',
+      requestTimeoutMs: 60_000,
+      referer: 'r',
+      title: 't',
+    });
+    const p = c.complete({ system: 's', user: 'u' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r.text).toBe('after-502');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
 });

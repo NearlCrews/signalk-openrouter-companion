@@ -48,4 +48,16 @@ describe('CronScheduler', () => {
     expect(() => scheduler.register('not a cron', () => {})).toThrow();
     scheduler.stopAll();
   });
+
+  it('fires the callback at the expected local time in a non-UTC timezone', () => {
+    vi.useFakeTimers();
+    // 2026-05-10 07:59:30 in Los Angeles is 2026-05-10 14:59:30 UTC (PDT = UTC-7).
+    vi.setSystemTime(new Date('2026-05-10T14:59:30Z'));
+    const cb = vi.fn();
+    const scheduler = new CronScheduler({ tz: 'America/Los_Angeles' });
+    scheduler.register('0 8 * * *', cb);
+    vi.advanceTimersByTime(60_000);
+    expect(cb).toHaveBeenCalledTimes(1);
+    scheduler.stopAll();
+  });
 });

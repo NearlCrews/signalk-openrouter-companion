@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
 
@@ -79,5 +79,61 @@ describe('plugin lifecycle', () => {
     await plugin.stop();
     expect(app.buses.get('propulsion.port.revolutions')!.listenerCount()).toBe(0);
     expect(app.statusMessages.at(-1)).toBe('Stopped');
+  });
+
+  it('supports a start/stop/start cycle', async () => {
+    app.availablePaths = ['propulsion.port.revolutions'];
+    const plugin = createPlugin(app as never);
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    const firstPutCount = app.registeredPuts.length;
+    expect(firstPutCount).toBeGreaterThan(0);
+    await plugin.stop();
+    expect(app.buses.get('propulsion.port.revolutions')!.listenerCount()).toBe(0);
+
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    expect(app.buses.get('propulsion.port.revolutions')!.listenerCount()).toBeGreaterThan(0);
+    expect(app.registeredPuts.length).toBe(firstPutCount * 2);
+    await plugin.stop();
+    expect(app.statusMessages.at(-1)).toBe('Stopped');
+  });
+
+  it('invokes the PUT handler callback with state COMPLETED', async () => {
+    app.availablePaths = ['propulsion.port.revolutions'];
+    // Stub global fetch so the OpenRouter call inside the dispatch doesn't hit the network.
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: 'ok' } }],
+            model: 'm',
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const plugin = createPlugin(app as never);
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    const put = app.registeredPuts.find(
+      (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
+    );
+    expect(put).toBeDefined();
+
+    const cb = vi.fn();
+    const sync = (put!.handler as (...args: unknown[]) => unknown)(
+      'vessels.self',
+      'plugins.openrouter-companion.maintenance.run',
+      { reason: 'manual' },
+      cb,
+    );
+    expect(sync).toEqual({ state: 'PENDING' });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalled(), { timeout: 2000 });
+    const arg = cb.mock.calls[0]![0] as { state: string };
+    expect(arg.state).toBe('COMPLETED');
+
+    vi.unstubAllGlobals();
+    await plugin.stop();
   });
 });

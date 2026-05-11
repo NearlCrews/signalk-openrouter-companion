@@ -63,6 +63,21 @@ describe('BatteryMonitor low-soc', () => {
     expect(events.filter((e) => e.bankId === 'house')).toHaveLength(1);
     expect(events.filter((e) => e.bankId === 'starter')).toHaveLength(0);
   });
+
+  it('evicts stale per-source readings outside sourceWindowMs', () => {
+    const { monitor, events } = makeMonitor();
+    // bms-a posts 0.5 at t=0; bms-b posts 0.4 at t=6000 (past 5s window).
+    monitor.observeSoc('house', 'bms-a', 0.5, 1_000_000);
+    monitor.observeSoc('house', 'bms-b', 0.4, 1_006_000);
+    // bms-a's reading should be evicted; effective SoC reflects bms-b (0.4),
+    // which is above 0.3 so no low-soc-enter has fired yet.
+    expect(events).toEqual([]);
+    // Drop bms-b below threshold; only bms-b should be the source after eviction.
+    monitor.observeSoc('house', 'bms-b', 0.25, 1_007_000);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe('low-soc-enter');
+    expect(events[0]!.soc).toBe(0.25);
+  });
 });
 
 describe('BatteryMonitor cell-imbalance', () => {
