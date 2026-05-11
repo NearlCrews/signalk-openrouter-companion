@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { buildSchema, buildUiSchema } from '../src/schema.js';
 import { mergeWithDefaults } from '../src/types.js';
 
+/**
+ * Walks into the enabled-true branch of a `dependencies.enabled.oneOf` block.
+ * Branches are ordered [enabled=false, enabled=true]; index 1 is the populated branch.
+ */
+function enabledTrueBranch(node: Record<string, unknown>): {
+  properties: Record<string, Record<string, unknown>>;
+} {
+  const deps = node.dependencies as {
+    enabled: { oneOf: Array<{ properties: Record<string, Record<string, unknown>> }> };
+  };
+  return deps.enabled.oneOf[1] as { properties: Record<string, Record<string, unknown>> };
+}
+
 describe('schema', () => {
   it('declares apiKey as required and notificationState as full ALARM_STATE enum', () => {
     const s = buildSchema();
@@ -24,17 +37,59 @@ describe('schema', () => {
     ]);
   });
 
-  it('exposes a triggers block on the maintenance analyzer', () => {
+  it('hides analyzer detail fields behind a dependencies.enabled gate', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
-      properties: { maintenance: { properties: Record<string, Record<string, unknown>> } };
+      properties: { maintenance: Record<string, unknown> };
     };
-    const triggers = analyzers.properties.maintenance.properties.triggers as {
+    const maintenance = analyzers.properties.maintenance;
+    // The dependencies block exists with the oneOf-on-enabled shape.
+    expect(maintenance.dependencies).toBeDefined();
+    const deps = maintenance.dependencies as { enabled: { oneOf: unknown[] } };
+    expect(Array.isArray(deps.enabled.oneOf)).toBe(true);
+    expect(deps.enabled.oneOf).toHaveLength(2);
+
+    // The enabled-true branch reveals triggers + threshold fields.
+    const onBranch = enabledTrueBranch(maintenance);
+    expect(onBranch.properties.triggers).toBeDefined();
+    expect(onBranch.properties.engineStopRpmHzThreshold).toBeDefined();
+    expect(onBranch.properties.extraWatchedPaths).toBeDefined();
+  });
+
+  it('hides health + alerts detail fields behind a dependencies.enabled gate', () => {
+    const s = buildSchema();
+    const analyzers = s.properties.analyzers as {
+      properties: { health: Record<string, unknown>; alerts: Record<string, unknown> };
+    };
+
+    const healthOn = enabledTrueBranch(analyzers.properties.health);
+    expect(healthOn.properties.triggers).toBeDefined();
+
+    const alertsOn = enabledTrueBranch(analyzers.properties.alerts);
+    expect(alertsOn.properties.triggers).toBeDefined();
+    expect(alertsOn.properties.lowSocPercent).toBeDefined();
+    expect(alertsOn.properties.cellImbalanceV).toBeDefined();
+  });
+
+  it('hides questdb.url behind a dependencies.enabled gate', () => {
+    const s = buildSchema();
+    const questdb = s.properties.questdb;
+    const onBranch = enabledTrueBranch(questdb);
+    expect(onBranch.properties.url).toBeDefined();
+  });
+
+  it('exposes a triggers block on the maintenance analyzer (enabled-true branch)', () => {
+    const s = buildSchema();
+    const analyzers = s.properties.analyzers as {
+      properties: { maintenance: Record<string, unknown> };
+    };
+    const onBranch = enabledTrueBranch(analyzers.properties.maintenance);
+    const triggers = onBranch.properties.triggers as {
       type: string;
       title: string;
       properties: {
-        cron: { properties: Record<string, Record<string, unknown>> };
-        put: { properties: Record<string, Record<string, unknown>> };
+        cron: Record<string, unknown>;
+        put: Record<string, unknown>;
         events: {
           type: string;
           uniqueItems?: boolean;
@@ -45,30 +100,53 @@ describe('schema', () => {
     };
     expect(triggers.type).toBe('object');
     expect(triggers.title).toBe('When to run');
-    expect(triggers.properties.cron.properties.enabled.default).toBe(false);
-    expect(triggers.properties.cron.properties.pattern.default).toBe('');
-    expect(triggers.properties.put.properties.enabled.default).toBe(true);
-    expect(triggers.properties.put.properties.path.default).toBe(
+
+    // cron.enabled is at the top level; pattern + timezone only appear when enabled=true.
+    const cronProps = (triggers.properties.cron as { properties: Record<string, unknown> })
+      .properties;
+    expect((cronProps.enabled as { default: unknown }).default).toBe(false);
+    const cronOn = enabledTrueBranch(triggers.properties.cron);
+    expect((cronOn.properties.pattern as { default: unknown }).default).toBe('');
+    expect((cronOn.properties.timezone as { default: unknown }).default).toBe('');
+
+    // put.enabled is at top level; path only appears when enabled=true.
+    const putProps = (triggers.properties.put as { properties: Record<string, unknown> })
+      .properties;
+    expect((putProps.enabled as { default: unknown }).default).toBe(true);
+    const putOn = enabledTrueBranch(triggers.properties.put);
+    expect((putOn.properties.path as { default: unknown }).default).toBe(
       'plugins.openrouter-companion.maintenance.run',
     );
+
     expect(triggers.properties.events.type).toBe('array');
     expect(triggers.properties.events.uniqueItems).toBe(true);
     expect(triggers.properties.events.items.enum).toEqual(['engine-stop']);
     expect(triggers.properties.events.default).toEqual(['engine-stop']);
   });
 
-  it('attaches cron pattern examples to every analyzer', () => {
+  it('renders cron.pattern as a oneOf preset dropdown with a freeform fallback', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
-      properties: Record<string, { properties: Record<string, Record<string, unknown>> }>;
+      properties: Record<string, Record<string, unknown>>;
     };
     for (const name of ['maintenance', 'health', 'alerts']) {
-      const triggers = analyzers.properties[name].properties.triggers as {
-        properties: { cron: { properties: { pattern: { examples?: string[] } } } };
+      const onBranch = enabledTrueBranch(analyzers.properties[name]);
+      const triggers = onBranch.properties.triggers as {
+        properties: { cron: Record<string, unknown> };
       };
-      const examples = triggers.properties.cron.properties.pattern.examples;
-      expect(Array.isArray(examples)).toBe(true);
-      expect(examples).toContain('0 8 * * *');
+      const cronOn = enabledTrueBranch(triggers.properties.cron);
+      const pattern = cronOn.properties.pattern as {
+        oneOf: Array<{ type: string; title: string; const?: string }>;
+      };
+      expect(Array.isArray(pattern.oneOf)).toBe(true);
+      expect(pattern.oneOf).toHaveLength(8);
+      // First entry is the 8:00 AM preset.
+      expect(pattern.oneOf[0].const).toBe('0 8 * * *');
+      expect(pattern.oneOf[0].title).toBe('8:00 AM daily');
+      // Last entry is the freeform fallback: no const so any string passes.
+      const freeform = pattern.oneOf[pattern.oneOf.length - 1];
+      expect(freeform.const).toBeUndefined();
+      expect(freeform.title).toMatch(/Other/);
     }
   });
 

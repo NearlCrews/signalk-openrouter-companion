@@ -23,12 +23,30 @@ function eventTitlesFor(events: ReadonlyArray<string>): string[] {
   return events.map((e) => EVENT_TITLES[e] ?? e);
 }
 
-const CRON_EXAMPLES = ['0 8 * * *', '0 7 * * *', '30 17 * * *', '0 0 * * 0', '0 0 1 * *'] as const;
+const CRON_PRESETS: ReadonlyArray<{ title: string; const: string }> = [
+  { title: '8:00 AM daily', const: '0 8 * * *' },
+  { title: '7:00 AM daily', const: '0 7 * * *' },
+  { title: 'Noon daily', const: '0 12 * * *' },
+  { title: '5:30 PM daily', const: '30 17 * * *' },
+  { title: '6:00 PM daily', const: '0 18 * * *' },
+  { title: 'Midnight Sunday', const: '0 0 * * 0' },
+  { title: 'Midnight on the 1st', const: '0 0 1 * *' },
+];
 
 const CRON_HELP =
-  'Five-field cron pattern: minute hour day-of-month month day-of-week. Examples: ' +
-  '"0 8 * * *" = 8:00 AM daily, "0 7 * * *" = 7:00 AM daily, "30 17 * * *" = 5:30 PM daily, ' +
-  '"0 0 * * 0" = midnight Sunday, "0 0 1 * *" = midnight on the 1st of each month.';
+  "Pick a preset or choose 'Other' to enter your own 5-field cron pattern " +
+  '(minute hour day-of-month month day-of-week).';
+
+function cronPatternSchema(defaultPattern: string): Record<string, unknown> {
+  return {
+    title: 'Schedule',
+    default: defaultPattern,
+    oneOf: [
+      ...CRON_PRESETS.map((p) => ({ type: 'string', title: p.title, const: p.const })),
+      { type: 'string', title: 'Other (custom 5-field cron pattern)' },
+    ],
+  };
+}
 
 function triggerSchema(
   defaults: AnalyzerTriggerCfg,
@@ -54,16 +72,23 @@ function triggerSchema(
             title: 'Run on a schedule',
             default: defaults.cron.enabled,
           },
-          pattern: {
-            type: 'string',
-            title: 'Cron pattern (5-field)',
-            default: defaults.cron.pattern,
-            examples: [...CRON_EXAMPLES],
-          },
-          timezone: {
-            type: 'string',
-            title: 'Timezone',
-            default: defaults.cron.timezone,
+        },
+        dependencies: {
+          enabled: {
+            oneOf: [
+              { properties: { enabled: { const: false } } },
+              {
+                properties: {
+                  enabled: { const: true },
+                  pattern: cronPatternSchema(defaults.cron.pattern),
+                  timezone: {
+                    type: 'string',
+                    title: 'Timezone',
+                    default: defaults.cron.timezone,
+                  },
+                },
+              },
+            ],
           },
         },
       },
@@ -76,10 +101,22 @@ function triggerSchema(
             title: 'Allow on-demand trigger via Signal K PUT',
             default: defaults.put.enabled,
           },
-          path: {
-            type: 'string',
-            title: 'Signal K PUT path',
-            default: defaults.put.path,
+        },
+        dependencies: {
+          enabled: {
+            oneOf: [
+              { properties: { enabled: { const: false } } },
+              {
+                properties: {
+                  enabled: { const: true },
+                  path: {
+                    type: 'string',
+                    title: 'Signal K PUT path',
+                    default: defaults.put.path,
+                  },
+                },
+              },
+            ],
           },
         },
       },
@@ -166,11 +203,23 @@ export function buildSchema(): PluginSchema {
               'When enabled, the plugin probes QuestDB on start and uses it for history lookups. Falls back gracefully if unreachable.',
             default: DEFAULT_OPTIONS.questdb.enabled,
           },
-          url: {
-            type: 'string',
-            title: 'QuestDB REST URL',
-            description: 'Only used when QuestDB enrichment is enabled.',
-            default: DEFAULT_OPTIONS.questdb.url,
+        },
+        dependencies: {
+          enabled: {
+            oneOf: [
+              { properties: { enabled: { const: false } } },
+              {
+                properties: {
+                  enabled: { const: true },
+                  url: {
+                    type: 'string',
+                    title: 'QuestDB REST URL',
+                    description: 'Only used when QuestDB enrichment is enabled.',
+                    default: DEFAULT_OPTIONS.questdb.url,
+                  },
+                },
+              },
+            ],
           },
         },
       },
@@ -188,54 +237,67 @@ export function buildSchema(): PluginSchema {
                 title: 'Enable engine maintenance reports',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.enabled,
               },
-              triggers: triggerSchema(
-                DEFAULT_OPTIONS.analyzers.maintenance.triggers,
-                MAINTENANCE_SUPPORTED_EVENTS,
-              ),
-              engineStopRpmHzThreshold: {
-                type: 'number',
-                title: 'Engine-off RPM threshold (Hz)',
-                description:
-                  'RPM frequency below which the engine is considered idle (1.0 Hz = 60 RPM).',
-                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopRpmHzThreshold,
-              },
-              engineStopSettleSeconds: {
-                type: 'integer',
-                title: 'Engine-off settle time (seconds)',
-                description:
-                  'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
-                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
-                minimum: 0,
-              },
-              engineStartRpmHzThreshold: {
-                type: 'number',
-                title: 'Engine-on RPM threshold (Hz)',
-                description:
-                  'RPM frequency above which the engine is considered running (1.0 Hz = 60 RPM).',
-                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartRpmHzThreshold,
-              },
-              engineStartSettleSeconds: {
-                type: 'integer',
-                title: 'Engine-on settle time (seconds)',
-                description:
-                  'How long RPM must stay above the threshold before the engine is considered running.',
-                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
-                minimum: 0,
-              },
-              minSessionSeconds: {
-                type: 'integer',
-                title: 'Minimum session length (seconds)',
-                description: 'Engine sessions shorter than this are ignored (no report generated).',
-                default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
-                minimum: 0,
-              },
-              extraWatchedPaths: {
-                type: 'array',
-                title: 'Extra Signal K paths to include',
-                description:
-                  'Additional Signal K paths to sample during each engine session and include in the report.',
-                items: { type: 'string' },
-                default: DEFAULT_OPTIONS.analyzers.maintenance.extraWatchedPaths,
+            },
+            dependencies: {
+              enabled: {
+                oneOf: [
+                  { properties: { enabled: { const: false } } },
+                  {
+                    properties: {
+                      enabled: { const: true },
+                      triggers: triggerSchema(
+                        DEFAULT_OPTIONS.analyzers.maintenance.triggers,
+                        MAINTENANCE_SUPPORTED_EVENTS,
+                      ),
+                      engineStopRpmHzThreshold: {
+                        type: 'number',
+                        title: 'Engine-off RPM threshold (Hz)',
+                        description:
+                          'RPM frequency below which the engine is considered idle (1.0 Hz = 60 RPM).',
+                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopRpmHzThreshold,
+                      },
+                      engineStopSettleSeconds: {
+                        type: 'integer',
+                        title: 'Engine-off settle time (seconds)',
+                        description:
+                          'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
+                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
+                        minimum: 0,
+                      },
+                      engineStartRpmHzThreshold: {
+                        type: 'number',
+                        title: 'Engine-on RPM threshold (Hz)',
+                        description:
+                          'RPM frequency above which the engine is considered running (1.0 Hz = 60 RPM).',
+                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartRpmHzThreshold,
+                      },
+                      engineStartSettleSeconds: {
+                        type: 'integer',
+                        title: 'Engine-on settle time (seconds)',
+                        description:
+                          'How long RPM must stay above the threshold before the engine is considered running.',
+                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
+                        minimum: 0,
+                      },
+                      minSessionSeconds: {
+                        type: 'integer',
+                        title: 'Minimum session length (seconds)',
+                        description:
+                          'Engine sessions shorter than this are ignored (no report generated).',
+                        default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
+                        minimum: 0,
+                      },
+                      extraWatchedPaths: {
+                        type: 'array',
+                        title: 'Extra Signal K paths to include',
+                        description:
+                          'Additional Signal K paths to sample during each engine session and include in the report.',
+                        items: { type: 'string' },
+                        default: DEFAULT_OPTIONS.analyzers.maintenance.extraWatchedPaths,
+                      },
+                    },
+                  },
+                ],
               },
             },
           },
@@ -249,10 +311,22 @@ export function buildSchema(): PluginSchema {
                 title: 'Enable daily battery health summaries',
                 default: DEFAULT_OPTIONS.analyzers.health.enabled,
               },
-              triggers: triggerSchema(
-                DEFAULT_OPTIONS.analyzers.health.triggers,
-                HEALTH_SUPPORTED_EVENTS,
-              ),
+            },
+            dependencies: {
+              enabled: {
+                oneOf: [
+                  { properties: { enabled: { const: false } } },
+                  {
+                    properties: {
+                      enabled: { const: true },
+                      triggers: triggerSchema(
+                        DEFAULT_OPTIONS.analyzers.health.triggers,
+                        HEALTH_SUPPORTED_EVENTS,
+                      ),
+                    },
+                  },
+                ],
+              },
             },
           },
           alerts: {
@@ -266,42 +340,54 @@ export function buildSchema(): PluginSchema {
                 title: 'Enable battery threshold alerts',
                 default: DEFAULT_OPTIONS.analyzers.alerts.enabled,
               },
-              triggers: triggerSchema(
-                DEFAULT_OPTIONS.analyzers.alerts.triggers,
-                ALERTS_SUPPORTED_EVENTS,
-              ),
-              lowSocPercent: {
-                type: 'number',
-                title: 'Low state-of-charge threshold (%)',
-                description: 'Fires a low-SoC alert when any bank drops below this value.',
-                default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
-                minimum: 0,
-                maximum: 100,
-              },
-              socExitHysteresis: {
-                type: 'number',
-                title: 'SoC recovery hysteresis (%)',
-                description:
-                  'SoC must rise above (threshold + hysteresis) before the alert clears.',
-                default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
-                minimum: 0,
-                maximum: 50,
-              },
-              cellImbalanceV: {
-                type: 'number',
-                title: 'Cell imbalance threshold (V)',
-                description:
-                  'Voltage difference between highest and lowest cell that triggers an alert.',
-                default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
-                minimum: 0,
-              },
-              imbalanceSettleSec: {
-                type: 'integer',
-                title: 'Cell imbalance settle time (seconds)',
-                description:
-                  'Cell imbalance must persist for this many seconds before an alert fires.',
-                default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
-                minimum: 0,
+            },
+            dependencies: {
+              enabled: {
+                oneOf: [
+                  { properties: { enabled: { const: false } } },
+                  {
+                    properties: {
+                      enabled: { const: true },
+                      triggers: triggerSchema(
+                        DEFAULT_OPTIONS.analyzers.alerts.triggers,
+                        ALERTS_SUPPORTED_EVENTS,
+                      ),
+                      lowSocPercent: {
+                        type: 'number',
+                        title: 'Low state-of-charge threshold (%)',
+                        description: 'Fires a low-SoC alert when any bank drops below this value.',
+                        default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
+                        minimum: 0,
+                        maximum: 100,
+                      },
+                      socExitHysteresis: {
+                        type: 'number',
+                        title: 'SoC recovery hysteresis (%)',
+                        description:
+                          'SoC must rise above (threshold + hysteresis) before the alert clears.',
+                        default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
+                        minimum: 0,
+                        maximum: 50,
+                      },
+                      cellImbalanceV: {
+                        type: 'number',
+                        title: 'Cell imbalance threshold (V)',
+                        description:
+                          'Voltage difference between highest and lowest cell that triggers an alert.',
+                        default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
+                        minimum: 0,
+                      },
+                      imbalanceSettleSec: {
+                        type: 'integer',
+                        title: 'Cell imbalance settle time (seconds)',
+                        description:
+                          'Cell imbalance must persist for this many seconds before an alert fires.',
+                        default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
+                        minimum: 0,
+                      },
+                    },
+                  },
+                ],
               },
             },
           },
@@ -352,7 +438,6 @@ function triggerUiSchema(supportedEvents: ReadonlyArray<string>): Record<string,
     cron: {
       'ui:order': ['enabled', 'pattern', 'timezone'],
       pattern: {
-        'ui:placeholder': 'e.g. 0 8 * * * = 8:00 AM daily',
         'ui:help': CRON_HELP,
         'ui:autocomplete': 'off',
       },
