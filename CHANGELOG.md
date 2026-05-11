@@ -5,13 +5,20 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 ## [Unreleased]
 
 ### Changed
+- **Breaking** (since v0.2 was unreleased): each analyzer's config now uses a standardized `triggers` block with `cron` (pattern + timezone), `put` (path), and `events` (subkind list) sub-objects. Matches the UX of `signalk-openrouter-batteries-companion`. `mergeWithDefaults` preserves backward compatibility for pre-v0.3 configs.
 - Plugin lifecycle now creates an `AbortController` per `start()` cycle and aborts on `stop()`. The QuestDB probe at startup honors this signal so a slow probe doesn't outlive the plugin.
 - `TriggerRouter` now updates plugin status to `"Running, budget exhausted for today"` when the per-day cap is hit, and resets to `"Running"` on the next successful call. Previously this only logged at debug.
 - The 5s engine watchdog emits a debug log on `possible-stop` events (was previously silent).
 - `start(settings, restart)` now captures the `restart` callback and exposes it via `AnalyzerDeps.requestRestart` for future analyzers.
+- `MaintenanceAnalyzer` constructor now takes `{ triggers: AnalyzerTriggerCfg, minSessionSeconds }` (was `{ minSessionSeconds, putTriggerPath }`).
+
+### Added
+- `croner: ^10.0.1` runtime dependency.
+- `src/core/cronScheduler.ts` wrapping croner for cron-triggered analyzers.
+- `MAINTENANCE_SUPPORTED_EVENTS` export from `src/types.ts` (currently `['engine-stop']`).
 
 ### Roadmap
-- Battery and other electrical analytics will live in a separate Signal K plugin. This plugin remains engine-focused (battery state-of-charge is still snapshotted at engine session end as contextual data in maintenance reports).
+- Battery and other electrical analytics will live in a separate Signal K plugin (`signalk-openrouter-batteries-companion`). This plugin remains engine-focused (battery state-of-charge is still snapshotted at engine session end as contextual data in maintenance reports).
 
 ## [0.1.0] - 2026-05-10
 
