@@ -31,7 +31,7 @@
   },
   "homepage": "https://github.com/NearlCrews/signalk-openrouter-companion#readme",
   "bugs": { "url": "https://github.com/NearlCrews/signalk-openrouter-companion/issues" },
-  "peerDependencies": { "@signalk/server-api": ">=2.24.0" },
+  "peerDependencies": { "@signalk/server-api": ">=2.24.0 <3" },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "@signalk/server-api": "^2.24.0",

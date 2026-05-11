@@ -59,7 +59,6 @@ curl -X PUT \
 
 - **"Awaiting API key configuration"**: fill in the OpenRouter API key in the admin UI and save.
 - **"Running, no engine data detected"**: the plugin couldn't find any `propulsion.<id>.revolutions` paths. Check that your NMEA2000 gateway or engine source is actually publishing RPM.
-- **"Running, budget exhausted for today"**: you hit the per-day cap. Raise it or wait until UTC midnight.
 - **Reports not appearing**: check Server Log with `DEBUG=signalk-openrouter-companion`.
 
 ## Adding a custom analyzer
