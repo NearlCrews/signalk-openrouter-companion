@@ -13,13 +13,21 @@ export interface MockBus<T> {
 export function makeBus<T>(): MockBus<T> {
   const subs = new Set<Listener<T>>();
   return {
-    push: (v) => { for (const s of subs) s(v); },
-    onValue: (cb) => { subs.add(cb); return () => subs.delete(cb); },
+    push: (v) => {
+      for (const s of subs) s(v);
+    },
+    onValue: (cb) => {
+      subs.add(cb);
+      return () => subs.delete(cb);
+    },
     listenerCount: () => subs.size,
   };
 }
 
-export interface PublishedDelta { pluginId: string; delta: unknown; }
+export interface PublishedDelta {
+  pluginId: string;
+  delta: unknown;
+}
 export interface RegisteredPut {
   context: string;
   path: string;
@@ -44,10 +52,20 @@ export interface MockApp {
     getAvailablePaths(): string[];
   };
   subscriptionmanager: {
-    subscribe(msg: unknown, unsubs: Array<() => void>, errCb: (err: unknown) => void, deltaCb: (delta: unknown) => void): void;
+    subscribe(
+      msg: unknown,
+      unsubs: Array<() => void>,
+      errCb: (err: unknown) => void,
+      deltaCb: (delta: unknown) => void,
+    ): void;
   };
   handleMessage(pluginId: string, delta: unknown): void;
-  registerPutHandler(context: string, path: string, handler: (...args: unknown[]) => unknown, source?: string): void;
+  registerPutHandler(
+    context: string,
+    path: string,
+    handler: (...args: unknown[]) => unknown,
+    source?: string,
+  ): void;
   setPluginStatus(msg: string): void;
   setPluginError(msg: string): void;
   debug(...args: unknown[]): void;
@@ -74,10 +92,15 @@ export function makeMockApp(dataDir: string): MockApp {
     streambundle: {
       getSelfBus(path: string) {
         let bus = app.buses.get(path);
-        if (!bus) { bus = makeBus<unknown>(); app.buses.set(path, bus); }
+        if (!bus) {
+          bus = makeBus<unknown>();
+          app.buses.set(path, bus);
+        }
         return bus;
       },
-      getAvailablePaths() { return app.availablePaths.slice(); },
+      getAvailablePaths() {
+        return app.availablePaths.slice();
+      },
     },
     subscriptionmanager: {
       subscribe(_msg, unsubs, _errCb, _deltaCb) {
@@ -86,18 +109,36 @@ export function makeMockApp(dataDir: string): MockApp {
         app.unsubscribes.push(noop);
       },
     },
-    handleMessage(pluginId, delta) { app.published.push({ pluginId, delta }); },
+    handleMessage(pluginId, delta) {
+      app.published.push({ pluginId, delta });
+    },
     registerPutHandler(context, path, handler, source) {
       app.registeredPuts.push({ context, path, handler, source });
     },
-    setPluginStatus(msg) { app.statusMessages.push(msg); },
-    setPluginError(msg) { app.errorMessages.push(msg); },
-    debug(...args) { app.debugMessages.push(args); },
-    error(msg) { app.appErrorMessages.push(msg); },
-    getDataDirPath() { return dataDir; },
-    getSelfPath(path) { return app.selfPaths.get(path); },
-    busFor<T = unknown>(path: string) { return app.streambundle.getSelfBus(path) as MockBus<T>; },
-    setSelfPath(path, value) { app.selfPaths.set(path, value); },
+    setPluginStatus(msg) {
+      app.statusMessages.push(msg);
+    },
+    setPluginError(msg) {
+      app.errorMessages.push(msg);
+    },
+    debug(...args) {
+      app.debugMessages.push(args);
+    },
+    error(msg) {
+      app.appErrorMessages.push(msg);
+    },
+    getDataDirPath() {
+      return dataDir;
+    },
+    getSelfPath(path) {
+      return app.selfPaths.get(path);
+    },
+    busFor<T = unknown>(path: string) {
+      return app.streambundle.getSelfBus(path) as MockBus<T>;
+    },
+    setSelfPath(path, value) {
+      app.selfPaths.set(path, value);
+    },
   };
   return app;
 }
