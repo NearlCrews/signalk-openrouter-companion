@@ -89,17 +89,22 @@ describe('schema', () => {
     const cronProps = triggers.properties.cron.properties;
     expect(cronProps.enabled.default).toBe(false);
     const cronOn = enabledTrueBranch(triggers.properties.cron);
-    expect((cronOn.properties.pattern as { default: unknown }).default).toBe('');
-    expect((cronOn.properties.timezone as { default: unknown }).default).toBe('');
+    // pattern is now a plain enum-string schema; not gated by an `enabled`
+    // sub-branch and not surfaced as a timezone field.
+    expect((cronOn.properties.pattern as { type: unknown }).type).toBe('string');
+    expect(cronOn.properties.timezone).toBeUndefined();
 
     const putProps = triggers.properties.put.properties;
     expect(putProps.enabled.default).toBe(true);
-    const putOn = enabledTrueBranch(triggers.properties.put);
-    expect((putOn.properties.path as { default: unknown }).default).toBe(
-      'plugins.openrouter-companion.maintenance.run',
+    // PUT path is no longer a separate input; it surfaces in the enabled
+    // checkbox's description as a fixed-by-convention value.
+    expect(putProps.enabled.description).toBe(
+      'PUT path: plugins.openrouter-companion.maintenance.run',
     );
 
-    const events = triggers.properties.events as TriggerSchemaNode['properties']['events'] & {
+    const events = triggers.properties.events as NonNullable<
+      TriggerSchemaNode['properties']['events']
+    > & {
       items: { enum?: string[] };
       default: string[];
     };
@@ -109,7 +114,7 @@ describe('schema', () => {
     expect(events.default).toEqual(['engine-stop']);
   });
 
-  it('renders cron.pattern as an anyOf preset dropdown with a freeform fallback', () => {
+  it('renders cron.pattern as a clean enum + enumNames dropdown', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
       properties: Record<string, EnabledGatedNode>;
@@ -119,35 +124,62 @@ describe('schema', () => {
       const triggers = onBranch.properties.triggers as unknown as TriggerSchemaNode;
       const cronOn = enabledTrueBranch(triggers.properties.cron);
       const pattern = cronOn.properties.pattern as {
-        anyOf: Array<{ type: string; title: string; const?: string }>;
+        type: string;
+        enum: string[];
+        enumNames: string[];
+        default: string;
       };
-      // anyOf (not oneOf): the freeform branch has no const so it always
-      // validates. oneOf would reject preset values because they match both
-      // the preset branch and the freeform branch.
-      expect(Array.isArray(pattern.anyOf)).toBe(true);
-      expect(pattern.anyOf).toHaveLength(8);
-      expect(pattern.anyOf[0].const).toBe('0 8 * * *');
-      expect(pattern.anyOf[0].title).toBe('8:00 AM daily');
-      // The freeform fallback has no `const`, so any string passes the branch
-      // and the dropdown's "Other" option stays available.
-      const freeform = pattern.anyOf[pattern.anyOf.length - 1];
-      expect(freeform.const).toBeUndefined();
-      expect(freeform.title).toMatch(/Other/);
+      // anyOf was producing a doubled control in the SK admin UI because the
+      // freeform branch (`{ type: 'string' }` with no `const`) caused rjsf to
+      // fall back to rendering BOTH the underlying StringField input AND the
+      // AnyOfField selector. enum + enumNames produces a single clean select.
+      expect(pattern.type).toBe('string');
+      expect(Array.isArray(pattern.enum)).toBe(true);
+      expect(pattern.enum.length).toBeGreaterThanOrEqual(7);
+      expect(pattern.enum).toEqual(expect.arrayContaining(['0 8 * * *', '0 12 * * *']));
+      expect(pattern.enumNames.length).toBe(pattern.enum.length);
+      expect(pattern.enumNames[0]).toBe('8:00 AM daily');
+      // No `anyOf`: that's the whole point of this refactor.
+      expect((cronOn.properties.pattern as { anyOf?: unknown }).anyOf).toBeUndefined();
     }
   });
 
-  it('uiSchema marks apiKey as password widget and hides advanced fields', () => {
+  it('preserves a custom (non-preset) cron pattern from defaults by widening the enum', () => {
+    // Health analyzer ships with '0 8 * * *' which IS a preset, so the enum
+    // is the unmodified preset list.
+    const s = buildSchema();
+    const health = s.properties.analyzers as { properties: { health: EnabledGatedNode } };
+    const healthOn = enabledTrueBranch(health.properties.health);
+    const healthTriggers = healthOn.properties.triggers as unknown as TriggerSchemaNode;
+    const healthCronOn = enabledTrueBranch(healthTriggers.properties.cron);
+    const healthPattern = healthCronOn.properties.pattern as {
+      enum: string[];
+      enumNames: string[];
+      default: string;
+    };
+    expect(healthPattern.default).toBe('0 8 * * *');
+    // Asserts presence of the default in the enum (regardless of custom-widening).
+    expect(healthPattern.enum).toContain('0 8 * * *');
+    expect(healthPattern.enumNames.length).toBe(healthPattern.enum.length);
+  });
+
+  it('uiSchema marks apiKey as password and drops the advanced-fields list entirely', () => {
     const u = buildUiSchema() as Record<string, Record<string, unknown>>;
     const openrouter = u.openrouter as Record<string, Record<string, unknown>>;
     expect(openrouter.apiKey['ui:widget']).toBe('password');
-    expect(openrouter.baseUrl['ui:widget']).toBe('hidden');
-    expect(openrouter.requestTimeoutMs['ui:widget']).toBe('hidden');
+    // Advanced openrouter fields (baseUrl, requestTimeoutMs) are now dropped
+    // from the schema entirely rather than hidden via ui:widget, because
+    // 'hidden' does not fully hide a field in the SK admin UI (the custom
+    // FieldTemplate ignores rjsf's `hidden` prop and still renders the label
+    // and wrapper). mergeWithDefaults fills in the runtime values.
+    expect(openrouter.baseUrl).toBeUndefined();
+    expect(openrouter.requestTimeoutMs).toBeUndefined();
     const output = u.output as Record<string, Record<string, unknown>>;
-    expect(output.notificationPath['ui:widget']).toBe('hidden');
-    expect(output.logFilename['ui:widget']).toBe('hidden');
+    expect(output.notificationPath).toBeUndefined();
+    expect(output.logFilename).toBeUndefined();
   });
 
-  it('uiSchema renders events as checkboxes with humanized labels (or hides them)', () => {
+  it('uiSchema renders events as checkboxes with humanized labels, omitting events for analyzers without any', () => {
     const u = buildUiSchema() as Record<string, unknown>;
     const analyzers = u.analyzers as Record<string, Record<string, Record<string, unknown>>>;
 
@@ -164,9 +196,19 @@ describe('schema', () => {
       'Cell imbalance cleared',
     ]);
 
-    // health has no supported events, so the events field is hidden entirely
-    const healthEvents = analyzers.health.triggers.events as Record<string, unknown>;
-    expect(healthEvents['ui:widget']).toBe('hidden');
+    // health has no supported events: the events field is omitted from the
+    // schema entirely so there is no uiSchema entry for it either.
+    expect(analyzers.health.triggers.events).toBeUndefined();
+  });
+
+  it('schema omits the events field for analyzers with no supported events', () => {
+    const s = buildSchema();
+    const analyzers = s.properties.analyzers as {
+      properties: { health: EnabledGatedNode };
+    };
+    const healthOn = enabledTrueBranch(analyzers.properties.health);
+    const healthTriggers = healthOn.properties.triggers as unknown as TriggerSchemaNode;
+    expect(healthTriggers.properties.events).toBeUndefined();
   });
 
   it('uiSchema sets ui:order on every analyzer with enabled first', () => {
@@ -177,18 +219,6 @@ describe('schema', () => {
       expect(Array.isArray(order)).toBe(true);
       expect(order[0]).toBe('enabled');
       expect(order[1]).toBe('triggers');
-    }
-  });
-
-  it('uiSchema hides put.path and cron.timezone on every analyzer', () => {
-    const u = buildUiSchema() as Record<string, unknown>;
-    const analyzers = u.analyzers as Record<string, Record<string, Record<string, unknown>>>;
-    for (const name of ['maintenance', 'health', 'alerts']) {
-      const triggers = analyzers[name].triggers as Record<string, Record<string, unknown>>;
-      const cron = triggers.cron as Record<string, Record<string, unknown>>;
-      const put = triggers.put as Record<string, Record<string, unknown>>;
-      expect(cron.timezone['ui:widget']).toBe('hidden');
-      expect(put.path['ui:widget']).toBe('hidden');
     }
   });
 });

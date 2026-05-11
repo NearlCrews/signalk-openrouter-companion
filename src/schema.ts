@@ -29,31 +29,63 @@ function eventTitlesFor(events: ReadonlyArray<string>): string[] {
   return events.map((e) => EVENT_TITLES[e as MaintenanceEventKind | BatteryEventKind] ?? e);
 }
 
-const CRON_PRESETS: ReadonlyArray<{ title: string; const: string }> = [
-  { title: '8:00 AM daily', const: '0 8 * * *' },
-  { title: '7:00 AM daily', const: '0 7 * * *' },
-  { title: 'Noon daily', const: '0 12 * * *' },
-  { title: '5:30 PM daily', const: '30 17 * * *' },
-  { title: '6:00 PM daily', const: '0 18 * * *' },
-  { title: 'Midnight Sunday', const: '0 0 * * 0' },
-  { title: 'Midnight on the 1st', const: '0 0 1 * *' },
-];
+/**
+ * Cron presets exposed in the admin form. Kept as parallel `values` and
+ * `titles` arrays so the schema renders a clean `enum + enumNames` dropdown
+ * in the SK admin UI (rjsf 5 + raw `@rjsf/core`).
+ *
+ * Why not `anyOf` with a freeform fallback?
+ *
+ * rjsf treats `anyOf`/`oneOf` as a select-dropdown only when EVERY branch is
+ * a "constant" (single-value `const` or `enum`). A freeform branch
+ * (`{ type: 'string' }` with no `const`) breaks that condition, so rjsf falls
+ * back to rendering both the underlying StringField (a visible text input
+ * showing the value) AND the AnyOfField selector. The result on screen is a
+ * doubled control: literal preset title text shown as the input value with a
+ * separate dropdown below. Switching to `enum` produces a single, clean
+ * select. Users who need a custom 5-field cron pattern can set it directly
+ * in the plugin's saved JSON config (`~/.signalk/plugin-config-data/<id>.json`).
+ */
+const CRON_PRESET_VALUES = [
+  '0 8 * * *',
+  '0 7 * * *',
+  '0 12 * * *',
+  '30 17 * * *',
+  '0 18 * * *',
+  '0 0 * * 0',
+  '0 0 1 * *',
+] as const;
+
+const CRON_PRESET_TITLES = [
+  '8:00 AM daily',
+  '7:00 AM daily',
+  'Noon daily',
+  '5:30 PM daily',
+  '6:00 PM daily',
+  'Midnight Sunday',
+  'Midnight on the 1st',
+] as const;
 
 const CRON_HELP =
-  "Pick a preset or choose 'Other' to enter your own 5-field cron pattern " +
-  '(minute hour day-of-month month day-of-week).';
+  'Pick a preset. Custom 5-field cron patterns can be set by editing the ' +
+  "plugin's JSON config file directly.";
 
 function cronPatternSchema(defaultPattern: string): Record<string, unknown> {
+  // If the saved default is not a preset (e.g. a custom pattern persisted in
+  // the JSON config), include it in the enum so rjsf keeps the dropdown
+  // selection consistent rather than blanking it.
+  const presets = [...CRON_PRESET_VALUES] as string[];
+  const titles = [...CRON_PRESET_TITLES] as string[];
+  if (defaultPattern && !presets.includes(defaultPattern)) {
+    presets.push(defaultPattern);
+    titles.push(`Custom: ${defaultPattern}`);
+  }
   return {
+    type: 'string',
     title: 'Schedule',
-    default: defaultPattern,
-    // anyOf, not oneOf: the freeform branch has no const so it always validates,
-    // which would make oneOf reject preset values (matches preset branch AND
-    // freeform). anyOf still renders as a dropdown in rjsf 5.
-    anyOf: [
-      ...CRON_PRESETS.map((p) => ({ type: 'string', title: p.title, const: p.const })),
-      { type: 'string', title: 'Other (custom 5-field cron pattern)' },
-    ],
+    default: defaultPattern || presets[0],
+    enum: presets,
+    enumNames: titles,
   };
 }
 
@@ -85,8 +117,11 @@ export interface EnabledGatedNode {
 
 /**
  * The `triggers` block that every analyzer's enabled-true branch hangs off.
- * Both `cron` and `put` are themselves `EnabledGatedNode`s; `events` is a
- * plain string array whose enum varies per analyzer.
+ * `cron` is an `EnabledGatedNode` (the enabled-true branch reveals the cron
+ * pattern dropdown). `put` is a plain object with only `enabled` (the PUT
+ * path is a fixed convention exposed via the field description). `events`
+ * is a plain string array whose enum varies per analyzer; it is omitted
+ * entirely for analyzers with no supported events.
  */
 export interface TriggerSchemaNode {
   type: 'object';
@@ -94,14 +129,19 @@ export interface TriggerSchemaNode {
   description: string;
   properties: {
     cron: EnabledGatedNode;
-    put: EnabledGatedNode;
-    events: {
+    put: {
+      type: 'object';
+      title: string;
+      properties: {
+        enabled: { type: 'boolean'; title: string; default: boolean; description: string };
+      };
+    };
+    events?: {
       type: 'array';
       title?: string;
       description?: string;
       items: unknown;
       default?: unknown[];
-      maxItems?: number;
       uniqueItems?: boolean;
     };
   };
@@ -138,77 +178,58 @@ function triggerSchema(opts: {
   supportedEvents: ReadonlyArray<string>;
 }): TriggerSchemaNode {
   const { defaults, supportedEvents } = opts;
-  // When no events are supported, the field is hidden via uiSchema. Set
-  // maxItems: 0 + default: [] so it's semantically empty at the schema level
-  // too, not just visually.
-  const eventsField: TriggerSchemaNode['properties']['events'] =
-    supportedEvents.length === 0
-      ? {
-          type: 'array',
-          title: 'Event subscriptions',
-          description: 'This analyzer does not subscribe to event triggers.',
-          items: { type: 'string' as const },
-          maxItems: 0,
-          default: [] as string[],
-        }
-      : {
-          type: 'array',
-          title: 'Event subscriptions',
-          description: 'Select which events should invoke this analyzer.',
-          uniqueItems: true,
-          items: { type: 'string' as const, enum: supportedEvents as string[] },
-          default: defaults.events,
-        };
+  const properties: TriggerSchemaNode['properties'] = {
+    cron: {
+      type: 'object',
+      title: 'Schedule',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          title: 'Run on a schedule',
+          default: defaults.cron.enabled,
+        },
+      },
+      ...enabledGate({
+        whenEnabled: {
+          pattern: cronPatternSchema(defaults.cron.pattern),
+        },
+      }),
+    },
+    put: {
+      type: 'object',
+      title: 'On-demand trigger',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          title: 'Allow on-demand trigger via Signal K PUT',
+          default: defaults.put.enabled,
+          description: `PUT path: ${defaults.put.path}`,
+        },
+      },
+    },
+  };
+  // Only include the events field when there are events to choose from.
+  // Omitting it entirely is cleaner than rendering a disabled empty array
+  // since `ui:widget: 'hidden'` does not fully hide a field in the SK admin
+  // UI (the custom FieldTemplate ignores rjsf's `hidden` prop, so the label
+  // and wrapper still render).
+  if (supportedEvents.length > 0) {
+    properties.events = {
+      type: 'array',
+      title: 'Event subscriptions',
+      description: 'Select which events should invoke this analyzer.',
+      uniqueItems: true,
+      items: { type: 'string' as const, enum: supportedEvents as string[] },
+      default: defaults.events,
+    };
+  }
 
   return {
     type: 'object',
     title: 'When to run',
     description:
       'Cron and on-demand PUT triggers are universal. Event triggers depend on the analyzer.',
-    properties: {
-      cron: {
-        type: 'object',
-        title: 'Schedule',
-        properties: {
-          enabled: {
-            type: 'boolean',
-            title: 'Run on a schedule',
-            default: defaults.cron.enabled,
-          },
-        },
-        ...enabledGate({
-          whenEnabled: {
-            pattern: cronPatternSchema(defaults.cron.pattern),
-            timezone: {
-              type: 'string',
-              title: 'Timezone',
-              default: defaults.cron.timezone,
-            },
-          },
-        }),
-      },
-      put: {
-        type: 'object',
-        title: 'On-demand trigger',
-        properties: {
-          enabled: {
-            type: 'boolean',
-            title: 'Allow on-demand trigger via Signal K PUT',
-            default: defaults.put.enabled,
-          },
-        },
-        ...enabledGate({
-          whenEnabled: {
-            path: {
-              type: 'string',
-              title: 'Signal K PUT path',
-              default: defaults.put.path,
-            },
-          },
-        }),
-      },
-      events: eventsField,
-    },
+    properties,
   };
 }
 
@@ -251,17 +272,6 @@ function buildSchemaInner(): PluginSchema {
             description: 'Hard cap on OpenRouter calls per UTC day to bound spend.',
             default: DEFAULT_OPTIONS.openrouter.maxCallsPerDay,
             minimum: 0,
-          },
-          baseUrl: {
-            type: 'string',
-            title: 'OpenRouter base URL',
-            default: DEFAULT_OPTIONS.openrouter.baseUrl,
-          },
-          requestTimeoutMs: {
-            type: 'integer',
-            title: 'Request timeout (ms)',
-            default: DEFAULT_OPTIONS.openrouter.requestTimeoutMs,
-            minimum: 1000,
           },
         },
       },
@@ -439,7 +449,10 @@ function buildSchemaInner(): PluginSchema {
         type: 'object',
         title: 'Report output',
         description:
-          'Where reports are published. Defaults are sensible; advanced fields are hidden from the form and editable in the plugin config file.',
+          'Where reports are published. Notification paths default to ' +
+          'notifications.openrouter-companion.<analyzer>.<...>; log filename ' +
+          "defaults to reports.jsonl. Advanced overrides live in the plugin's " +
+          'JSON config file.',
         properties: {
           notificationState: {
             type: 'string',
@@ -448,16 +461,6 @@ function buildSchemaInner(): PluginSchema {
               'Signal K notification state used when a report is published (alert subkinds override this).',
             enum: [...ALARM_STATES],
             default: DEFAULT_OPTIONS.output.notificationState,
-          },
-          notificationPath: {
-            type: 'string',
-            title: 'Custom notification path',
-            default: DEFAULT_OPTIONS.output.notificationPath,
-          },
-          logFilename: {
-            type: 'string',
-            title: 'Log filename',
-            default: DEFAULT_OPTIONS.output.logFilename,
           },
         },
       },
@@ -469,43 +472,32 @@ function triggerUiSchema(opts: {
   supportedEvents: ReadonlyArray<string>;
 }): Record<string, unknown> {
   const { supportedEvents } = opts;
-  const eventsUi: Record<string, unknown> =
-    supportedEvents.length === 0
-      ? { 'ui:widget': 'hidden' }
-      : {
-          'ui:widget': 'checkboxes',
-          'ui:options': { inline: false },
-          'ui:enumNames': eventTitlesFor(supportedEvents),
-        };
-
-  return {
+  const ui: Record<string, unknown> = {
     'ui:order': ['cron', 'put', 'events'],
     cron: {
-      'ui:order': ['enabled', 'pattern', 'timezone'],
+      'ui:order': ['enabled', 'pattern'],
       pattern: {
         'ui:help': CRON_HELP,
-        'ui:autocomplete': 'off',
-      },
-      timezone: {
-        // Hide by default. Empty = system timezone, which is the common case.
-        'ui:widget': 'hidden',
       },
     },
     put: {
-      'ui:order': ['enabled', 'path'],
-      path: {
-        // Hide by default. Defaults are sane; users rarely need to override.
-        'ui:widget': 'hidden',
-      },
+      'ui:order': ['enabled'],
     },
-    events: eventsUi,
   };
+  if (supportedEvents.length > 0) {
+    ui.events = {
+      'ui:widget': 'checkboxes',
+      'ui:options': { inline: false },
+      'ui:enumNames': eventTitlesFor(supportedEvents),
+    };
+  }
+  return ui;
 }
 
 function buildUiSchemaInner(): PluginUiSchema {
   return {
     openrouter: {
-      'ui:order': ['apiKey', 'model', 'maxCallsPerDay', 'baseUrl', 'requestTimeoutMs'],
+      'ui:order': ['apiKey', 'model', 'maxCallsPerDay'],
       apiKey: {
         'ui:widget': 'password',
         'ui:autocomplete': 'off',
@@ -513,8 +505,6 @@ function buildUiSchemaInner(): PluginUiSchema {
       model: {
         'ui:placeholder': 'anthropic/claude-haiku-4.5',
       },
-      baseUrl: { 'ui:widget': 'hidden' },
-      requestTimeoutMs: { 'ui:widget': 'hidden' },
     },
     questdb: {
       'ui:order': ['enabled', 'url'],
@@ -553,9 +543,7 @@ function buildUiSchemaInner(): PluginUiSchema {
       },
     },
     output: {
-      'ui:order': ['notificationState', 'notificationPath', 'logFilename'],
-      notificationPath: { 'ui:widget': 'hidden' },
-      logFilename: { 'ui:widget': 'hidden' },
+      'ui:order': ['notificationState'],
     },
   };
 }
