@@ -1,9 +1,11 @@
 import type { BatteryEventKind } from './analyzers/Analyzer.js';
 import {
+  AGING_SUPPORTED_EVENTS,
   ALARM_STATES,
   ALERTS_SUPPORTED_EVENTS,
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
+  DRIFT_SUPPORTED_EVENTS,
   HEALTH_SUPPORTED_EVENTS,
   MAINTENANCE_SUPPORTED_EVENTS,
   type MaintenanceEventKind,
@@ -390,6 +392,48 @@ function buildSchemaInner(): PluginSchema {
               },
             }),
           },
+          aging: {
+            type: 'object',
+            title: 'Battery Aging Tracker',
+            description:
+              'Monthly capacity-loss trend per battery bank, ranked by degradation rate.',
+            properties: {
+              enabled: {
+                type: 'boolean',
+                title: 'Enable battery aging tracker',
+                default: DEFAULT_OPTIONS.analyzers.aging.enabled,
+              },
+            },
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.aging.triggers,
+                  supportedEvents: AGING_SUPPORTED_EVENTS,
+                }),
+              },
+            }),
+          },
+          drift: {
+            type: 'object',
+            title: 'Engine Performance Drift',
+            description:
+              'Weekly fuel-economy and per-RPM drift for engines vs the trailing 30-day baseline.',
+            properties: {
+              enabled: {
+                type: 'boolean',
+                title: 'Enable engine performance drift analysis',
+                default: DEFAULT_OPTIONS.analyzers.drift.enabled,
+              },
+            },
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.drift.triggers,
+                  supportedEvents: DRIFT_SUPPORTED_EVENTS,
+                }),
+              },
+            }),
+          },
           alerts: {
             type: 'object',
             title: 'Battery Threshold Alerts',
@@ -529,6 +573,14 @@ function buildUiSchemaInner(): PluginUiSchema {
       health: {
         'ui:order': ['enabled', 'triggers'],
         triggers: triggerUiSchema({ supportedEvents: HEALTH_SUPPORTED_EVENTS }),
+      },
+      aging: {
+        'ui:order': ['enabled', 'triggers'],
+        triggers: triggerUiSchema({ supportedEvents: AGING_SUPPORTED_EVENTS }),
+      },
+      drift: {
+        'ui:order': ['enabled', 'triggers'],
+        triggers: triggerUiSchema({ supportedEvents: DRIFT_SUPPORTED_EVENTS }),
       },
       alerts: {
         'ui:order': [

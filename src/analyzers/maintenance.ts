@@ -36,7 +36,6 @@ export interface MaintenanceInput extends AnalysisInput {
   telemetry: Record<string, TelemetryStats>;
   engineNotifications: Record<string, unknown>;
   batteries: BatterySnapshot[];
-  baselines: Record<string, unknown> | null;
 }
 
 export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
@@ -84,9 +83,6 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     }
     const engineNotifications = snapshotEngineNotifications(deps, engineId);
     const batteries = snapshotBatteries(deps);
-    const baselines = deps.questdb
-      ? await fetchBaselines(deps.questdb, watchedPaths, deps.app.selfContext ?? 'vessels.self')
-      : null;
 
     return {
       session: {
@@ -98,7 +94,6 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       telemetry,
       engineNotifications,
       batteries,
-      baselines,
     };
   }
 
@@ -109,13 +104,12 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
       'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, rotation in rad/s, capacity in J, SoC as a 0-1 ratio. Do not invent unit conversions you cannot derive.',
       'If any engine notification slot is non-normal, surface it prominently.',
-      'If 30-day baselines are present, briefly compare this session against them.',
       'If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing. Any claim must cite the field that supports it.',
-      'Format the response as markdown with a 1-line summary, then short sections for Telemetry, Alarms, Batteries, and (if available) Baselines.',
+      'Format the response as markdown with a 1-line summary, then short sections for Telemetry, Alarms, and Batteries.',
       'Stay under 350 words.',
     ].join(' ');
 
-    const { session, telemetry, engineNotifications: alarms, batteries, baselines } = input;
+    const { session, telemetry, engineNotifications: alarms, batteries } = input;
 
     const lines: string[] = [];
     lines.push('## Session');
@@ -143,13 +137,6 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     lines.push('## Batteries (end-of-session snapshot)');
     for (const b of batteries) {
       lines.push(`- ${b.id}: ${JSON.stringify(b)}`);
-    }
-    if (baselines && Object.keys(baselines).length > 0) {
-      lines.push('');
-      lines.push('## 30-day baselines');
-      for (const [path, stats] of Object.entries(baselines)) {
-        lines.push(`- ${path}: ${JSON.stringify(stats)}`);
-      }
     }
     return { system, user: lines.join('\n') };
   }
@@ -196,25 +183,6 @@ function snapshotBatteries(deps: AnalyzerDeps): BatterySnapshot[] {
       nominalCapacityJ: readNumberAt(node, 'capacity.nominal'),
     });
   }
-  return out;
-}
-
-async function fetchBaselines(
-  questdb: NonNullable<AnalyzerDeps['questdb']>,
-  paths: string[],
-  context: string,
-): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = {};
-  await Promise.all(
-    paths.map(async (p) => {
-      try {
-        const b = await questdb.baselineFor(p, context, 30);
-        if (b) out[p] = b;
-      } catch {
-        // best-effort
-      }
-    }),
-  );
   return out;
 }
 

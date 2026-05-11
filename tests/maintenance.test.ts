@@ -107,7 +107,6 @@ describe('MaintenanceAnalyzer.collectContext', () => {
         nominalCapacityJ: 5_400_000,
       },
     ]);
-    expect(r!.baselines).toBeNull();
   });
 });
 
@@ -144,7 +143,6 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
           nominalCapacityJ: 5_400_000,
         },
       ],
-      baselines: null,
     });
     expect(out.system).toContain('marine');
     expect(out.system).toContain('engine');

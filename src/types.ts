@@ -9,6 +9,10 @@ export type MaintenanceEventKind = (typeof MAINTENANCE_SUPPORTED_EVENTS)[number]
 
 export const HEALTH_SUPPORTED_EVENTS = [] as const;
 
+export const AGING_SUPPORTED_EVENTS = [] as const;
+
+export const DRIFT_SUPPORTED_EVENTS = [] as const;
+
 export const ALERTS_SUPPORTED_EVENTS = [
   'low-soc-enter',
   'low-soc-exit',
@@ -48,6 +52,14 @@ export interface PluginOptions {
       extraWatchedPaths: string[];
     };
     health: {
+      enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
+    };
+    aging: {
+      enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
+    };
+    drift: {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
     };
@@ -96,6 +108,22 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       triggers: {
         cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
         put: { enabled: true, path: 'plugins.openrouter-companion.health.run' },
+        events: [],
+      },
+    },
+    aging: {
+      enabled: true,
+      triggers: {
+        cron: { enabled: true, pattern: '0 8 1 * *', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.aging.run' },
+        events: [],
+      },
+    },
+    drift: {
+      enabled: true,
+      triggers: {
+        cron: { enabled: true, pattern: '0 8 * * 0', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.drift.run' },
         events: [],
       },
     },
@@ -152,6 +180,8 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
     | {
         maintenance?: WithPartialTriggers<PluginOptions['analyzers']['maintenance']>;
         health?: WithPartialTriggers<PluginOptions['analyzers']['health']>;
+        aging?: WithPartialTriggers<PluginOptions['analyzers']['aging']>;
+        drift?: WithPartialTriggers<PluginOptions['analyzers']['drift']>;
         alerts?: WithPartialTriggers<PluginOptions['analyzers']['alerts']>;
       }
     | undefined;
@@ -164,6 +194,8 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
         inputAnalyzers?.maintenance,
       ),
       health: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.health, inputAnalyzers?.health),
+      aging: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.aging, inputAnalyzers?.aging),
+      drift: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.drift, inputAnalyzers?.drift),
       alerts: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.alerts, inputAnalyzers?.alerts),
     },
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },

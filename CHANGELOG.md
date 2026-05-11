@@ -4,6 +4,17 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+- Battery aging tracker: `AgingAnalyzer` produces a monthly trend report per battery bank, computing capacity-loss-per-100-cycles over rolling 30/90-day windows from QuestDB and ranking banks by degradation rate. Default trigger: cron `0 8 1 * *` (1st of month, 8am) plus on-demand PUT to `plugins.openrouter-companion.aging.run`. Publishes on `notifications.openrouter-companion.aging.report`.
+- Engine performance drift: `DriftAnalyzer` produces a weekly trend report comparing the past week's per-RPM-bin fuel rate and SOG against the trailing 30-day baseline (from QuestDB), to surface gradual changes (fouled prop, dirty hull, fuel-quality drift, alternator load creep). Default trigger: cron `0 8 * * 0` (Sunday, 8am) plus on-demand PUT to `plugins.openrouter-companion.drift.run`. Publishes on `notifications.openrouter-companion.drift.report`.
+
+### Changed
+- `MaintenanceAnalyzer` no longer fetches 30-day baselines from QuestDB or includes them in its prompt. Per-session reports now describe just that session, with battery aging and engine drift moved to dedicated trend analyzers.
+- `HealthAnalyzer` no longer fetches 30-day SoC baselines from QuestDB or includes them in its prompt. Daily reports now describe today's battery snapshot only.
+
+### Internal
+- `tests/drift.test.ts` injects a typed stub matching the QuestDBClient `query` surface instead of stubbing global `fetch`. The global-fetch approach was process-wide and clashed with parallel test workers, producing intermittent flakes.
+
 ## [0.2.0] - 2026-05-11
 
 ### Added

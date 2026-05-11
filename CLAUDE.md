@@ -8,10 +8,13 @@ Project memory for Claude Code. Read at the start of every session.
 - The `Analyzer` interface in `src/analyzers/Analyzer.ts` is the extension point. New analyzers implement: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
 - Standardized triggers block per analyzer: `{ cron: { enabled, pattern, timezone }, put: { enabled, path }, events: string[] }`. Same shape for every analyzer; the events array's enum is per-analyzer.
 - Shared infra in `src/core/`: `logger`, `buffer`, `budget`, `engineDetector`, `batteryMonitor`, `cronScheduler`, `triggerRouter`, `openrouter`, `questdb`, `publisher`, `discovery`, `skNode`.
-- Three analyzers ship today:
-  - `maintenance`: engine sessions, fires on engine-stop.
-  - `health`: daily battery health, fires on cron.
-  - `alerts`: battery threshold notifications, fires on battery events.
+- Five analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
+  - `maintenance` (state): per-engine-session narrative, fires on engine-stop. No QuestDB.
+  - `health` (state): daily snapshot of every battery bank, fires on cron. No QuestDB.
+  - `alerts` (transition): real-time threshold crossings (low SoC, cell imbalance), fires on battery events.
+  - `aging` (trend): monthly capacity-loss trend per bank, fires on cron. Reads QuestDB.
+  - `drift` (trend): weekly engine fuel-economy and per-RPM drift vs trailing 30-day baseline, fires on cron. Reads QuestDB.
+- Trend analyzers own QuestDB queries; state analyzers don't, to keep their reports independent of long-term history and avoid duplicating the trend findings.
 
 ## Conventions
 

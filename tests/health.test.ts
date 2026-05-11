@@ -122,7 +122,6 @@ describe('HealthAnalyzer', () => {
           cells: null,
         },
       ],
-      baselines: null,
     });
     expect(out.system).toContain('marine');
     expect(out.system).toContain('battery');

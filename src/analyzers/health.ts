@@ -26,7 +26,6 @@ interface BankSnapshot {
 export interface HealthInput {
   generatedAt: string;
   banks: BankSnapshot[];
-  baselines: Record<string, unknown> | null;
   [key: string]: unknown;
 }
 
@@ -71,31 +70,9 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
       };
     });
 
-    const questdb = deps.questdb;
-    let baselines: Record<string, unknown> | null = null;
-    if (questdb) {
-      const collected: Record<string, unknown> = {};
-      await Promise.all(
-        banks.map(async (b) => {
-          try {
-            const sb = await questdb.baselineFor(
-              `electrical.batteries.${b.id}.capacity.stateOfCharge`,
-              deps.app.selfContext ?? 'vessels.self',
-              30,
-            );
-            if (sb) collected[b.id] = sb;
-          } catch {
-            // best-effort: questdb gaps must not derail the report
-          }
-        }),
-      );
-      baselines = collected;
-    }
-
     return {
       generatedAt: new Date(endMs).toISOString(),
       banks,
-      baselines,
     };
   }
 
@@ -112,7 +89,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
       'You are an experienced marine electrical specialist reading raw battery telemetry from a Signal K server.',
       'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
       'Produce a concise plain-English daily report covering every battery bank.',
-      'For each bank: state of charge, voltage and current trends, cycle count, cell balance (if cell data is present), and any drift vs the 30-day baseline if baselines are present.',
+      'For each bank: state of charge, voltage and current trends, cycle count, and cell balance (if cell data is present).',
       'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
       'If you cannot identify a cause from the data, say so rather than guess.',
       'Surface anything that looks unusual: voltage outside an obvious range for the bank, cell imbalance over the configured threshold, SoC drifting low.',
@@ -121,7 +98,6 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     ].join(' ');
 
     const banks = input.banks;
-    const baselines = input.baselines;
 
     const lines: string[] = [];
     lines.push(`## Generated ${input.generatedAt}`);
@@ -143,9 +119,6 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
       if (b.cells && b.cells.length > 0) {
         const cellLine = b.cells.map((c) => `${c.index}=${fmt(c.voltage)}`).join(' ');
         lines.push(`- cells: ${cellLine}`);
-      }
-      if (baselines && baselines[b.id]) {
-        lines.push(`- 30-day SoC baseline: ${JSON.stringify(baselines[b.id])}`);
       }
       lines.push('');
     }

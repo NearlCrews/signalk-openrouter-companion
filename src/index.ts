@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
+import { AgingAnalyzer } from './analyzers/aging.js';
 import { AlertAnalyzer } from './analyzers/alerts.js';
+import { DriftAnalyzer } from './analyzers/drift.js';
 import { HealthAnalyzer } from './analyzers/health.js';
 import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
 import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
@@ -159,6 +161,12 @@ export default function createPlugin(app: ServerApiLike): {
         if (cfg.analyzers.health.enabled) {
           analyzers.push(new HealthAnalyzer({ triggers: cfg.analyzers.health.triggers }));
         }
+        if (cfg.analyzers.aging.enabled) {
+          analyzers.push(new AgingAnalyzer({ triggers: cfg.analyzers.aging.triggers }));
+        }
+        if (cfg.analyzers.drift.enabled) {
+          analyzers.push(new DriftAnalyzer({ triggers: cfg.analyzers.drift.triggers }));
+        }
         if (cfg.analyzers.alerts.enabled) {
           analyzers.push(new AlertAnalyzer({ triggers: cfg.analyzers.alerts.triggers }));
         }
@@ -295,6 +303,8 @@ export default function createPlugin(app: ServerApiLike): {
 
         registerAnalyzerPut(app, cfg.analyzers.maintenance, () => router, PLUGIN_ID);
         registerAnalyzerPut(app, cfg.analyzers.health, () => router, PLUGIN_ID);
+        registerAnalyzerPut(app, cfg.analyzers.aging, () => router, PLUGIN_ID);
+        registerAnalyzerPut(app, cfg.analyzers.drift, () => router, PLUGIN_ID);
         registerAnalyzerPut(app, cfg.analyzers.alerts, () => router, PLUGIN_ID);
 
         intervalHandles.push(
