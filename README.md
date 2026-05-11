@@ -42,10 +42,12 @@ Optional:
 - **Model**: defaults to `anthropic/claude-haiku-4.5`. Any OpenRouter-supported chat model works.
 - **Max OpenRouter calls per day**: hard cap, default 20.
 - **QuestDB URL**: if you run `signalk-questdb`, the plugin will pull 30-day baselines for richer reports. Default `http://localhost:9000`. The plugin probes QuestDB on start and falls back gracefully if it's unreachable; disable in the admin UI if you want to skip the probe entirely.
-- **Schedule (cron) for any analyzer**: pick a preset from the dropdown (e.g. 8:00 AM daily, midnight Sunday), or choose "Other" to enter a custom 5-field cron pattern.
+- **Schedule (cron) for any analyzer**: pick one of the seven presets (8:00 AM daily, 7:00 AM daily, Noon daily, 5:30 PM daily, 6:00 PM daily, Midnight Sunday, Midnight on the 1st), or choose "Other" to enter a custom 5-field cron pattern.
 - **Engine-off and Engine-on RPM thresholds (in Hz: 1.0 Hz = 60 RPM)**: leave at defaults unless your engine idles unusually low or high.
 - **Low state-of-charge threshold (alerts)**: default 30%. SoC must rise above `threshold + hysteresis` (default +5%) to clear.
 - **Cell imbalance threshold (alerts)**: default 0.1 V. Must persist past the settle window (default 60 s) before an event fires.
+
+Disabling an analyzer or QuestDB collapses its options away in the admin form. Heads up: rjsf treats a re-enable as a fresh form, so toggling back on restores the schema defaults rather than whatever values you had entered. Save before toggling if you want to keep a tweaked configuration.
 
 A few advanced fields are hidden from the admin form for simplicity (OpenRouter base URL, request timeout, notification path, log filename, per-analyzer PUT path, per-analyzer cron timezone). They still exist in the schema and can be overridden by editing `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` directly.
 

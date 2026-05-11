@@ -58,34 +58,90 @@ function cronPatternSchema(defaultPattern: string): Record<string, unknown> {
 }
 
 /**
+ * The two repeating shapes inside `PluginSchema` that tests and helpers walk
+ * most often. They are exported as light type aliases (not a full discriminated
+ * union) so tests can drop the bulk of their `as { ... }` casts.
+ *
+ * `EnabledGatedNode` is the standard rjsf "checkbox reveals more fields" gate:
+ * `enabled` lives at the top level and the conditional fields live inside the
+ * `enabled === true` branch of `dependencies.enabled.oneOf`.
+ */
+export interface EnabledGatedNode {
+  type: 'object';
+  title?: string;
+  description?: string;
+  properties: {
+    enabled: { type: 'boolean'; title?: string; default?: boolean; description?: string };
+  };
+  dependencies: {
+    enabled: {
+      oneOf: [
+        { properties: { enabled: { const: false } } },
+        { properties: Record<string, unknown> & { enabled: { const: true } } },
+      ];
+    };
+  };
+}
+
+/**
+ * The `triggers` block that every analyzer's enabled-true branch hangs off.
+ * Both `cron` and `put` are themselves `EnabledGatedNode`s; `events` is a
+ * plain string array whose enum varies per analyzer.
+ */
+export interface TriggerSchemaNode {
+  type: 'object';
+  title: string;
+  description: string;
+  properties: {
+    cron: EnabledGatedNode;
+    put: EnabledGatedNode;
+    events: {
+      type: 'array';
+      title?: string;
+      description?: string;
+      items: unknown;
+      default?: unknown[];
+      maxItems?: number;
+      uniqueItems?: boolean;
+    };
+  };
+}
+
+/**
  * Wraps the `{ dependencies: { enabled: { oneOf: [...false, ...true] } } }`
  * shape used at every place where toggling `enabled` reveals/hides extra
  * fields. The caller still owns the outer `type: 'object'`, `title`,
  * `description`, and the `properties.enabled` boolean (which vary per site).
  */
-function enabledGate(opts: { whenEnabled: Record<string, unknown> }): {
-  dependencies: { enabled: { oneOf: [Record<string, unknown>, Record<string, unknown>] } };
-} {
+function enabledGate(opts: {
+  whenEnabled: Record<string, unknown>;
+}): Pick<EnabledGatedNode, 'dependencies'> {
   return {
     dependencies: {
       enabled: {
         oneOf: [
           { properties: { enabled: { const: false } } },
-          { properties: { enabled: { const: true }, ...opts.whenEnabled } },
+          {
+            properties: { enabled: { const: true }, ...opts.whenEnabled } as Record<
+              string,
+              unknown
+            > & { enabled: { const: true } },
+          },
         ],
       },
     },
   };
 }
 
-function triggerSchema(
-  defaults: AnalyzerTriggerCfg,
-  supportedEvents: ReadonlyArray<string>,
-): Record<string, unknown> {
+function triggerSchema(opts: {
+  defaults: AnalyzerTriggerCfg;
+  supportedEvents: ReadonlyArray<string>;
+}): TriggerSchemaNode {
+  const { defaults, supportedEvents } = opts;
   // When no events are supported, the field is hidden via uiSchema. Set
   // maxItems: 0 + default: [] so it's semantically empty at the schema level
   // too, not just visually.
-  const eventsField =
+  const eventsField: TriggerSchemaNode['properties']['events'] =
     supportedEvents.length === 0
       ? {
           type: 'array',
@@ -251,10 +307,10 @@ function buildSchemaInner(): PluginSchema {
             },
             ...enabledGate({
               whenEnabled: {
-                triggers: triggerSchema(
-                  DEFAULT_OPTIONS.analyzers.maintenance.triggers,
-                  MAINTENANCE_SUPPORTED_EVENTS,
-                ),
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.maintenance.triggers,
+                  supportedEvents: MAINTENANCE_SUPPORTED_EVENTS,
+                }),
                 engineStopRpmHzThreshold: {
                   type: 'number',
                   title: 'Engine-off RPM threshold (Hz)',
@@ -317,10 +373,10 @@ function buildSchemaInner(): PluginSchema {
             },
             ...enabledGate({
               whenEnabled: {
-                triggers: triggerSchema(
-                  DEFAULT_OPTIONS.analyzers.health.triggers,
-                  HEALTH_SUPPORTED_EVENTS,
-                ),
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.health.triggers,
+                  supportedEvents: HEALTH_SUPPORTED_EVENTS,
+                }),
               },
             }),
           },
@@ -338,10 +394,10 @@ function buildSchemaInner(): PluginSchema {
             },
             ...enabledGate({
               whenEnabled: {
-                triggers: triggerSchema(
-                  DEFAULT_OPTIONS.analyzers.alerts.triggers,
-                  ALERTS_SUPPORTED_EVENTS,
-                ),
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.alerts.triggers,
+                  supportedEvents: ALERTS_SUPPORTED_EVENTS,
+                }),
                 lowSocPercent: {
                   type: 'number',
                   title: 'Low state-of-charge threshold (%)',
@@ -409,7 +465,10 @@ function buildSchemaInner(): PluginSchema {
   };
 }
 
-function triggerUiSchema(supportedEvents: ReadonlyArray<string>): Record<string, unknown> {
+function triggerUiSchema(opts: {
+  supportedEvents: ReadonlyArray<string>;
+}): Record<string, unknown> {
+  const { supportedEvents } = opts;
   const eventsUi: Record<string, unknown> =
     supportedEvents.length === 0
       ? { 'ui:widget': 'hidden' }
@@ -472,14 +531,14 @@ function buildUiSchemaInner(): PluginUiSchema {
           'minSessionSeconds',
           'extraWatchedPaths',
         ],
-        triggers: triggerUiSchema(MAINTENANCE_SUPPORTED_EVENTS),
+        triggers: triggerUiSchema({ supportedEvents: MAINTENANCE_SUPPORTED_EVENTS }),
         extraWatchedPaths: {
           'ui:options': { orderable: false },
         },
       },
       health: {
         'ui:order': ['enabled', 'triggers'],
-        triggers: triggerUiSchema(HEALTH_SUPPORTED_EVENTS),
+        triggers: triggerUiSchema({ supportedEvents: HEALTH_SUPPORTED_EVENTS }),
       },
       alerts: {
         'ui:order': [
@@ -490,7 +549,7 @@ function buildUiSchemaInner(): PluginUiSchema {
           'cellImbalanceV',
           'imbalanceSettleSec',
         ],
-        triggers: triggerUiSchema(ALERTS_SUPPORTED_EVENTS),
+        triggers: triggerUiSchema({ supportedEvents: ALERTS_SUPPORTED_EVENTS }),
       },
     },
     output: {

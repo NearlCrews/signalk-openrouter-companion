@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildSchema, buildUiSchema } from '../src/schema.js';
+import {
+  buildSchema,
+  buildUiSchema,
+  type EnabledGatedNode,
+  type TriggerSchemaNode,
+} from '../src/schema.js';
 import { ALARM_STATES, mergeWithDefaults } from '../src/types.js';
 
 /**
@@ -7,16 +12,10 @@ import { ALARM_STATES, mergeWithDefaults } from '../src/types.js';
  * Locates the branch by predicate rather than by index so the test still
  * targets the right branch if the order of the two oneOf entries ever flips.
  */
-function enabledTrueBranch(node: Record<string, unknown>): {
+function enabledTrueBranch(node: EnabledGatedNode | Record<string, unknown>): {
   properties: Record<string, Record<string, unknown>>;
 } {
-  const deps = node.dependencies as {
-    enabled: {
-      oneOf: Array<{
-        properties: { enabled: { const: boolean } } & Record<string, Record<string, unknown>>;
-      }>;
-    };
-  };
+  const deps = (node as EnabledGatedNode).dependencies;
   const branch = deps.enabled.oneOf.find(
     (b) => (b.properties.enabled as { const: boolean }).const === true,
   );
@@ -36,23 +35,19 @@ describe('schema', () => {
     };
     expect(openrouter.required).toEqual(['apiKey']);
     const output = s.properties.output as { properties: Record<string, Record<string, unknown>> };
-    // notificationState's enum is the shared ALARM_STATES tuple from types.ts.
     expect(output.properties.notificationState.enum).toEqual([...ALARM_STATES]);
   });
 
   it('hides analyzer detail fields behind a dependencies.enabled gate', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
-      properties: { maintenance: Record<string, unknown> };
+      properties: { maintenance: EnabledGatedNode };
     };
     const maintenance = analyzers.properties.maintenance;
-    // The dependencies block exists with the oneOf-on-enabled shape.
     expect(maintenance.dependencies).toBeDefined();
-    const deps = maintenance.dependencies as { enabled: { oneOf: unknown[] } };
-    expect(Array.isArray(deps.enabled.oneOf)).toBe(true);
-    expect(deps.enabled.oneOf).toHaveLength(2);
+    expect(Array.isArray(maintenance.dependencies.enabled.oneOf)).toBe(true);
+    expect(maintenance.dependencies.enabled.oneOf).toHaveLength(2);
 
-    // The enabled-true branch reveals triggers + threshold fields.
     const onBranch = enabledTrueBranch(maintenance);
     expect(onBranch.properties.triggers).toBeDefined();
     expect(onBranch.properties.engineStopRpmHzThreshold).toBeDefined();
@@ -62,7 +57,7 @@ describe('schema', () => {
   it('hides health + alerts detail fields behind a dependencies.enabled gate', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
-      properties: { health: Record<string, unknown>; alerts: Record<string, unknown> };
+      properties: { health: EnabledGatedNode; alerts: EnabledGatedNode };
     };
 
     const healthOn = enabledTrueBranch(analyzers.properties.health);
@@ -76,7 +71,7 @@ describe('schema', () => {
 
   it('hides questdb.url behind a dependencies.enabled gate', () => {
     const s = buildSchema();
-    const questdb = s.properties.questdb;
+    const questdb = s.properties.questdb as unknown as EnabledGatedNode;
     const onBranch = enabledTrueBranch(questdb);
     expect(onBranch.properties.url).toBeDefined();
   });
@@ -84,59 +79,44 @@ describe('schema', () => {
   it('exposes a triggers block on the maintenance analyzer (enabled-true branch)', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
-      properties: { maintenance: Record<string, unknown> };
+      properties: { maintenance: EnabledGatedNode };
     };
     const onBranch = enabledTrueBranch(analyzers.properties.maintenance);
-    const triggers = onBranch.properties.triggers as {
-      type: string;
-      title: string;
-      properties: {
-        cron: Record<string, unknown>;
-        put: Record<string, unknown>;
-        events: {
-          type: string;
-          uniqueItems?: boolean;
-          items: { enum?: string[] };
-          default: string[];
-        };
-      };
-    };
+    const triggers = onBranch.properties.triggers as unknown as TriggerSchemaNode;
     expect(triggers.type).toBe('object');
     expect(triggers.title).toBe('When to run');
 
-    // cron.enabled is at the top level; pattern + timezone only appear when enabled=true.
-    const cronProps = (triggers.properties.cron as { properties: Record<string, unknown> })
-      .properties;
-    expect((cronProps.enabled as { default: unknown }).default).toBe(false);
+    const cronProps = triggers.properties.cron.properties;
+    expect(cronProps.enabled.default).toBe(false);
     const cronOn = enabledTrueBranch(triggers.properties.cron);
     expect((cronOn.properties.pattern as { default: unknown }).default).toBe('');
     expect((cronOn.properties.timezone as { default: unknown }).default).toBe('');
 
-    // put.enabled is at top level; path only appears when enabled=true.
-    const putProps = (triggers.properties.put as { properties: Record<string, unknown> })
-      .properties;
-    expect((putProps.enabled as { default: unknown }).default).toBe(true);
+    const putProps = triggers.properties.put.properties;
+    expect(putProps.enabled.default).toBe(true);
     const putOn = enabledTrueBranch(triggers.properties.put);
     expect((putOn.properties.path as { default: unknown }).default).toBe(
       'plugins.openrouter-companion.maintenance.run',
     );
 
-    expect(triggers.properties.events.type).toBe('array');
-    expect(triggers.properties.events.uniqueItems).toBe(true);
-    expect(triggers.properties.events.items.enum).toEqual(['engine-stop']);
-    expect(triggers.properties.events.default).toEqual(['engine-stop']);
+    const events = triggers.properties.events as TriggerSchemaNode['properties']['events'] & {
+      items: { enum?: string[] };
+      default: string[];
+    };
+    expect(events.type).toBe('array');
+    expect(events.uniqueItems).toBe(true);
+    expect(events.items.enum).toEqual(['engine-stop']);
+    expect(events.default).toEqual(['engine-stop']);
   });
 
   it('renders cron.pattern as an anyOf preset dropdown with a freeform fallback', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
-      properties: Record<string, Record<string, unknown>>;
+      properties: Record<string, EnabledGatedNode>;
     };
     for (const name of ['maintenance', 'health', 'alerts']) {
       const onBranch = enabledTrueBranch(analyzers.properties[name]);
-      const triggers = onBranch.properties.triggers as {
-        properties: { cron: Record<string, unknown> };
-      };
+      const triggers = onBranch.properties.triggers as unknown as TriggerSchemaNode;
       const cronOn = enabledTrueBranch(triggers.properties.cron);
       const pattern = cronOn.properties.pattern as {
         anyOf: Array<{ type: string; title: string; const?: string }>;
@@ -146,10 +126,10 @@ describe('schema', () => {
       // the preset branch and the freeform branch.
       expect(Array.isArray(pattern.anyOf)).toBe(true);
       expect(pattern.anyOf).toHaveLength(8);
-      // First entry is the 8:00 AM preset.
       expect(pattern.anyOf[0].const).toBe('0 8 * * *');
       expect(pattern.anyOf[0].title).toBe('8:00 AM daily');
-      // Last entry is the freeform fallback: no const so any string passes.
+      // The freeform fallback has no `const`, so any string passes the branch
+      // and the dropdown's "Other" option stays available.
       const freeform = pattern.anyOf[pattern.anyOf.length - 1];
       expect(freeform.const).toBeUndefined();
       expect(freeform.title).toMatch(/Other/);
