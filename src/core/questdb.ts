@@ -43,6 +43,10 @@ export class QuestDBClient {
     p50: number;
     p90: number;
   } | null> {
+    if (!Number.isFinite(days)) {
+      throw new Error(`baselineFor: days must be a finite number (got ${String(days)})`);
+    }
+    const d = Math.max(1, Math.trunc(days));
     const escapedPath = path.replace(/'/g, "''");
     const escapedCtx = context.replace(/'/g, "''");
     const sql = `
@@ -53,7 +57,7 @@ export class QuestDBClient {
       FROM signalk
       WHERE path = '${escapedPath}'
         AND context = '${escapedCtx}'
-        AND ts > dateadd('d', -${days}, now())
+        AND ts > dateadd('d', -${d}, now())
     `
       .trim()
       .replace(/\s+/g, ' ');

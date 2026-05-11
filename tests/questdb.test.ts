@@ -83,4 +83,12 @@ describe('QuestDBClient', () => {
     const r = await q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30);
     expect(r).toEqual({ min: 1, max: 100, mean: 50, p10: 5, p50: 50, p90: 95 });
   });
+
+  it('baselineFor propagates errors from query()', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+    const q = new QuestDBClient({ url: 'http://localhost:9000' });
+    await expect(q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30)).rejects.toThrow(
+      /HTTP 500/,
+    );
+  });
 });
