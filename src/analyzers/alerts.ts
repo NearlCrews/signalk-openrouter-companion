@@ -10,6 +10,20 @@ import type {
 
 const ENTER_SUBKINDS: ReadonlyArray<BatteryEventKind> = ['low-soc-enter', 'cell-imbalance-enter'];
 
+// PGN 126985 (Alert Text) carries this through the NMEA 2000 emitter. Chartplotter
+// implementations vary in how much of alertTextDescription they render; 200 ASCII
+// chars is comfortably under every cap we have seen and preserves the lead sentence
+// the prompt is engineered to produce.
+const MAX_ALERT_MESSAGE_CHARS = 200;
+
+function truncateForN2K(message: string): string {
+  if (message.length <= MAX_ALERT_MESSAGE_CHARS) return message;
+  const head = message.slice(0, MAX_ALERT_MESSAGE_CHARS - 1);
+  const lastSpace = head.lastIndexOf(' ');
+  const cut = lastSpace > MAX_ALERT_MESSAGE_CHARS / 2 ? head.slice(0, lastSpace) : head;
+  return `${cut.trimEnd()}…`;
+}
+
 const ALL_SUBKINDS: ReadonlyArray<BatteryEventKind> = [
   'low-soc-enter',
   'low-soc-exit',
@@ -111,7 +125,8 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     if (!subkind) return;
     const path = `notifications.openrouter-companion.alert.${subkind}`;
     const state: 'alert' | 'normal' = ENTER_SUBKINDS.includes(subkind) ? 'alert' : 'normal';
-    await deps.publisher.publishOnPath(text, { analyzerId: this.id, ctx }, { path, state });
+    const message = truncateForN2K(text);
+    await deps.publisher.publishOnPath(message, { analyzerId: this.id, ctx }, { path, state });
   }
 }
 

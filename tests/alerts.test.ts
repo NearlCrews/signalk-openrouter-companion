@@ -137,6 +137,58 @@ describe('AlertAnalyzer', () => {
     expect(JSON.parse(line).analyzer).toBe('alerts');
   });
 
+  it('publishOutput truncates long alert messages to fit PGN 126985 alertTextDescription', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const publisher = new ReportPublisher({
+      app,
+      pluginId: 'orcb',
+      notificationPath: 'unused',
+      notificationState: 'normal',
+      logPath: join(dir, 'reports.jsonl'),
+    });
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+    };
+    const longText = `House bank SoC dropped to 25%. ${'Voltage trending down across all cells with no detectable charging source connected. '.repeat(10)}`;
+    expect(longText.length).toBeGreaterThan(220);
+    await a.publishOutput!(longText, ctx, makeDeps(app, buf, publisher));
+    const d = app.published[0]!.delta as {
+      updates: { values: { path: string; value: { message: string } }[] }[];
+    };
+    const sentMessage = d.updates[0]!.values[0]!.value.message;
+    expect(sentMessage.length).toBeLessThanOrEqual(200);
+    expect(sentMessage.endsWith('…')).toBe(true);
+    expect(sentMessage.startsWith('House bank SoC dropped to 25%.')).toBe(true);
+  });
+
+  it('publishOutput leaves short messages unchanged', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const publisher = new ReportPublisher({
+      app,
+      pluginId: 'orcb',
+      notificationPath: 'unused',
+      notificationState: 'normal',
+      logPath: join(dir, 'reports.jsonl'),
+    });
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+    };
+    const short = 'House bank SoC dropped to 25%, check charging source.';
+    await a.publishOutput!(short, ctx, makeDeps(app, buf, publisher));
+    const d = app.published[0]!.delta as {
+      updates: { values: { path: string; value: { message: string } }[] }[];
+    };
+    expect(d.updates[0]!.values[0]!.value.message).toBe(short);
+  });
+
   it('publishOutput sends a normal-state notification on exit events', async () => {
     const a = new AlertAnalyzer(makeCfg());
     const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
