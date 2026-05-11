@@ -55,9 +55,10 @@ export class OpenRouterClient {
   private async doCall(args: CompleteArgs, attempt: number): Promise<CompleteResult> {
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), this.cfg.requestTimeoutMs);
+    const onCallerAbort = (): void => ctrl.abort();
     if (args.abortSignal) {
       if (args.abortSignal.aborted) ctrl.abort();
-      else args.abortSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
+      else args.abortSignal.addEventListener('abort', onCallerAbort, { once: true });
     }
     try {
       const res = await fetch(`${this.cfg.baseUrl}/chat/completions`, {
@@ -112,6 +113,7 @@ export class OpenRouterClient {
       throw new OpenRouterError(res.status, message, metadata, false);
     } finally {
       clearTimeout(timeout);
+      args.abortSignal?.removeEventListener('abort', onCallerAbort);
     }
   }
 }
