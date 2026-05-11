@@ -205,6 +205,9 @@ export default function createPlugin(app: ServerApiLike): {
                 }
               }
             }
+            // Marker for tests that need to know the router is wired before
+            // pushing deltas. Production reads it as a debug breadcrumb.
+            logger.debug('router ready');
           })
           .catch((err) => logger.debug(`startup aborted: ${stringify(err)}`));
 

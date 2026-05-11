@@ -4,13 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
 
-// Drain the microtask queue a few times so the deferred router init
-// (Promise.all([probe, budgetLoad]).then(...)) has settled before tests
-// drive deltas. setImmediate gives macrotask boundaries in between.
-async function waitForRouterReady(): Promise<void> {
-  for (let i = 0; i < 5; i++) {
-    await new Promise((r) => setImmediate(r));
-  }
+// Wait for the deferred router init (Promise.all([probe, budgetLoad]).then)
+// to actually settle. The plugin emits a "router ready" debug log once the
+// router has been instantiated and analyzers wired in. Polling for that
+// breadcrumb is robust against slow event loops; counting setImmediate
+// cycles was not.
+async function waitForRouterReady(app: MockApp): Promise<void> {
+  await vi.waitFor(
+    () => {
+      const ready = app.debugMessages.some((args) => {
+        const arr = args as unknown[];
+        return arr.length > 0 && String(arr[0]).includes('router ready');
+      });
+      expect(ready).toBe(true);
+    },
+    { timeout: 5000, interval: 5 },
+  );
 }
 
 describe('integration: engine session -> report', () => {
@@ -58,7 +67,7 @@ describe('integration: engine session -> report', () => {
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
 
     // Wait for the deferred router init (.then on Promise.all([probe, budgetLoad])) to settle.
-    await waitForRouterReady();
+    await waitForRouterReady(app);
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'propulsion.port.revolutions',
@@ -116,7 +125,7 @@ describe('integration: engine session -> report', () => {
       () => {},
     );
 
-    await waitForRouterReady();
+    await waitForRouterReady(app);
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'propulsion.port.revolutions',
@@ -175,7 +184,7 @@ describe('integration: engine session -> report', () => {
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
 
-    await waitForRouterReady();
+    await waitForRouterReady(app);
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'electrical.batteries.house.capacity.stateOfCharge',
