@@ -93,14 +93,15 @@ export default function createPlugin(app: ServerApiLike): {
           referer: 'https://github.com/NearlCrews/signalk-openrouter-companion',
           title: PLUGIN_ID,
         });
-        let questdbLive: QuestDBClient | null = null;
-        if (cfg.questdb.enabled) {
-          const candidate = new QuestDBClient({ url: cfg.questdb.url });
-          void candidate.probe().then((ok) => {
-            questdbLive = ok ? candidate : null;
-            if (!ok) logger.debug('QuestDB unreachable; baselines disabled for this run');
-          });
-        }
+        const questdbCandidate = cfg.questdb.enabled
+          ? new QuestDBClient({ url: cfg.questdb.url })
+          : null;
+        const probePromise: Promise<QuestDBClient | null> = questdbCandidate
+          ? questdbCandidate.probe().then((ok) => {
+              if (!ok) logger.debug('QuestDB unreachable; baselines disabled for this run');
+              return ok ? questdbCandidate : null;
+            })
+          : Promise.resolve(null);
         const publisher = new ReportPublisher({
           app,
           pluginId: PLUGIN_ID,
@@ -117,11 +118,13 @@ export default function createPlugin(app: ServerApiLike): {
           : null;
         const analyzers: Analyzer[] = maintenance ? [maintenance] : [];
 
-        let router: TriggerRouter | null = null;
-        void BudgetTracker.load({
+        const budgetPromise = BudgetTracker.load({
           maxPerDay: cfg.openrouter.maxCallsPerDay,
           statePath: budgetPath,
-        }).then((budget) => {
+        });
+
+        let router: TriggerRouter | null = null;
+        void Promise.all([probePromise, budgetPromise]).then(([questdbLive, budget]) => {
           router = new TriggerRouter(analyzers, {
             buffer,
             questdb: questdbLive,
