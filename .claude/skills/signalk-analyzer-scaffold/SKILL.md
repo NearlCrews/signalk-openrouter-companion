@@ -93,7 +93,7 @@ export class FooAnalyzer implements Analyzer<FooInput> {
   buildPrompt(input: FooInput): { system: string; user: string } {
     const system = [
       'You are a marine specialist reading Signal K telemetry.',
-      'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, rotation in rad/s, capacity in J, SoC as a 0-1 ratio.',
+      'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s).',
       'Stick to facts present in the data. If a cause is unclear from the fields, say so.',
       'Stay under 350 words.',
     ].join(' ');
@@ -326,5 +326,5 @@ The result should include a `foo` key with the title and description you set.
 - No em dashes anywhere in generated code, tests, comments, commit messages, or docs. Prefer colons or split sentences.
 - Notification paths use `notifications.openrouter-companion.<id>.<...>`.
 - PUT paths use `plugins.openrouter-companion.<id>.<verb>`.
-- Stick to Signal K SI base units in prompts: V, A, K, rad/s, J, ratios.
+- Stick to Signal K SI base units in prompts: V, A, K, J, ratios. Note that `propulsion.*.revolutions` is documented in Hz (rev/s), not rad/s, even though rad/s is the SI base unit for angular velocity. Don't have the prompt tell the LLM to interpret revolutions as rad/s.
 - Reuse `src/core/skNode.ts` `readNumberAt` helper rather than reimplementing node-walking.

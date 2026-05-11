@@ -102,7 +102,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       'You are an experienced marine engine technician reading raw telemetry from a Signal K server.',
       'Produce a concise plain-English report of the engine session described in the user content.',
       'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
-      'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, rotation in rad/s, capacity in J, SoC as a 0-1 ratio. Do not invent unit conversions you cannot derive.',
+      'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s). Do not invent unit conversions you cannot derive.',
       'If any engine notification slot is non-normal, surface it prominently.',
       'If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing. Any claim must cite the field that supports it.',
       'Format the response as markdown with a 1-line summary, then short sections for Telemetry, Alarms, and Batteries.',
@@ -193,7 +193,7 @@ function fmt(v: unknown): string {
 }
 
 function unitForPath(path: string): string | null {
-  if (path.endsWith('.revolutions')) return 'rad/s';
+  if (path.endsWith('.revolutions')) return 'Hz';
   if (path.endsWith('.voltage')) return 'V';
   if (path.endsWith('.current')) return 'A';
   if (path.endsWith('.temperature') || path.endsWith('Temperature')) return 'K';
