@@ -66,7 +66,6 @@ Project memory for Claude Code. Read at the start of every session.
 
 ## Things to avoid (learned this session)
 
-- Don't propose separate npm packages for new monitoring domains. Add them as Analyzer modules.
-- Don't tweak the `signalk-openrouter-batteries-companion.archived` directory. It's a deliberate archive of an early architectural detour.
-- Don't use `oneOf` for cron-pattern dropdowns with a freeform branch. Ajv's "exactly one" semantics rejects values that also match a const branch. Use `anyOf`.
+- Don't propose separate npm packages for new monitoring domains. Add them as Analyzer modules. (See CHANGELOG 0.2.0: the early `signalk-openrouter-batteries-companion` sibling repo was archived and its analyzers consolidated into this plugin.)
+- Don't use `anyOf` for the cron-pattern dropdown with a freeform string branch. rjsf 5 only renders `anyOf` / `oneOf` as a single select when every branch is a constant; mixing in a freeform branch produces a doubled control. Use `enum + enumNames`. Custom (non-preset) cron values go in the saved JSON config file.
 - Don't read user memory for credentials and echo them. They go through env vars only.
