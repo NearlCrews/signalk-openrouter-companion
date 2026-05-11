@@ -31,6 +31,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 ### Removed
 - The sibling `signalk-openrouter-batteries-companion` repo is archived. Its analyzers (`health`, `alerts`) and supporting infra (`BatteryMonitor`, bank discovery) now live in this plugin.
 
+### Internal
+- Post-consolidation cleanup pass: prompt overhauls (SI-units contract, "cause not determinable" hint, unit-suffixed numeric lines, JSON-dump rewritten as labeled lines for alerts), tighter type narrowing across analyzers (generic `Analyzer<I>`, discriminated `BatteryEvent` union, type-guard for `BatteryEventKind`), shared `readNumberAt` helper extracted to `src/core/skNode.ts`, magic numbers hoisted to module-level named constants in `src/index.ts`, widened notification-state enum to the full Signal K `ALARM_STATE`, new tests (start/stop cycle, PUT-handler invocation, 500/502 retries, stall+restart debounce, source eviction, cron timezone, QuestDB validation), README rewritten to cover all three analyzers.
+
 ## [0.1.0] - 2026-05-10
 
 ### Added

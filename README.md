@@ -74,7 +74,9 @@ A run fires when any of these triggers matches.
 
 ## Trigger a report on demand
 
-PUT to the analyzer's PUT path on `vessels.self`. Example for maintenance:
+PUT to the analyzer's PUT path on `vessels.self`.
+
+Maintenance:
 
 ```bash
 curl -X PUT \
@@ -84,9 +86,27 @@ curl -X PUT \
   http://localhost:3000/signalk/v1/api/vessels/self/plugins/openrouter-companion/maintenance/run
 ```
 
-Same shape for `plugins.openrouter-companion.health.run`.
+Health:
 
-The example uses `Authorization: Bearer $SK_TOKEN`. Cookie auth works too; see the Signal K auth docs for token setup.
+```bash
+curl -X PUT \
+  -H "Authorization: Bearer $SK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value": {"reason": "manual"}}' \
+  http://localhost:3000/signalk/v1/api/vessels/self/plugins/openrouter-companion/health/run
+```
+
+Alerts (disabled by default; enable PUT in the admin UI and set a path before using):
+
+```bash
+curl -X PUT \
+  -H "Authorization: Bearer $SK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value": {"reason": "manual"}}' \
+  http://localhost:3000/signalk/v1/api/vessels/self/<your-configured-alerts-put-path>
+```
+
+The examples use `Authorization: Bearer $SK_TOKEN`, which requires JWT setup in the Signal K server. Cookie auth works too; see the Signal K auth docs for token setup.
 
 ## Troubleshooting
 
