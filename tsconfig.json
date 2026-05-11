@@ -13,7 +13,8 @@
     "resolveJsonModule": true,
     "allowJs": false,
     "sourceMap": false,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "types": ["node"]
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules", "tests"]
