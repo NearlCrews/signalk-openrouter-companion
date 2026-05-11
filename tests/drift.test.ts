@@ -37,9 +37,8 @@ interface StubQuestDB {
   calls: string[];
 }
 
-// Inject a typed stub matching the QuestDBClient surface drift.ts touches.
-// Avoids vi.stubGlobal('fetch'), which is process-global and clashes with
-// other test files running in parallel workers.
+// Inject a typed stub instead of vi.stubGlobal('fetch'): the global stub
+// is process-wide and races with parallel test workers.
 function stubQuestDB(
   dispatch: (sql: string) => ReadonlyArray<{ ts: number; value: number }>,
 ): StubQuestDB {
@@ -127,7 +126,6 @@ describe('DriftAnalyzer', () => {
 
   describe('collectContext happy path', () => {
     it('bins fuel.rate and SOG per RPM band and computes deltas vs baseline', async () => {
-      // Discover engineId 'port' from buffer (avoids relying on the fallback).
       const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
       buf.record('propulsion.port.revolutions', 4, Date.now() - 1000, 'n2k');
 
@@ -228,7 +226,6 @@ describe('DriftAnalyzer', () => {
         expect(eng.deltas[bin].sogDeltaPct!).toBeCloseTo(0, 1);
       }
 
-      // 3 paths x 2 windows means at least 6 SQL queries.
       expect(stub.calls.some((s) => s.includes('propulsion.port.revolutions'))).toBe(true);
       expect(stub.calls.some((s) => s.includes('propulsion.port.fuel.rate'))).toBe(true);
       expect(stub.calls.some((s) => s.includes('navigation.speedOverGround'))).toBe(true);

@@ -1,3 +1,4 @@
+import { discoverEngineIds as discoverEngineIdsFromPaths } from '../core/discovery.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -14,7 +15,6 @@ const RPM_RUNNING_THRESHOLD_HZ = 5.0;
 // Window (in ms) used to pair a non-RPM sample to its most recent preceding RPM
 // observation. Beyond this gap, the non-RPM sample is dropped from binning.
 const RPM_JOIN_WINDOW_MS = 5_000;
-// Defensive cap so a chatty source can't blow up memory in collectContext.
 const QUERY_ROW_LIMIT = 50_000;
 
 export interface DriftCfg {
@@ -131,10 +131,10 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     };
   }
 
-  async publishOutput(text: string, _ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
+  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
     await deps.publisher.publishOnPath(
       text,
-      { analyzerId: this.id, ctx: _ctx },
+      { analyzerId: this.id, ctx },
       { path: 'notifications.openrouter-companion.drift.report', state: 'normal' },
     );
   }
@@ -180,16 +180,12 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 }
 
 function discoverEngineIds(deps: AnalyzerDeps): string[] {
-  const ids = new Set<string>();
-  for (const path of deps.buffer.pathKeys()) {
-    const m = path.match(/^propulsion\.([^.]+)\.revolutions$/);
-    if (m?.[1]) ids.add(m[1]);
-  }
+  const ids = discoverEngineIdsFromPaths(Array.from(deps.buffer.pathKeys()));
   // Fallback for the common single-engine vessel. The cron may fire after the
   // buffer has aged out (>26h since last engine use), in which case QuestDB
   // still holds the history but the buffer has nothing to discover from.
-  if (ids.size === 0) ids.add('port');
-  return Array.from(ids).sort();
+  if (ids.length === 0) return ['port'];
+  return ids;
 }
 
 async function binEngineWindow(
@@ -215,12 +211,9 @@ async function binEngineWindow(
   const acc: Record<
     BinKey,
     { count: number; fuelSum: number; fuelN: number; sogSum: number; sogN: number }
-  > = {
-    idle: { count: 0, fuelSum: 0, fuelN: 0, sogSum: 0, sogN: 0 },
-    lowCruise: { count: 0, fuelSum: 0, fuelN: 0, sogSum: 0, sogN: 0 },
-    highCruise: { count: 0, fuelSum: 0, fuelN: 0, sogSum: 0, sogN: 0 },
-    topEnd: { count: 0, fuelSum: 0, fuelN: 0, sogSum: 0, sogN: 0 },
-  };
+  > = Object.fromEntries(
+    BIN_ORDER.map((k) => [k, { count: 0, fuelSum: 0, fuelN: 0, sogSum: 0, sogN: 0 }]),
+  ) as typeof acc;
 
   for (const r of rpm) {
     const bin = binFor(r.value);
@@ -235,12 +228,10 @@ async function binEngineWindow(
     acc[bin].sogN += 1;
   });
 
-  return {
-    idle: finalizeBin(acc.idle),
-    lowCruise: finalizeBin(acc.lowCruise),
-    highCruise: finalizeBin(acc.highCruise),
-    topEnd: finalizeBin(acc.topEnd),
-  };
+  return Object.fromEntries(BIN_ORDER.map((k) => [k, finalizeBin(acc[k])])) as Record<
+    BinKey,
+    BinStats
+  >;
 }
 
 function finalizeBin(a: {
@@ -335,12 +326,10 @@ function computeDeltas(
   week: Record<BinKey, BinStats>,
   base: Record<BinKey, BinStats>,
 ): Record<BinKey, BinDelta> {
-  return {
-    idle: deltaForBin(week.idle, base.idle),
-    lowCruise: deltaForBin(week.lowCruise, base.lowCruise),
-    highCruise: deltaForBin(week.highCruise, base.highCruise),
-    topEnd: deltaForBin(week.topEnd, base.topEnd),
-  };
+  return Object.fromEntries(BIN_ORDER.map((k) => [k, deltaForBin(week[k], base[k])])) as Record<
+    BinKey,
+    BinDelta
+  >;
 }
 
 function deltaForBin(w: BinStats, b: BinStats): BinDelta {

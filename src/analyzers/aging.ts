@@ -61,21 +61,37 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     if (bankIds.length === 0) return null;
 
     const selfContext = deps.app.selfContext ?? '';
-    const banks: BankAging[] = [];
+    const questdb = deps.questdb;
 
-    for (const id of bankIds) {
-      const capPath = `electrical.batteries.${id}.capacity.actual`;
-      const cycPath = `electrical.batteries.${id}.cycles`;
-      const windows = {} as Record<WindowKey, WindowStats>;
-      let anyData = false;
-      for (const days of WINDOW_DAYS) {
-        const key = `${days}d` as WindowKey;
-        const summaries = await queryWindow(deps.questdb, selfContext, [capPath, cycPath], days);
-        const stats = computeWindowStats(summaries.get(capPath), summaries.get(cycPath));
-        windows[key] = stats;
-        if (stats.capacitySamples >= 2 || stats.cyclesSamples >= 2) anyData = true;
+    const candidates = await Promise.all(
+      bankIds.flatMap((id) => {
+        const capPath = `electrical.batteries.${id}.capacity.actual`;
+        const cycPath = `electrical.batteries.${id}.cycles`;
+        return WINDOW_DAYS.map(async (days) => {
+          const summaries = await queryWindow(questdb, selfContext, [capPath, cycPath], days);
+          const stats = computeWindowStats(summaries.get(capPath), summaries.get(cycPath));
+          return { id, key: `${days}d` as WindowKey, stats };
+        });
+      }),
+    );
+
+    const byBank = new Map<string, Partial<Record<WindowKey, WindowStats>>>();
+    for (const c of candidates) {
+      let entry = byBank.get(c.id);
+      if (!entry) {
+        entry = {};
+        byBank.set(c.id, entry);
       }
-      if (anyData) banks.push({ id, windows });
+      entry[c.key] = c.stats;
+    }
+
+    const banks: BankAging[] = [];
+    for (const id of bankIds) {
+      const windows = byBank.get(id) ?? {};
+      const hasData = Object.values(windows).some(
+        (w) => w && (w.capacitySamples >= 2 || w.cyclesSamples >= 2),
+      );
+      if (hasData) banks.push({ id, windows: windows as Record<WindowKey, WindowStats> });
     }
 
     if (banks.length === 0) return null;
@@ -135,11 +151,11 @@ function computeWindowStats(
   cap: PathSummary | undefined,
   cyc: PathSummary | undefined,
 ): WindowStats {
-  const capStart = isFiniteNumber(cap?.first) ? (cap as PathSummary).first : null;
-  const capEnd = isFiniteNumber(cap?.last) ? (cap as PathSummary).last : null;
+  const capStart = numOrNull(cap?.first);
+  const capEnd = numOrNull(cap?.last);
   const capN = cap?.n ?? 0;
-  const cycStart = isFiniteNumber(cyc?.first) ? (cyc as PathSummary).first : null;
-  const cycEnd = isFiniteNumber(cyc?.last) ? (cyc as PathSummary).last : null;
+  const cycStart = numOrNull(cyc?.first);
+  const cycEnd = numOrNull(cyc?.last);
   const cycN = cyc?.n ?? 0;
 
   let capacityDeltaPct: number | null = null;
@@ -215,8 +231,8 @@ async function queryWindow(
   return out;
 }
 
-function isFiniteNumber(v: unknown): boolean {
-  return typeof v === 'number' && Number.isFinite(v);
+function numOrNull(v: number | null | undefined): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 function fmt(v: unknown): string {
