@@ -16,6 +16,14 @@ export const ALERTS_SUPPORTED_EVENTS = [
   'cell-imbalance-exit',
 ] as const;
 
+/**
+ * Signal K notification states (the full ALARM_STATE enum). The plugin's
+ * `output.notificationState` config and the publisher's typed argument both
+ * resolve to one of these strings.
+ */
+export const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
+export type NotificationState = (typeof ALARM_STATES)[number];
+
 export interface PluginOptions {
   openrouter: {
     apiKey: string;
@@ -54,7 +62,7 @@ export interface PluginOptions {
   };
   output: {
     notificationPath: string;
-    notificationState: 'nominal' | 'normal' | 'alert' | 'warn' | 'alarm' | 'emergency';
+    notificationState: NotificationState;
     logFilename: string;
   };
 }
@@ -95,7 +103,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false, path: '' },
+        put: { enabled: false, path: 'plugins.openrouter-companion.alerts.run' },
         events: ['low-soc-enter', 'low-soc-exit', 'cell-imbalance-enter', 'cell-imbalance-exit'],
       },
       lowSocPercent: 30,

@@ -1,8 +1,9 @@
 import { appendFile } from 'node:fs/promises';
 import type { TriggerCtx } from '../analyzers/Analyzer.js';
+import type { NotificationState } from '../types.js';
 import { stringify } from './logger.js';
 
-export type NotificationState = 'nominal' | 'normal' | 'alert' | 'warn' | 'alarm' | 'emergency';
+export type { NotificationState };
 
 export interface SignalKNotificationValue {
   state: NotificationState;

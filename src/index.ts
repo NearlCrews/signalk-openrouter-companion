@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { Analyzer, BatteryEventKind, TriggerCtx } from './analyzers/Analyzer.js';
+import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { AlertAnalyzer } from './analyzers/alerts.js';
 import { HealthAnalyzer } from './analyzers/health.js';
 import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
@@ -21,7 +21,7 @@ import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
 import { buildSchema, buildUiSchema } from './schema.js';
-import { mergeWithDefaults, type PluginOptions } from './types.js';
+import { ALERTS_SUPPORTED_EVENTS, mergeWithDefaults, type PluginOptions } from './types.js';
 
 const PLUGIN_ID = 'signalk-openrouter-companion';
 const PLUGIN_NAME = 'OpenRouter Companion';
@@ -34,13 +34,6 @@ const MONITOR_TICK_MS = 5000;
 const WATCHDOG_TICK_MS = 5000;
 const WATCHDOG_SEC = 30;
 const RESCAN_INTERVAL_MS = 60_000;
-
-const BATTERY_SUBKINDS: ReadonlyArray<BatteryEventKind> = [
-  'low-soc-enter',
-  'low-soc-exit',
-  'cell-imbalance-enter',
-  'cell-imbalance-exit',
-];
 
 interface ServerApiLike {
   streambundle: {
@@ -244,7 +237,7 @@ export default function createPlugin(app: ServerApiLike): {
           };
           void router.dispatch('battery-event', ctx, { batterySubkind: e.kind });
         };
-        for (const k of BATTERY_SUBKINDS) monitor.on(k, dispatchBatteryEvent);
+        for (const k of ALERTS_SUPPORTED_EVENTS) monitor.on(k, dispatchBatteryEvent);
 
         const available = app.streambundle.getAvailablePaths();
         const engineIds = discoverEngineIds(available);

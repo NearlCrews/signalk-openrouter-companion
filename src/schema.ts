@@ -1,17 +1,23 @@
+import type { BatteryEventKind } from './analyzers/Analyzer.js';
 import {
+  ALARM_STATES,
   ALERTS_SUPPORTED_EVENTS,
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
   HEALTH_SUPPORTED_EVENTS,
   MAINTENANCE_SUPPORTED_EVENTS,
+  type MaintenanceEventKind,
 } from './types.js';
 
 /**
  * Human-readable labels for each event subkind exposed in the admin UI.
  * Kept here (rather than alongside the event constants in types.ts) because
  * these strings are UI copy specific to the rjsf `enumNames` directive.
+ *
+ * Typing the record by the union of event kinds means adding a new subkind
+ * without a title is a build error rather than a silent fall-through.
  */
-const EVENT_TITLES: Record<string, string> = {
+const EVENT_TITLES: Record<MaintenanceEventKind | BatteryEventKind, string> = {
   'engine-stop': 'Engine session ended',
   'low-soc-enter': 'Low SoC: bank entered low state',
   'low-soc-exit': 'Low SoC: bank recovered',
@@ -20,7 +26,7 @@ const EVENT_TITLES: Record<string, string> = {
 };
 
 function eventTitlesFor(events: ReadonlyArray<string>): string[] {
-  return events.map((e) => EVENT_TITLES[e] ?? e);
+  return events.map((e) => EVENT_TITLES[e as MaintenanceEventKind | BatteryEventKind] ?? e);
 }
 
 const CRON_PRESETS: ReadonlyArray<{ title: string; const: string }> = [
@@ -41,10 +47,34 @@ function cronPatternSchema(defaultPattern: string): Record<string, unknown> {
   return {
     title: 'Schedule',
     default: defaultPattern,
-    oneOf: [
+    // anyOf, not oneOf: the freeform branch has no const so it always validates,
+    // which would make oneOf reject preset values (matches preset branch AND
+    // freeform). anyOf still renders as a dropdown in rjsf 5.
+    anyOf: [
       ...CRON_PRESETS.map((p) => ({ type: 'string', title: p.title, const: p.const })),
       { type: 'string', title: 'Other (custom 5-field cron pattern)' },
     ],
+  };
+}
+
+/**
+ * Wraps the `{ dependencies: { enabled: { oneOf: [...false, ...true] } } }`
+ * shape used at every place where toggling `enabled` reveals/hides extra
+ * fields. The caller still owns the outer `type: 'object'`, `title`,
+ * `description`, and the `properties.enabled` boolean (which vary per site).
+ */
+function enabledGate(opts: { whenEnabled: Record<string, unknown> }): {
+  dependencies: { enabled: { oneOf: [Record<string, unknown>, Record<string, unknown>] } };
+} {
+  return {
+    dependencies: {
+      enabled: {
+        oneOf: [
+          { properties: { enabled: { const: false } } },
+          { properties: { enabled: { const: true }, ...opts.whenEnabled } },
+        ],
+      },
+    },
   };
 }
 
@@ -52,10 +82,27 @@ function triggerSchema(
   defaults: AnalyzerTriggerCfg,
   supportedEvents: ReadonlyArray<string>,
 ): Record<string, unknown> {
-  const eventsItems =
+  // When no events are supported, the field is hidden via uiSchema. Set
+  // maxItems: 0 + default: [] so it's semantically empty at the schema level
+  // too, not just visually.
+  const eventsField =
     supportedEvents.length === 0
-      ? { type: 'string' as const }
-      : { type: 'string' as const, enum: supportedEvents as string[] };
+      ? {
+          type: 'array',
+          title: 'Event subscriptions',
+          description: 'This analyzer does not subscribe to event triggers.',
+          items: { type: 'string' as const },
+          maxItems: 0,
+          default: [] as string[],
+        }
+      : {
+          type: 'array',
+          title: 'Event subscriptions',
+          description: 'Select which events should invoke this analyzer.',
+          uniqueItems: true,
+          items: { type: 'string' as const, enum: supportedEvents as string[] },
+          default: defaults.events,
+        };
 
   return {
     type: 'object',
@@ -73,24 +120,16 @@ function triggerSchema(
             default: defaults.cron.enabled,
           },
         },
-        dependencies: {
-          enabled: {
-            oneOf: [
-              { properties: { enabled: { const: false } } },
-              {
-                properties: {
-                  enabled: { const: true },
-                  pattern: cronPatternSchema(defaults.cron.pattern),
-                  timezone: {
-                    type: 'string',
-                    title: 'Timezone',
-                    default: defaults.cron.timezone,
-                  },
-                },
-              },
-            ],
+        ...enabledGate({
+          whenEnabled: {
+            pattern: cronPatternSchema(defaults.cron.pattern),
+            timezone: {
+              type: 'string',
+              title: 'Timezone',
+              default: defaults.cron.timezone,
+            },
           },
-        },
+        }),
       },
       put: {
         type: 'object',
@@ -102,35 +141,17 @@ function triggerSchema(
             default: defaults.put.enabled,
           },
         },
-        dependencies: {
-          enabled: {
-            oneOf: [
-              { properties: { enabled: { const: false } } },
-              {
-                properties: {
-                  enabled: { const: true },
-                  path: {
-                    type: 'string',
-                    title: 'Signal K PUT path',
-                    default: defaults.put.path,
-                  },
-                },
-              },
-            ],
+        ...enabledGate({
+          whenEnabled: {
+            path: {
+              type: 'string',
+              title: 'Signal K PUT path',
+              default: defaults.put.path,
+            },
           },
-        },
+        }),
       },
-      events: {
-        type: 'array',
-        title: 'Event subscriptions',
-        description:
-          supportedEvents.length === 0
-            ? 'This analyzer does not subscribe to event triggers.'
-            : 'Select which events should invoke this analyzer.',
-        uniqueItems: true,
-        items: eventsItems,
-        default: defaults.events,
-      },
+      events: eventsField,
     },
   };
 }
@@ -139,19 +160,17 @@ export type PluginSchema = {
   type: 'object';
   title: string;
   description: string;
-  required: string[];
   properties: Record<string, Record<string, unknown>>;
 };
 
 export type PluginUiSchema = Record<string, unknown>;
 
-export function buildSchema(): PluginSchema {
+function buildSchemaInner(): PluginSchema {
   return {
     type: 'object',
     title: 'OpenRouter Companion',
     description:
       'OpenRouter-powered analyzers for Signal K: engine maintenance reports, daily battery health summaries, and battery threshold alerts. Each analyzer can be independently enabled and configured below. The only required field is your OpenRouter API key.',
-    required: ['openrouter'],
     properties: {
       openrouter: {
         type: 'object',
@@ -204,24 +223,16 @@ export function buildSchema(): PluginSchema {
             default: DEFAULT_OPTIONS.questdb.enabled,
           },
         },
-        dependencies: {
-          enabled: {
-            oneOf: [
-              { properties: { enabled: { const: false } } },
-              {
-                properties: {
-                  enabled: { const: true },
-                  url: {
-                    type: 'string',
-                    title: 'QuestDB REST URL',
-                    description: 'Only used when QuestDB enrichment is enabled.',
-                    default: DEFAULT_OPTIONS.questdb.url,
-                  },
-                },
-              },
-            ],
+        ...enabledGate({
+          whenEnabled: {
+            url: {
+              type: 'string',
+              title: 'QuestDB REST URL',
+              description: 'Only used when QuestDB enrichment is enabled.',
+              default: DEFAULT_OPTIONS.questdb.url,
+            },
           },
-        },
+        }),
       },
       analyzers: {
         type: 'object',
@@ -238,68 +249,60 @@ export function buildSchema(): PluginSchema {
                 default: DEFAULT_OPTIONS.analyzers.maintenance.enabled,
               },
             },
-            dependencies: {
-              enabled: {
-                oneOf: [
-                  { properties: { enabled: { const: false } } },
-                  {
-                    properties: {
-                      enabled: { const: true },
-                      triggers: triggerSchema(
-                        DEFAULT_OPTIONS.analyzers.maintenance.triggers,
-                        MAINTENANCE_SUPPORTED_EVENTS,
-                      ),
-                      engineStopRpmHzThreshold: {
-                        type: 'number',
-                        title: 'Engine-off RPM threshold (Hz)',
-                        description:
-                          'RPM frequency below which the engine is considered idle (1.0 Hz = 60 RPM).',
-                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopRpmHzThreshold,
-                      },
-                      engineStopSettleSeconds: {
-                        type: 'integer',
-                        title: 'Engine-off settle time (seconds)',
-                        description:
-                          'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
-                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
-                        minimum: 0,
-                      },
-                      engineStartRpmHzThreshold: {
-                        type: 'number',
-                        title: 'Engine-on RPM threshold (Hz)',
-                        description:
-                          'RPM frequency above which the engine is considered running (1.0 Hz = 60 RPM).',
-                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartRpmHzThreshold,
-                      },
-                      engineStartSettleSeconds: {
-                        type: 'integer',
-                        title: 'Engine-on settle time (seconds)',
-                        description:
-                          'How long RPM must stay above the threshold before the engine is considered running.',
-                        default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
-                        minimum: 0,
-                      },
-                      minSessionSeconds: {
-                        type: 'integer',
-                        title: 'Minimum session length (seconds)',
-                        description:
-                          'Engine sessions shorter than this are ignored (no report generated).',
-                        default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
-                        minimum: 0,
-                      },
-                      extraWatchedPaths: {
-                        type: 'array',
-                        title: 'Extra Signal K paths to include',
-                        description:
-                          'Additional Signal K paths to sample during each engine session and include in the report.',
-                        items: { type: 'string' },
-                        default: DEFAULT_OPTIONS.analyzers.maintenance.extraWatchedPaths,
-                      },
-                    },
-                  },
-                ],
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema(
+                  DEFAULT_OPTIONS.analyzers.maintenance.triggers,
+                  MAINTENANCE_SUPPORTED_EVENTS,
+                ),
+                engineStopRpmHzThreshold: {
+                  type: 'number',
+                  title: 'Engine-off RPM threshold (Hz)',
+                  description:
+                    'RPM frequency below which the engine is considered idle (1.0 Hz = 60 RPM).',
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopRpmHzThreshold,
+                },
+                engineStopSettleSeconds: {
+                  type: 'integer',
+                  title: 'Engine-off settle time (seconds)',
+                  description:
+                    'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
+                  minimum: 0,
+                },
+                engineStartRpmHzThreshold: {
+                  type: 'number',
+                  title: 'Engine-on RPM threshold (Hz)',
+                  description:
+                    'RPM frequency above which the engine is considered running (1.0 Hz = 60 RPM).',
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartRpmHzThreshold,
+                },
+                engineStartSettleSeconds: {
+                  type: 'integer',
+                  title: 'Engine-on settle time (seconds)',
+                  description:
+                    'How long RPM must stay above the threshold before the engine is considered running.',
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
+                  minimum: 0,
+                },
+                minSessionSeconds: {
+                  type: 'integer',
+                  title: 'Minimum session length (seconds)',
+                  description:
+                    'Engine sessions shorter than this are ignored (no report generated).',
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
+                  minimum: 0,
+                },
+                extraWatchedPaths: {
+                  type: 'array',
+                  title: 'Extra Signal K paths to include',
+                  description:
+                    'Additional Signal K paths to sample during each engine session and include in the report.',
+                  items: { type: 'string' },
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.extraWatchedPaths,
+                },
               },
-            },
+            }),
           },
           health: {
             type: 'object',
@@ -312,22 +315,14 @@ export function buildSchema(): PluginSchema {
                 default: DEFAULT_OPTIONS.analyzers.health.enabled,
               },
             },
-            dependencies: {
-              enabled: {
-                oneOf: [
-                  { properties: { enabled: { const: false } } },
-                  {
-                    properties: {
-                      enabled: { const: true },
-                      triggers: triggerSchema(
-                        DEFAULT_OPTIONS.analyzers.health.triggers,
-                        HEALTH_SUPPORTED_EVENTS,
-                      ),
-                    },
-                  },
-                ],
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema(
+                  DEFAULT_OPTIONS.analyzers.health.triggers,
+                  HEALTH_SUPPORTED_EVENTS,
+                ),
               },
-            },
+            }),
           },
           alerts: {
             type: 'object',
@@ -341,55 +336,46 @@ export function buildSchema(): PluginSchema {
                 default: DEFAULT_OPTIONS.analyzers.alerts.enabled,
               },
             },
-            dependencies: {
-              enabled: {
-                oneOf: [
-                  { properties: { enabled: { const: false } } },
-                  {
-                    properties: {
-                      enabled: { const: true },
-                      triggers: triggerSchema(
-                        DEFAULT_OPTIONS.analyzers.alerts.triggers,
-                        ALERTS_SUPPORTED_EVENTS,
-                      ),
-                      lowSocPercent: {
-                        type: 'number',
-                        title: 'Low state-of-charge threshold (%)',
-                        description: 'Fires a low-SoC alert when any bank drops below this value.',
-                        default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
-                        minimum: 0,
-                        maximum: 100,
-                      },
-                      socExitHysteresis: {
-                        type: 'number',
-                        title: 'SoC recovery hysteresis (%)',
-                        description:
-                          'SoC must rise above (threshold + hysteresis) before the alert clears.',
-                        default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
-                        minimum: 0,
-                        maximum: 50,
-                      },
-                      cellImbalanceV: {
-                        type: 'number',
-                        title: 'Cell imbalance threshold (V)',
-                        description:
-                          'Voltage difference between highest and lowest cell that triggers an alert.',
-                        default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
-                        minimum: 0,
-                      },
-                      imbalanceSettleSec: {
-                        type: 'integer',
-                        title: 'Cell imbalance settle time (seconds)',
-                        description:
-                          'Cell imbalance must persist for this many seconds before an alert fires.',
-                        default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
-                        minimum: 0,
-                      },
-                    },
-                  },
-                ],
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema(
+                  DEFAULT_OPTIONS.analyzers.alerts.triggers,
+                  ALERTS_SUPPORTED_EVENTS,
+                ),
+                lowSocPercent: {
+                  type: 'number',
+                  title: 'Low state-of-charge threshold (%)',
+                  description: 'Fires a low-SoC alert when any bank drops below this value.',
+                  default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
+                  minimum: 0,
+                  maximum: 100,
+                },
+                socExitHysteresis: {
+                  type: 'number',
+                  title: 'SoC recovery hysteresis (%)',
+                  description:
+                    'SoC must rise above (threshold + hysteresis) before the alert clears.',
+                  default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
+                  minimum: 0,
+                },
+                cellImbalanceV: {
+                  type: 'number',
+                  title: 'Cell imbalance threshold (V)',
+                  description:
+                    'Voltage difference between highest and lowest cell that triggers an alert.',
+                  default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
+                  minimum: 0,
+                },
+                imbalanceSettleSec: {
+                  type: 'integer',
+                  title: 'Cell imbalance settle time (seconds)',
+                  description:
+                    'Cell imbalance must persist for this many seconds before an alert fires.',
+                  default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
+                  minimum: 0,
+                },
               },
-            },
+            }),
           },
         },
       },
@@ -404,7 +390,7 @@ export function buildSchema(): PluginSchema {
             title: 'Default notification state',
             description:
               'Signal K notification state used when a report is published (alert subkinds override this).',
-            enum: ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'],
+            enum: [...ALARM_STATES],
             default: DEFAULT_OPTIONS.output.notificationState,
           },
           notificationPath: {
@@ -457,7 +443,7 @@ function triggerUiSchema(supportedEvents: ReadonlyArray<string>): Record<string,
   };
 }
 
-export function buildUiSchema(): PluginUiSchema {
+function buildUiSchemaInner(): PluginUiSchema {
   return {
     openrouter: {
       'ui:order': ['apiKey', 'model', 'maxCallsPerDay', 'baseUrl', 'requestTimeoutMs'],
@@ -513,4 +499,17 @@ export function buildUiSchema(): PluginUiSchema {
       logFilename: { 'ui:widget': 'hidden' },
     },
   };
+}
+
+// Both schemas are pure functions of compile-time constants. Build once at
+// module load and return the same reference on every call.
+const SCHEMA: PluginSchema = buildSchemaInner();
+const UI_SCHEMA: PluginUiSchema = buildUiSchemaInner();
+
+export function buildSchema(): PluginSchema {
+  return SCHEMA;
+}
+
+export function buildUiSchema(): PluginUiSchema {
+  return UI_SCHEMA;
 }

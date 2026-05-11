@@ -15,6 +15,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 - `HEALTH_SUPPORTED_EVENTS`, `ALERTS_SUPPORTED_EVENTS` exports from `src/types.ts`.
 
 ### Changed
+- Admin form ergonomics: per-section titles + descriptions, checkbox UI for event subscriptions, cron pattern dropdown with named presets + "Other" custom option, advanced fields (base URL, request timeout, notification path, log filename, per-analyzer PUT path and cron timezone) hidden by default.
+- Analyzer and QuestDB detail fields collapse from the admin form when their `enabled` checkbox is unchecked. Note: rjsf clears dependent field values when toggling enabled off; re-enabling restores defaults, not your previously-entered values. Save before toggling if you have non-default tunables.
+- Default `analyzers.alerts.triggers.put.path` is now `plugins.openrouter-companion.alerts.run` (was empty). The PUT toggle itself is still off by default.
 - **Breaking**: each analyzer's config now uses a standardized `triggers` block with `cron` (pattern + timezone), `put` (path), and `events` (subkind list) sub-objects. `mergeWithDefaults` preserves backward compatibility for pre-v0.3 configs.
 - The plugin now subscribes to `electrical.batteries.*` paths in addition to `propulsion.*`. Path discovery handles both domains.
 - Status message updated: "Running, no engine or battery data detected" when neither domain has data.

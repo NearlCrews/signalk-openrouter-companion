@@ -61,11 +61,11 @@ A run fires when any of these triggers matches.
 
 ### Defaults per analyzer
 
-| Analyzer    | cron        | put                                                | events                                                                                  |
-| ----------- | ----------- | -------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| maintenance | off         | `plugins.openrouter-companion.maintenance.run`     | `engine-stop`                                                                           |
-| health      | `0 8 * * *` | `plugins.openrouter-companion.health.run`          | (none)                                                                                  |
-| alerts      | off         | off                                                | `low-soc-enter`, `low-soc-exit`, `cell-imbalance-enter`, `cell-imbalance-exit`          |
+| Analyzer    | cron        | put                                                                 | events                                                                                  |
+| ----------- | ----------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| maintenance | off         | `plugins.openrouter-companion.maintenance.run`                      | `engine-stop`                                                                           |
+| health      | `0 8 * * *` | `plugins.openrouter-companion.health.run`                           | (none)                                                                                  |
+| alerts      | off         | off (default path `plugins.openrouter-companion.alerts.run`)        | `low-soc-enter`, `low-soc-exit`, `cell-imbalance-enter`, `cell-imbalance-exit`          |
 
 ## Where reports appear
 
@@ -99,14 +99,14 @@ curl -X PUT \
   http://localhost:3000/signalk/v1/api/vessels/self/plugins/openrouter-companion/health/run
 ```
 
-Alerts (disabled by default; enable PUT in the admin UI and set a path before using):
+Alerts (PUT is disabled by default; enable it in the admin UI first):
 
 ```bash
 curl -X PUT \
   -H "Authorization: Bearer $SK_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"value": {"reason": "manual"}}' \
-  http://localhost:3000/signalk/v1/api/vessels/self/<your-configured-alerts-put-path>
+  http://localhost:3000/signalk/v1/api/vessels/self/plugins/openrouter-companion/alerts/run
 ```
 
 The examples use `Authorization: Bearer $SK_TOKEN`, which requires JWT setup in the Signal K server. Cookie auth works too; see the Signal K auth docs for token setup.

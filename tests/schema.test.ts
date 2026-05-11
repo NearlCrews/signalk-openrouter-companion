@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { buildSchema, buildUiSchema } from '../src/schema.js';
-import { mergeWithDefaults } from '../src/types.js';
+import { ALARM_STATES, mergeWithDefaults } from '../src/types.js';
 
 /**
  * Walks into the enabled-true branch of a `dependencies.enabled.oneOf` block.
- * Branches are ordered [enabled=false, enabled=true]; index 1 is the populated branch.
+ * Locates the branch by predicate rather than by index so the test still
+ * targets the right branch if the order of the two oneOf entries ever flips.
  */
 function enabledTrueBranch(node: Record<string, unknown>): {
   properties: Record<string, Record<string, unknown>>;
 } {
   const deps = node.dependencies as {
-    enabled: { oneOf: Array<{ properties: Record<string, Record<string, unknown>> }> };
+    enabled: {
+      oneOf: Array<{
+        properties: { enabled: { const: boolean } } & Record<string, Record<string, unknown>>;
+      }>;
+    };
   };
-  return deps.enabled.oneOf[1] as { properties: Record<string, Record<string, unknown>> };
+  const branch = deps.enabled.oneOf.find(
+    (b) => (b.properties.enabled as { const: boolean }).const === true,
+  );
+  if (!branch) throw new Error('enabled-true branch not found');
+  return branch as { properties: Record<string, Record<string, unknown>> };
 }
 
 describe('schema', () => {
@@ -25,16 +34,10 @@ describe('schema', () => {
       required: string[];
       properties: Record<string, Record<string, unknown>>;
     };
-    expect(openrouter.required).toContain('apiKey');
+    expect(openrouter.required).toEqual(['apiKey']);
     const output = s.properties.output as { properties: Record<string, Record<string, unknown>> };
-    expect(output.properties.notificationState.enum).toEqual([
-      'nominal',
-      'normal',
-      'alert',
-      'warn',
-      'alarm',
-      'emergency',
-    ]);
+    // notificationState's enum is the shared ALARM_STATES tuple from types.ts.
+    expect(output.properties.notificationState.enum).toEqual([...ALARM_STATES]);
   });
 
   it('hides analyzer detail fields behind a dependencies.enabled gate', () => {
@@ -124,7 +127,7 @@ describe('schema', () => {
     expect(triggers.properties.events.default).toEqual(['engine-stop']);
   });
 
-  it('renders cron.pattern as a oneOf preset dropdown with a freeform fallback', () => {
+  it('renders cron.pattern as an anyOf preset dropdown with a freeform fallback', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
       properties: Record<string, Record<string, unknown>>;
@@ -136,15 +139,18 @@ describe('schema', () => {
       };
       const cronOn = enabledTrueBranch(triggers.properties.cron);
       const pattern = cronOn.properties.pattern as {
-        oneOf: Array<{ type: string; title: string; const?: string }>;
+        anyOf: Array<{ type: string; title: string; const?: string }>;
       };
-      expect(Array.isArray(pattern.oneOf)).toBe(true);
-      expect(pattern.oneOf).toHaveLength(8);
+      // anyOf (not oneOf): the freeform branch has no const so it always
+      // validates. oneOf would reject preset values because they match both
+      // the preset branch and the freeform branch.
+      expect(Array.isArray(pattern.anyOf)).toBe(true);
+      expect(pattern.anyOf).toHaveLength(8);
       // First entry is the 8:00 AM preset.
-      expect(pattern.oneOf[0].const).toBe('0 8 * * *');
-      expect(pattern.oneOf[0].title).toBe('8:00 AM daily');
+      expect(pattern.anyOf[0].const).toBe('0 8 * * *');
+      expect(pattern.anyOf[0].title).toBe('8:00 AM daily');
       // Last entry is the freeform fallback: no const so any string passes.
-      const freeform = pattern.oneOf[pattern.oneOf.length - 1];
+      const freeform = pattern.anyOf[pattern.anyOf.length - 1];
       expect(freeform.const).toBeUndefined();
       expect(freeform.title).toMatch(/Other/);
     }
