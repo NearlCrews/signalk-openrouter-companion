@@ -40,11 +40,13 @@ Required:
 Optional:
 
 - **Model**: defaults to `anthropic/claude-haiku-4.5`. Any OpenRouter-supported chat model works.
-- **Max calls per day**: hard cap, default 20.
+- **Max OpenRouter calls per day**: hard cap, default 20.
 - **QuestDB URL**: if you run `signalk-questdb`, the plugin will pull 30-day baselines for richer reports. Default `http://localhost:9000`. The plugin probes QuestDB on start and falls back gracefully if it's unreachable; disable in the admin UI if you want to skip the probe entirely.
 - **Engine-off and Engine-on RPM thresholds (in Hz: 1.0 Hz = 60 RPM)**: leave at defaults unless your engine idles unusually low or high.
-- **Low-SoC threshold (alerts)**: default 30%. SoC must rise above `threshold + hysteresis` (default +5%) to clear.
+- **Low state-of-charge threshold (alerts)**: default 30%. SoC must rise above `threshold + hysteresis` (default +5%) to clear.
 - **Cell imbalance threshold (alerts)**: default 0.1 V. Must persist past the settle window (default 60 s) before an event fires.
+
+A few advanced fields are hidden from the admin form for simplicity (OpenRouter base URL, request timeout, notification path, log filename, per-analyzer PUT path, per-analyzer cron timezone). They still exist in the schema and can be overridden by editing `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` directly.
 
 ### Triggers
 
