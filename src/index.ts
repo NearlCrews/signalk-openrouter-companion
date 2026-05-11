@@ -1,9 +1,280 @@
-export default function createPlugin(_app: unknown) {
+import { join } from 'node:path';
+import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
+import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
+import { BudgetTracker } from './core/budget.js';
+import { RollingBuffer } from './core/buffer.js';
+import { discoverEngineIds, discoverWatchedPaths } from './core/discovery.js';
+import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
+import { Logger, stringify } from './core/logger.js';
+import { OpenRouterClient } from './core/openrouter.js';
+import { ReportPublisher } from './core/publisher.js';
+import { QuestDBClient } from './core/questdb.js';
+import { TriggerRouter } from './core/triggerRouter.js';
+import { buildSchema, buildUiSchema } from './schema.js';
+import { mergeWithDefaults, type PluginOptions } from './types.js';
+
+const PLUGIN_ID = 'signalk-openrouter-companion';
+const PLUGIN_NAME = 'OpenRouter Companion';
+const PUT_PATH_MAINTENANCE = 'plugins.openrouter-companion.maintenance.run';
+
+interface ServerApiLike {
+  streambundle: {
+    getSelfBus(path: string): { onValue(cb: (v: unknown) => void): () => void };
+    getAvailablePaths(): string[];
+  };
+  subscriptionmanager: {
+    subscribe(
+      msg: unknown,
+      unsubs: Array<() => void>,
+      errCb: (err: unknown) => void,
+      deltaCb: (delta: unknown) => void,
+    ): void;
+  };
+  handleMessage(pluginId: string, delta: unknown): void;
+  registerPutHandler(context: string, path: string, handler: unknown, source?: string): void;
+  setPluginStatus(msg: string): void;
+  setPluginError(msg: string): void;
+  debug(...args: unknown[]): void;
+  error(msg: string): void;
+  getDataDirPath(): string;
+  getSelfPath(path: string): unknown;
+  selfContext?: string;
+}
+
+export default function createPlugin(app: ServerApiLike): {
+  id: string;
+  name: string;
+  description: string;
+  enabledByDefault: boolean;
+  schema: () => ReturnType<typeof buildSchema>;
+  uiSchema: () => ReturnType<typeof buildUiSchema>;
+  start: (settings: Partial<PluginOptions>, restart: () => void) => void;
+  stop: () => Promise<void>;
+} {
+  const logger = new Logger(app);
+  const unsubs: Array<() => void> = [];
+  let intervalHandles: NodeJS.Timeout[] = [];
+
   return {
-    id: 'signalk-openrouter-companion',
-    name: 'OpenRouter Companion',
-    schema: () => ({ type: 'object', properties: {} }),
-    start: () => {},
-    stop: () => {},
+    id: PLUGIN_ID,
+    name: PLUGIN_NAME,
+    description: 'OpenRouter-powered analyzers for Signal K: maintenance reports and more.',
+    enabledByDefault: false,
+    schema: () => buildSchema(),
+    uiSchema: () => buildUiSchema(),
+
+    start: (rawSettings, _restart) => {
+      try {
+        app.setPluginStatus('Starting');
+        const cfg = mergeWithDefaults(rawSettings);
+        if (!cfg.openrouter.apiKey) {
+          app.setPluginStatus('Awaiting API key configuration');
+          return;
+        }
+
+        const dataDir = app.getDataDirPath();
+        const logPath = join(dataDir, cfg.output.logFilename);
+        const budgetPath = join(dataDir, 'budget.json');
+
+        const buffer = new RollingBuffer({ maxAgeMs: 6 * 3600 * 1000, maxEntriesPerPath: 10_000 });
+        const detector = new EngineDetector({
+          stopRpmHz: cfg.analyzers.maintenance.engineStopRpmHzThreshold,
+          stopSettleSec: cfg.analyzers.maintenance.engineStopSettleSeconds,
+          startRpmHz: cfg.analyzers.maintenance.engineStartRpmHzThreshold,
+          startSettleSec: cfg.analyzers.maintenance.engineStartSettleSeconds,
+          watchdogSec: 30,
+          sourceWindowMs: 1000,
+        });
+        const llm = new OpenRouterClient({
+          apiKey: cfg.openrouter.apiKey,
+          baseUrl: cfg.openrouter.baseUrl,
+          model: cfg.openrouter.model,
+          requestTimeoutMs: cfg.openrouter.requestTimeoutMs,
+          referer: 'https://github.com/NearlCrews/signalk-openrouter-companion',
+          title: PLUGIN_ID,
+        });
+        let questdbLive: QuestDBClient | null = null;
+        if (cfg.questdb.enabled) {
+          const candidate = new QuestDBClient({ url: cfg.questdb.url });
+          void candidate.probe().then((ok) => {
+            questdbLive = ok ? candidate : null;
+            if (!ok) logger.debug('QuestDB unreachable; baselines disabled for this run');
+          });
+        }
+        const publisher = new ReportPublisher({
+          app,
+          pluginId: PLUGIN_ID,
+          notificationPath: cfg.output.notificationPath,
+          notificationState: cfg.output.notificationState,
+          logPath,
+        });
+
+        const maintenance = cfg.analyzers.maintenance.enabled
+          ? new MaintenanceAnalyzer({
+              minSessionSeconds: cfg.analyzers.maintenance.minSessionSeconds,
+              putTriggerPath: PUT_PATH_MAINTENANCE,
+            })
+          : null;
+        const analyzers: Analyzer[] = maintenance ? [maintenance] : [];
+
+        let router: TriggerRouter | null = null;
+        void BudgetTracker.load({
+          maxPerDay: cfg.openrouter.maxCallsPerDay,
+          statePath: budgetPath,
+        }).then((budget) => {
+          router = new TriggerRouter(analyzers, {
+            buffer,
+            questdb: questdbLive,
+            publisher,
+            budget,
+            llm,
+            logger,
+            app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
+          });
+        });
+
+        detector.on('engine-stop', (e: EngineEvent) => {
+          if (!router) return;
+          const sess = e.session;
+          if (!sess) return;
+          const ctx: TriggerCtx = {
+            kind: 'engine-stop',
+            firedAt: new Date(sess.sessionEnd),
+            engineSession: {
+              engineId: e.engineId,
+              start: new Date(sess.sessionStart),
+              end: new Date(sess.sessionEnd),
+              durationSec: sess.durationSec,
+            },
+          };
+          void router.dispatch('engine-stop', ctx);
+        });
+
+        const available = app.streambundle.getAvailablePaths();
+        const engineIds = discoverEngineIds(available);
+        if (engineIds.length === 0) {
+          app.setPluginStatus('Running, no engine data detected');
+          return;
+        }
+        const watched = discoverWatchedPaths(
+          available,
+          cfg.analyzers.maintenance.extraWatchedPaths,
+        );
+
+        for (const engineId of engineIds) {
+          const rpmPath = `propulsion.${engineId}.revolutions`;
+          const bus = app.streambundle.getSelfBus(rpmPath);
+          const unsub = bus.onValue((delta) => {
+            const d = delta as { value?: unknown; timestamp?: string; $source?: string };
+            const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
+            const src = d.$source ?? 'unknown';
+            const v = typeof d.value === 'number' ? d.value : null;
+            if (v != null) {
+              detector.observe(engineId, src, v, ts);
+              buffer.record(rpmPath, v, ts, src);
+            }
+          });
+          if (unsub) unsubs.push(unsub);
+        }
+
+        for (const path of watched) {
+          if (path.endsWith('.revolutions') && discoverEngineIds([path]).length > 0) continue;
+          const bus = app.streambundle.getSelfBus(path);
+          const unsub = bus.onValue((delta) => {
+            const d = delta as { value?: unknown; timestamp?: string; $source?: string };
+            const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
+            const src = d.$source ?? 'unknown';
+            buffer.record(path, d.value, ts, src);
+          });
+          if (unsub) unsubs.push(unsub);
+        }
+
+        app.subscriptionmanager.subscribe(
+          {
+            context: 'vessels.self',
+            subscribe: [{ path: 'notifications.propulsion.*', policy: 'instant' }],
+          },
+          unsubs,
+          (err) => logger.error(stringify(err)),
+          () => {
+            /* captured by analyzers via getSelfPath snapshot */
+          },
+        );
+
+        if (maintenance) {
+          app.registerPutHandler(
+            'vessels.self',
+            PUT_PATH_MAINTENANCE,
+            (
+              _context: string,
+              _path: string,
+              value: unknown,
+              cb: (r: { state: string; statusCode?: number; message?: string }) => void,
+            ): { state: string } => {
+              void (async () => {
+                try {
+                  if (!router) {
+                    cb({
+                      state: 'COMPLETED',
+                      statusCode: 503,
+                      message: 'plugin not fully started',
+                    });
+                    return;
+                  }
+                  const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(), put: { value } };
+                  await router.dispatch('put', ctx, { putPath: PUT_PATH_MAINTENANCE });
+                  cb({ state: 'COMPLETED', statusCode: 200 });
+                } catch (err) {
+                  cb({ state: 'COMPLETED', statusCode: 500, message: stringify(err) });
+                }
+              })();
+              return { state: 'PENDING' };
+            },
+            PLUGIN_ID,
+          );
+        }
+
+        intervalHandles.push(setInterval(() => detector.tickWatchdog(Date.now()), 5000));
+        intervalHandles.push(
+          setInterval(() => {
+            const fresh = app.streambundle.getAvailablePaths();
+            const newEngines = discoverEngineIds(fresh).filter((id) => !engineIds.includes(id));
+            for (const id of newEngines) {
+              engineIds.push(id);
+              const path = `propulsion.${id}.revolutions`;
+              const bus = app.streambundle.getSelfBus(path);
+              const u = bus.onValue((delta) => {
+                const d = delta as { value?: unknown; timestamp?: string; $source?: string };
+                const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
+                const src = d.$source ?? 'unknown';
+                const v = typeof d.value === 'number' ? d.value : null;
+                if (v != null) {
+                  detector.observe(id, src, v, ts);
+                  buffer.record(path, v, ts, src);
+                }
+              });
+              if (u) unsubs.push(u);
+            }
+          }, 60_000),
+        );
+
+        app.setPluginStatus('Running');
+      } catch (err) {
+        app.setPluginError(stringify(err));
+      }
+    },
+
+    stop: async () => {
+      while (unsubs.length > 0) {
+        try {
+          unsubs.pop()?.();
+        } catch (err) {
+          logger.error(err);
+        }
+      }
+      for (const h of intervalHandles) clearInterval(h);
+      intervalHandles = [];
+      app.setPluginStatus('Stopped');
+    },
   };
 }
