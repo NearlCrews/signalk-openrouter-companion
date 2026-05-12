@@ -151,4 +151,42 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     expect(out.user).toContain('Service due');
     expect(out.user).toContain('house');
   });
+
+  it('uses customSystemPrompt when provided', () => {
+    const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: false, path: 'p' },
+        events: ['engine-stop'],
+      },
+      minSessionSeconds: 60,
+      customSystemPrompt: 'CUSTOM MAINT',
+    });
+    const out = a.buildPrompt({
+      session: { engineId: 'p', start: 'a', end: 'b', durationSec: 0 },
+      telemetry: {},
+      engineNotifications: {},
+      batteries: [],
+    });
+    expect(out.system).toBe('CUSTOM MAINT');
+  });
+
+  it('falls back to default when customSystemPrompt is whitespace-only', () => {
+    const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: false, path: 'p' },
+        events: ['engine-stop'],
+      },
+      minSessionSeconds: 60,
+      customSystemPrompt: '   ',
+    });
+    const out = a.buildPrompt({
+      session: { engineId: 'p', start: 'a', end: 'b', durationSec: 0 },
+      telemetry: {},
+      engineNotifications: {},
+      batteries: [],
+    });
+    expect(out.system).toContain('marine engine technician');
+  });
 });

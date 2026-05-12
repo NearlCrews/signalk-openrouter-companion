@@ -25,7 +25,22 @@ const RPM_JOIN_WINDOW_US = 5_000_000;
 export interface DriftCfg {
   triggers: AnalyzerTriggerCfg;
   baselineDays: number;
+  customSystemPrompt?: string;
 }
+
+// Default prompt is generic about window length because baselineDays is
+// configurable; the actual past-week / baseline lengths appear in the user
+// prompt's data block so the model still sees them.
+export const DRIFT_DEFAULT_SYSTEM_PROMPT = [
+  'You are an experienced marine engine specialist comparing recent engine performance to its longer-term baseline.',
+  'Units: propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for this path: do not convert to rad/s). fuel.rate is in m^3/s. navigation.speedOverGround is in m/s.',
+  'The user content gives mean fuel rate and mean speed-over-ground per RPM band for the past week vs the trailing baseline, with percent delta per metric. Band edges are in Hz; 1 Hz = 60 RPM. The exact window lengths in days appear in the data section.',
+  'A positive fuel-rate delta means burning more fuel per second in that band than baseline. A negative SOG delta means going slower in that band than baseline.',
+  "Do not restate per-session details. That is the maintenance analyzer's job. Focus only on this-week vs baseline drift.",
+  'Identify (1) which band moved most, (2) what the drift suggests: fouled prop, dirty hull, fuel quality, alternator load creep, fuel filter clogging, air filter or intercooler fouling, engine trim, weight changes from fuel/water/gear stowage, or sustained sea state and current effects, or a transducer or sensor issue, (3) whether the magnitude warrants action this season or just monitoring.',
+  'If a bin has too few samples, say so rather than guess. If the cause is not determinable from the fields shown, say "cause not determinable from telemetry".',
+  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which RPM band drifted most or "no significant drift"), then name the engine, the magnitude of the change, and a short interpretation of the likely cause.',
+].join(' ');
 
 type BinKey = 'idle' | 'lowCruise' | 'highCruise' | 'topEnd' | 'wot';
 
@@ -82,10 +97,12 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   readonly title = 'Engine Performance Drift';
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly baselineDays: number;
+  private readonly systemPrompt: string;
 
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(cfg.triggers);
     this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS);
+    this.systemPrompt = cfg.customSystemPrompt?.trim() || DRIFT_DEFAULT_SYSTEM_PROMPT;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
@@ -129,17 +146,6 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 
   buildPrompt(input: DriftInput): { system: string; user: string } {
-    const system = [
-      'You are an experienced marine engine specialist comparing recent engine performance to its longer-term baseline.',
-      'Units: propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for this path: do not convert to rad/s). fuel.rate is in m^3/s. navigation.speedOverGround is in m/s.',
-      `The data shows mean fuel rate and mean speed-over-ground per RPM band for the past ${input.windowDays.thisWeek} days vs the trailing ${input.windowDays.baseline}-day baseline, with percent delta per metric. Band edges are in Hz; 1 Hz = 60 RPM.`,
-      'A positive fuel-rate delta means burning more fuel per second in that band than baseline. A negative SOG delta means going slower in that band than baseline.',
-      "Do not restate per-session details. That is the maintenance analyzer's job. Focus only on this-week vs baseline drift.",
-      'Identify (1) which band moved most, (2) what the drift suggests: fouled prop, dirty hull, fuel quality, alternator load creep, fuel filter clogging, air filter or intercooler fouling, engine trim, weight changes from fuel/water/gear stowage, or sustained sea state and current effects, or a transducer or sensor issue, (3) whether the magnitude warrants action this season or just monitoring.',
-      'If a bin has too few samples, say so rather than guess. If the cause is not determinable from the fields shown, say "cause not determinable from telemetry".',
-      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which RPM band drifted most or "no significant drift"), then name the engine, the magnitude of the change, and a short interpretation of the likely cause.',
-    ].join(' ');
-
     const lines: string[] = [];
     lines.push(`## Generated ${input.generatedAt}`);
     lines.push(
@@ -164,7 +170,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
       }
       lines.push('');
     }
-    return { system, user: lines.join('\n') };
+    return { system: this.systemPrompt, user: lines.join('\n') };
   }
 }
 

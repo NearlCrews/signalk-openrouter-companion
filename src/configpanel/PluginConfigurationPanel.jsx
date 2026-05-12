@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 const API_BASE = '/plugins/signalk-openrouter-companion/api';
 const POLL_MS = 5000;
 const REPORT_LIMIT = 10;
+
+const ANALYZER_ORDER = ['maintenance', 'health', 'aging', 'drift', 'alerts'];
 
 const S = {
   root: {
@@ -58,8 +60,25 @@ const S = {
     color: '#475569',
     border: '1px solid #e2e8f0',
   },
+  btnSave: {
+    padding: '8px 18px',
+    fontSize: 13,
+  },
   btnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
-  inlineRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 },
+  inlineRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' },
+  fieldRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' },
+  fieldLabel: { fontSize: 13, fontWeight: 500, color: '#555', width: 160, flexShrink: 0 },
+  input: {
+    padding: '6px 10px',
+    borderRadius: 6,
+    border: '1px solid #ccc',
+    fontSize: 13,
+    background: '#fff',
+    color: '#333',
+    minWidth: 220,
+  },
+  inputSmall: { minWidth: 80, width: 100 },
+  hint: { fontSize: 11, color: '#888' },
   testStatus: { fontSize: 12 },
   testOk: { color: '#10b981' },
   testErr: { color: '#ef4444' },
@@ -88,7 +107,7 @@ const S = {
   },
   analyzerTitle: { flex: 1, fontWeight: 500 },
   analyzerState: { fontSize: 11, color: '#888', minWidth: 60, textAlign: 'right' },
-  reportDrawer: {
+  drawer: {
     background: '#fff',
     border: '1px solid #e0e0e0',
     borderRadius: 8,
@@ -96,14 +115,37 @@ const S = {
     marginBottom: 8,
     padding: 12,
   },
-  reportEntry: {
-    padding: '10px 12px',
-    borderBottom: '1px solid #f1f5f9',
-  },
+  reportEntry: { padding: '10px 12px', borderBottom: '1px solid #f1f5f9' },
   reportTs: { fontSize: 11, color: '#888', fontFamily: 'monospace' },
   reportBody: { fontSize: 12, color: '#333', marginTop: 4, whiteSpace: 'pre-wrap' },
   reportFailure: { fontSize: 12, color: '#ef4444', marginTop: 4 },
   fireResult: { fontSize: 11, marginLeft: 4 },
+  textarea: {
+    width: '100%',
+    minHeight: 180,
+    padding: 8,
+    fontFamily:
+      'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+    fontSize: 11,
+    lineHeight: 1.45,
+    border: '1px solid #ccc',
+    borderRadius: 6,
+    background: '#fff',
+    color: '#333',
+    resize: 'vertical',
+    boxSizing: 'border-box',
+  },
+  saveBar: {
+    position: 'sticky',
+    bottom: 0,
+    background: '#fff',
+    borderTop: '1px solid #e0e0e0',
+    padding: '12px 0',
+    marginTop: 24,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+  },
 };
 
 function questdbLabel(qdb) {
@@ -114,27 +156,250 @@ function questdbLabel(qdb) {
     : { text: 'Unreachable', color: '#ef4444' };
 }
 
-function AnalyzerRow({ analyzer, fireState, onFire, onView, viewing, reports, reportsLoading }) {
-  const disabled = !analyzer.enabled;
+function deepClone(v) {
+  return JSON.parse(JSON.stringify(v ?? {}));
+}
+
+function deepEqual(a, b) {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+function StatusBlock({ status, statusError, onTest, testing, testResult }) {
+  if (statusError && !status) return <div style={S.empty}>{statusError}</div>;
+  if (!status) return <div style={S.empty}>Loading status...</div>;
+  const apiKeySet = status.openrouter.apiKeySet;
+  const calls = status.openrouter;
+  const qdb = status.questdb;
+  const qdbState = questdbLabel(qdb);
+  const enabledCount = status.analyzers.filter((a) => a.enabled).length;
+  return (
+    <>
+      <div style={S.statsGrid}>
+        <div style={S.statCard}>
+          <div style={S.statLabel}>OpenRouter API key</div>
+          <div style={S.statValue}>
+            <span style={S.dot(apiKeySet ? '#10b981' : '#ef4444')} />
+            {apiKeySet ? 'Configured' : 'Missing'}
+          </div>
+          {apiKeySet && <div style={S.statSub}>Model: {calls.model}</div>}
+        </div>
+        <div style={S.statCard}>
+          <div style={S.statLabel}>Calls today</div>
+          <div style={S.statValue}>
+            {calls.callsToday} / {calls.maxCallsPerDay}
+          </div>
+          <div style={S.statSub}>UTC daily cap</div>
+        </div>
+        <div style={S.statCard}>
+          <div style={S.statLabel}>QuestDB</div>
+          <div style={S.statValue}>
+            <span style={S.dot(qdbState.color)} />
+            {qdbState.text}
+          </div>
+          <div style={S.statSub}>
+            {qdb.enabled ? 'Trend analyzers depend on this' : 'Trend analyzers will skip'}
+          </div>
+        </div>
+        <div style={S.statCard}>
+          <div style={S.statLabel}>Analyzers</div>
+          <div style={S.statValue}>
+            {enabledCount} / {status.analyzers.length}
+          </div>
+          <div style={S.statSub}>enabled</div>
+        </div>
+      </div>
+      <div style={S.inlineRow}>
+        <button
+          type="button"
+          style={{ ...S.btn, ...(testing || !apiKeySet ? S.btnDisabled : {}) }}
+          onClick={onTest}
+          disabled={testing || !apiKeySet}
+        >
+          {testing ? 'Testing...' : 'Test API key'}
+        </button>
+        {testResult && (
+          <span style={{ ...S.testStatus, ...(testResult.ok ? S.testOk : S.testErr) }}>
+            {testResult.text}
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
+function OpenRouterSection({ cfg, set, models, modelsState, loadModels }) {
+  const o = cfg.openrouter ?? {};
+  return (
+    <>
+      <div style={S.sectionTitle}>OpenRouter</div>
+      <div style={S.fieldRow}>
+        <span style={S.fieldLabel}>API key</span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          style={S.input}
+          value={o.apiKey ?? ''}
+          onChange={(e) => set({ openrouter: { ...o, apiKey: e.target.value } })}
+        />
+        <span style={S.hint}>Required to call the LLM</span>
+      </div>
+      <div style={S.fieldRow}>
+        <span style={S.fieldLabel}>Model</span>
+        <input
+          type="text"
+          list="openrouter-models"
+          style={S.input}
+          value={o.model ?? ''}
+          onFocus={() => modelsState === 'idle' && loadModels()}
+          onChange={(e) => set({ openrouter: { ...o, model: e.target.value } })}
+        />
+        <datalist id="openrouter-models">
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name || m.id}
+            </option>
+          ))}
+        </datalist>
+        <span style={S.hint}>
+          {modelsState === 'loading'
+            ? 'Loading model list...'
+            : modelsState === 'error'
+              ? 'Could not load models; type slug manually'
+              : `${models.length} models available (autocomplete)`}
+        </span>
+      </div>
+      <div style={S.fieldRow}>
+        <span style={S.fieldLabel}>Max calls per day</span>
+        <input
+          type="number"
+          min="0"
+          style={{ ...S.input, ...S.inputSmall }}
+          value={o.maxCallsPerDay ?? 0}
+          onChange={(e) => set({ openrouter: { ...o, maxCallsPerDay: Number(e.target.value) } })}
+        />
+        <span style={S.hint}>UTC daily hard cap on OpenRouter calls</span>
+      </div>
+    </>
+  );
+}
+
+function QuestDBSection({ cfg, set, testResult, onTest, testing }) {
+  const q = cfg.questdb ?? {};
+  return (
+    <>
+      <div style={S.sectionTitle}>QuestDB enrichment</div>
+      <div style={S.fieldRow}>
+        <span style={S.fieldLabel}>Enabled</span>
+        <input
+          type="checkbox"
+          checked={!!q.enabled}
+          onChange={(e) => set({ questdb: { ...q, enabled: e.target.checked } })}
+        />
+        <span style={S.hint}>Trend analyzers (aging, drift) require this</span>
+      </div>
+      {q.enabled && (
+        <>
+          <div style={S.fieldRow}>
+            <span style={S.fieldLabel}>QuestDB REST URL</span>
+            <input
+              type="text"
+              style={S.input}
+              value={q.url ?? ''}
+              onChange={(e) => set({ questdb: { ...q, url: e.target.value } })}
+            />
+          </div>
+          <div style={S.inlineRow}>
+            <button
+              type="button"
+              style={{ ...S.btn, ...(testing ? S.btnDisabled : {}) }}
+              onClick={onTest}
+              disabled={testing}
+            >
+              {testing ? 'Testing...' : 'Test connection'}
+            </button>
+            {testResult && (
+              <span style={{ ...S.testStatus, ...(testResult.ok ? S.testOk : S.testErr) }}>
+                {testResult.ok ? `Reachable at ${testResult.url}` : testResult.text}
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function PromptDrawer({ analyzerId, promptState, onChange, onReset, onClose }) {
+  if (!promptState) return null;
+  const value = promptState.edited ?? promptState.current ?? promptState.default ?? '';
+  const isOverride = promptState.edited != null || promptState.current != null;
+  return (
+    <div style={S.drawer}>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>System prompt</div>
+        <div style={S.hint}>
+          The prompt the LLM receives. Save the panel to apply changes.
+          {isOverride ? ' (custom override active)' : ' (using built-in default)'}
+        </div>
+      </div>
+      <textarea
+        style={S.textarea}
+        value={value}
+        onChange={(e) => onChange(analyzerId, e.target.value)}
+      />
+      <div style={S.inlineRow}>
+        <button
+          type="button"
+          style={{ ...S.btn, ...S.btnSecondary }}
+          onClick={() => onReset(analyzerId)}
+        >
+          Reset to default
+        </button>
+        <button type="button" style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose}>
+          Close
+        </button>
+        {promptState.error && (
+          <span style={{ ...S.testStatus, ...S.testErr }}>{promptState.error}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AnalyzerRow({
+  analyzer,
+  enabled,
+  setEnabled,
+  fireState,
+  onFire,
+  reportsOpen,
+  onToggleReports,
+  reports,
+  reportsLoading,
+  promptOpen,
+  onTogglePrompt,
+  promptState,
+  onPromptChange,
+  onPromptReset,
+}) {
   return (
     <>
       <div style={S.analyzerRow}>
-        <span style={S.dot(analyzer.enabled ? '#10b981' : '#9ca3af')} />
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(analyzer.id, e.target.checked)}
+        />
         <span style={S.analyzerTitle}>{analyzer.title}</span>
         {fireState && (
-          <span
-            style={{
-              ...S.fireResult,
-              color: fireState.ok ? '#10b981' : '#ef4444',
-            }}
-          >
+          <span style={{ ...S.fireResult, color: fireState.ok ? '#10b981' : '#ef4444' }}>
             {fireState.text}
           </span>
         )}
         <button
           type="button"
-          style={{ ...S.btn, ...(disabled || fireState?.pending ? S.btnDisabled : {}) }}
-          disabled={disabled || fireState?.pending}
+          style={{ ...S.btn, ...(!enabled || fireState?.pending ? S.btnDisabled : {}) }}
+          disabled={!enabled || fireState?.pending}
           onClick={() => onFire(analyzer.id)}
         >
           {fireState?.pending ? 'Firing...' : 'Fire now'}
@@ -142,14 +407,21 @@ function AnalyzerRow({ analyzer, fireState, onFire, onView, viewing, reports, re
         <button
           type="button"
           style={{ ...S.btn, ...S.btnSecondary }}
-          onClick={() => onView(analyzer.id)}
+          onClick={() => onToggleReports(analyzer.id)}
         >
-          {viewing ? 'Hide' : 'View reports'}
+          {reportsOpen ? 'Hide reports' : 'View reports'}
         </button>
-        <span style={S.analyzerState}>{analyzer.enabled ? 'enabled' : 'disabled'}</span>
+        <button
+          type="button"
+          style={{ ...S.btn, ...S.btnSecondary }}
+          onClick={() => onTogglePrompt(analyzer.id)}
+        >
+          {promptOpen ? 'Hide prompt' : 'Edit prompt'}
+        </button>
+        <span style={S.analyzerState}>{enabled ? 'enabled' : 'disabled'}</span>
       </div>
-      {viewing && (
-        <div style={S.reportDrawer}>
+      {reportsOpen && (
+        <div style={S.drawer}>
           {reportsLoading && <div style={S.empty}>Loading reports...</div>}
           {!reportsLoading && (!reports || reports.length === 0) && (
             <div style={S.empty}>No reports yet for this analyzer.</div>
@@ -168,6 +440,15 @@ function AnalyzerRow({ analyzer, fireState, onFire, onView, viewing, reports, re
             ))}
         </div>
       )}
+      {promptOpen && (
+        <PromptDrawer
+          analyzerId={analyzer.id}
+          promptState={promptState}
+          onChange={onPromptChange}
+          onReset={onPromptReset}
+          onClose={() => onTogglePrompt(analyzer.id)}
+        />
+      )}
     </>
   );
 }
@@ -177,10 +458,25 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const [statusError, setStatusError] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [cfg, setCfg] = useState(() => deepClone(configuration));
+  const [savedNotice, setSavedNotice] = useState(null);
+  const [models, setModels] = useState([]);
+  const [modelsState, setModelsState] = useState('idle');
+  const [qdbTest, setQdbTest] = useState(null);
+  const [qdbTesting, setQdbTesting] = useState(false);
   const [fireState, setFireState] = useState({});
   const [reportsByAnalyzer, setReportsByAnalyzer] = useState({});
   const [reportsLoading, setReportsLoading] = useState({});
-  const [viewing, setViewing] = useState({});
+  const [reportsOpen, setReportsOpen] = useState({});
+  const [promptOpen, setPromptOpen] = useState({});
+  const [promptState, setPromptState] = useState({});
+
+  // Reset local edit buffer whenever the host pushes a new configuration.
+  useEffect(() => {
+    setCfg(deepClone(configuration));
+  }, [configuration]);
+
+  const dirty = useMemo(() => !deepEqual(cfg, configuration), [cfg, configuration]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -190,7 +486,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         setStatusError(null);
       } else if (res.status === 503) {
         setStatus(null);
-        setStatusError('Plugin is not running. Enable it and set an API key to see live status.');
+        setStatusError('Plugin is not running. Set an API key and Save to start it.');
       } else {
         setStatusError(`Status fetch failed: HTTP ${res.status}`);
       }
@@ -204,6 +500,28 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     const handle = setInterval(fetchStatus, POLL_MS);
     return () => clearInterval(handle);
   }, [fetchStatus]);
+
+  const setSection = (patch) => {
+    setCfg((prev) => ({ ...prev, ...patch }));
+  };
+
+  const setAnalyzerCfg = (id, patch) => {
+    setCfg((prev) => ({
+      ...prev,
+      analyzers: {
+        ...(prev.analyzers ?? {}),
+        [id]: { ...((prev.analyzers ?? {})[id] ?? {}), ...patch },
+      },
+    }));
+  };
+
+  const setAnalyzerEnabled = (id, enabled) => setAnalyzerCfg(id, { enabled });
+
+  const onSave = () => {
+    save(cfg);
+    setSavedNotice(`Saved at ${new Date().toLocaleTimeString()}. Plugin restarting...`);
+    // After save, the host pushes a new configuration prop and useEffect resets cfg.
+  };
 
   const runTest = async () => {
     setTesting(true);
@@ -222,6 +540,44 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     setTesting(false);
   };
 
+  const loadModels = useCallback(async () => {
+    if (modelsState === 'loading') return;
+    setModelsState('loading');
+    try {
+      const res = await fetch(`${API_BASE}/openrouter/models`);
+      if (res.ok) {
+        const body = await res.json();
+        setModels(body.data || []);
+        setModelsState('ready');
+      } else {
+        setModelsState('error');
+      }
+    } catch {
+      setModelsState('error');
+    }
+  }, [modelsState]);
+
+  const runQdbTest = async () => {
+    setQdbTesting(true);
+    setQdbTest(null);
+    try {
+      const res = await fetch(`${API_BASE}/questdb/test`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: cfg.questdb?.url }),
+      });
+      const body = await res.json();
+      setQdbTest(
+        body.ok
+          ? { ok: true, url: body.url }
+          : { ok: false, text: body.error || `HTTP ${res.status}` },
+      );
+    } catch (e) {
+      setQdbTest({ ok: false, text: e.message });
+    }
+    setQdbTesting(false);
+  };
+
   const fireAnalyzer = async (id) => {
     setFireState((s) => ({ ...s, [id]: { pending: true } }));
     try {
@@ -233,10 +589,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
           ? { ok: true, text: 'Dispatched' }
           : { ok: false, text: body.error || `HTTP ${res.status}` },
       }));
-      // If the drawer is open, refresh it so the new report shows up.
-      if (viewing[id]) {
-        setTimeout(() => loadReports(id), 800);
-      }
+      if (reportsOpen[id]) setTimeout(() => loadReports(id), 800);
     } catch (e) {
       setFireState((s) => ({ ...s, [id]: { ok: false, text: e.message } }));
     }
@@ -254,104 +607,111 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     setReportsLoading((s) => ({ ...s, [id]: false }));
   }, []);
 
-  const toggleView = (id) => {
-    const next = !viewing[id];
-    setViewing((s) => ({ ...s, [id]: next }));
+  const toggleReports = (id) => {
+    const next = !reportsOpen[id];
+    setReportsOpen((s) => ({ ...s, [id]: next }));
     if (next && !reportsByAnalyzer[id]) loadReports(id);
   };
 
-  const apiKeySet = status?.openrouter?.apiKeySet;
-  const calls = status?.openrouter;
-  const qdb = status?.questdb;
-  const qdbState = qdb ? questdbLabel(qdb) : null;
-  const enabledCount = (status?.analyzers || []).filter((a) => a.enabled).length;
+  const loadPrompt = async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/analyzers/${id}/prompt`);
+      if (res.ok) {
+        const body = await res.json();
+        setPromptState((s) => ({
+          ...s,
+          [id]: { default: body.default, current: body.current, edited: null },
+        }));
+      } else {
+        setPromptState((s) => ({ ...s, [id]: { error: `HTTP ${res.status}` } }));
+      }
+    } catch (e) {
+      setPromptState((s) => ({ ...s, [id]: { error: e.message } }));
+    }
+  };
+
+  const togglePrompt = (id) => {
+    const next = !promptOpen[id];
+    setPromptOpen((s) => ({ ...s, [id]: next }));
+    if (next && !promptState[id]) loadPrompt(id);
+  };
+
+  const onPromptChange = (id, value) => {
+    setPromptState((s) => ({ ...s, [id]: { ...(s[id] ?? {}), edited: value } }));
+    setAnalyzerCfg(id, { customSystemPrompt: value });
+  };
+
+  const onPromptReset = (id) => {
+    setPromptState((s) => ({
+      ...s,
+      [id]: { ...(s[id] ?? {}), edited: null, current: null },
+    }));
+    setAnalyzerCfg(id, { customSystemPrompt: undefined });
+  };
+
+  const analyzersList =
+    status?.analyzers ?? ANALYZER_ORDER.map((id) => ({ id, title: id, enabled: false }));
 
   return (
     <div style={S.root}>
       <div style={S.sectionTitle}>Live status</div>
-      {statusError && <div style={S.empty}>{statusError}</div>}
-      {status && (
-        <>
-          <div style={S.statsGrid}>
-            <div style={S.statCard}>
-              <div style={S.statLabel}>OpenRouter API key</div>
-              <div style={S.statValue}>
-                <span style={S.dot(apiKeySet ? '#10b981' : '#ef4444')} />
-                {apiKeySet ? 'Configured' : 'Missing'}
-              </div>
-              {apiKeySet && <div style={S.statSub}>Model: {calls.model}</div>}
-            </div>
-            <div style={S.statCard}>
-              <div style={S.statLabel}>Calls today</div>
-              <div style={S.statValue}>
-                {calls.callsToday} / {calls.maxCallsPerDay}
-              </div>
-              <div style={S.statSub}>UTC daily cap</div>
-            </div>
-            <div style={S.statCard}>
-              <div style={S.statLabel}>QuestDB</div>
-              <div style={S.statValue}>
-                <span style={S.dot(qdbState.color)} />
-                {qdbState.text}
-              </div>
-              <div style={S.statSub}>
-                {qdb.enabled ? 'Trend analyzers depend on this' : 'Trend analyzers will skip'}
-              </div>
-            </div>
-            <div style={S.statCard}>
-              <div style={S.statLabel}>Analyzers</div>
-              <div style={S.statValue}>
-                {enabledCount} / {status.analyzers.length}
-              </div>
-              <div style={S.statSub}>enabled</div>
-            </div>
-          </div>
+      <StatusBlock
+        status={status}
+        statusError={statusError}
+        onTest={runTest}
+        testing={testing}
+        testResult={testResult}
+      />
 
-          <div style={S.inlineRow}>
-            <button
-              type="button"
-              style={{ ...S.btn, ...(testing || !apiKeySet ? S.btnDisabled : {}) }}
-              onClick={runTest}
-              disabled={testing || !apiKeySet}
-            >
-              {testing ? 'Testing...' : 'Test API key'}
-            </button>
-            {testResult && (
-              <span
-                style={{
-                  ...S.testStatus,
-                  ...(testResult.ok ? S.testOk : S.testErr),
-                }}
-              >
-                {testResult.text}
-              </span>
-            )}
-          </div>
+      <OpenRouterSection
+        cfg={cfg}
+        set={setSection}
+        models={models}
+        modelsState={modelsState}
+        loadModels={loadModels}
+      />
 
-          <div style={S.sectionTitle}>Analyzers</div>
-          <div>
-            {status.analyzers.map((a) => (
-              <AnalyzerRow
-                key={a.id}
-                analyzer={a}
-                fireState={fireState[a.id]}
-                onFire={fireAnalyzer}
-                onView={toggleView}
-                viewing={viewing[a.id]}
-                reports={reportsByAnalyzer[a.id]}
-                reportsLoading={reportsLoading[a.id]}
-              />
-            ))}
-          </div>
-        </>
-      )}
+      <QuestDBSection
+        cfg={cfg}
+        set={setSection}
+        testResult={qdbTest}
+        onTest={runQdbTest}
+        testing={qdbTesting}
+      />
 
-      <div style={S.sectionTitle}>Saved configuration (raw)</div>
-      <pre style={S.pre}>{JSON.stringify(configuration ?? {}, null, 2)}</pre>
-      <div style={S.inlineRow}>
-        <button type="button" style={S.btn} onClick={() => save(configuration || {})}>
-          Save (no-op rewrite)
+      <div style={S.sectionTitle}>Analyzers</div>
+      <div>
+        {analyzersList.map((a) => (
+          <AnalyzerRow
+            key={a.id}
+            analyzer={a}
+            enabled={!!cfg.analyzers?.[a.id]?.enabled}
+            setEnabled={setAnalyzerEnabled}
+            fireState={fireState[a.id]}
+            onFire={fireAnalyzer}
+            reportsOpen={!!reportsOpen[a.id]}
+            onToggleReports={toggleReports}
+            reports={reportsByAnalyzer[a.id]}
+            reportsLoading={reportsLoading[a.id]}
+            promptOpen={!!promptOpen[a.id]}
+            onTogglePrompt={togglePrompt}
+            promptState={promptState[a.id]}
+            onPromptChange={onPromptChange}
+            onPromptReset={onPromptReset}
+          />
+        ))}
+      </div>
+
+      <div style={S.saveBar}>
+        <button
+          type="button"
+          style={{ ...S.btn, ...S.btnSave, ...(dirty ? {} : S.btnDisabled) }}
+          onClick={onSave}
+          disabled={!dirty}
+        >
+          {dirty ? 'Save configuration' : 'No changes'}
         </button>
+        {savedNotice && <span style={{ ...S.testStatus, ...S.testOk }}>{savedNotice}</span>}
       </div>
     </div>
   );

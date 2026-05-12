@@ -15,7 +15,22 @@ export interface AgingCfg {
   triggers: AnalyzerTriggerCfg;
   shortWindowDays: number;
   longWindowDays: number;
+  customSystemPrompt?: string;
 }
+
+// Default prompt is generic about window length because shortWindowDays /
+// longWindowDays are configurable: the actual window deltas appear in the
+// user prompt's data block so the model still has the numbers it needs.
+export const AGING_DEFAULT_SYSTEM_PROMPT = [
+  'You are a marine LiFePO4 battery specialist reviewing capacity degradation trends from a Signal K vessel.',
+  'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
+  'Focus only on the aging trend. Do not restate the snapshot for today; the daily health analyzer covers that.',
+  "For each bank, comment on each configured window's capacity trajectory and the loss per 100 cycles when cycles increased over the window.",
+  'Rank banks by capacity loss per 100 cycles, worst first. Flag any bank degrading 3 to 4 times the median rate as an outlier worth investigating.',
+  "When the longest window has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient. Note that this is a linear-fit approximation; LiFePO4 capacity typically holds steady for most of the pack's life and then drops past a knee, so the projection will run optimistic late in life.",
+  'Stay with the numbers in the data. If a bank is degrading within normal LiFePO4 expectations, say so plainly.',
+  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which bank is aging fastest, or "all banks within normal range"), then mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
+].join(' ');
 
 interface PathSummary {
   first: number;
@@ -63,10 +78,12 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   readonly title = 'Battery Aging Tracker';
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly windowDays: readonly number[];
+  private readonly systemPrompt: string;
 
   constructor(cfg: AgingCfg) {
     this.triggers = buildTriggers(cfg.triggers);
     this.windowDays = resolveWindowDays(cfg);
+    this.systemPrompt = cfg.customSystemPrompt?.trim() || AGING_DEFAULT_SYSTEM_PROMPT;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {
@@ -118,20 +135,9 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   buildPrompt(input: AgingInput): { system: string; user: string } {
     const days = input.banks[0]?.windows.map((w) => w.days) ?? Array.from(this.windowDays);
     const windowDesc = days.map((d) => `${d}-day`).join(' and ');
-    const longestWindow = days.at(-1) ?? AGING_DEFAULT_LONG_DAYS;
-    const system = [
-      'You are a marine LiFePO4 battery specialist reviewing capacity degradation trends from a Signal K vessel.',
-      'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
-      'Focus only on the aging trend. Do not restate the snapshot for today; the daily health analyzer covers that.',
-      `For each bank, comment on the ${windowDesc} capacity trajectory and the loss per 100 cycles when cycles increased over the window.`,
-      'Rank banks by capacity loss per 100 cycles, worst first. Flag any bank degrading 3 to 4 times the median rate as an outlier worth investigating.',
-      `When the longest window (${longestWindow} days) has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient. Note that this is a linear-fit approximation; LiFePO4 capacity typically holds steady for most of the pack's life and then drops past a knee, so the projection will run optimistic late in life.`,
-      'Stay with the numbers in the data. If a bank is degrading within normal LiFePO4 expectations, say so plainly.',
-      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which bank is aging fastest, or "all banks within normal range"), then mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
-    ].join(' ');
-
     const lines: string[] = [];
     lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(`Configured windows: ${windowDesc} (longest = ${days.at(-1) ?? days[0]} days)`);
     lines.push('');
     for (const b of input.banks) {
       lines.push(`### Bank: ${b.id}`);
@@ -149,7 +155,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
       }
       lines.push('');
     }
-    return { system, user: lines.join('\n') };
+    return { system: this.systemPrompt, user: lines.join('\n') };
   }
 }
 

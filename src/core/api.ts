@@ -1,9 +1,14 @@
 import { open } from 'node:fs/promises';
 import type { Analyzer, TriggerCtx } from '../analyzers/Analyzer.js';
+import { AGING_DEFAULT_SYSTEM_PROMPT } from '../analyzers/aging.js';
+import { ALERTS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/alerts.js';
+import { DRIFT_DEFAULT_SYSTEM_PROMPT } from '../analyzers/drift.js';
+import { HEALTH_DEFAULT_SYSTEM_PROMPT } from '../analyzers/health.js';
+import { MAINTENANCE_DEFAULT_SYSTEM_PROMPT } from '../analyzers/maintenance.js';
 import type { BudgetTracker } from './budget.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
-import type { QuestDBClient } from './questdb.js';
+import { QuestDBClient } from './questdb.js';
 import type { TriggerRouter } from './triggerRouter.js';
 
 export interface RouteRequest {
@@ -26,7 +31,14 @@ export interface RouterLike {
 export interface PluginRuntime {
   cfg: {
     openrouter: { model: string; maxCallsPerDay: number };
-    questdb: { enabled: boolean };
+    questdb: { enabled: boolean; url: string };
+    analyzers: {
+      maintenance: { customSystemPrompt?: string };
+      health: { customSystemPrompt?: string };
+      aging: { customSystemPrompt?: string };
+      drift: { customSystemPrompt?: string };
+      alerts: { customSystemPrompt?: string };
+    };
   };
   llm: OpenRouterClient;
   budget: BudgetTracker;
@@ -37,6 +49,14 @@ export interface PluginRuntime {
   router: TriggerRouter | null;
   logPath: string;
 }
+
+export const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
+  maintenance: MAINTENANCE_DEFAULT_SYSTEM_PROMPT,
+  health: HEALTH_DEFAULT_SYSTEM_PROMPT,
+  aging: AGING_DEFAULT_SYSTEM_PROMPT,
+  drift: DRIFT_DEFAULT_SYSTEM_PROMPT,
+  alerts: ALERTS_DEFAULT_SYSTEM_PROMPT,
+};
 
 const ANALYZER_META: ReadonlyArray<{ id: string; title: string }> = [
   { id: 'maintenance', title: 'Maintenance Advisor' },
@@ -86,6 +106,32 @@ interface ReportEntry {
   failure?: string;
   engineId?: string;
   durationSec?: number;
+}
+
+interface OpenRouterModelsResponse {
+  data: Array<{ id: string; name?: string; context_length?: number; pricing?: unknown }>;
+}
+
+const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+const MODELS_CACHE_TTL_MS = 60 * 60 * 1000;
+let modelsCache: { fetchedAt: number; body: OpenRouterModelsResponse } | null = null;
+
+// Exposed so tests can wipe the cache between cases. Not part of the public
+// HTTP surface.
+export function _resetOpenRouterModelsCache(): void {
+  modelsCache = null;
+}
+
+async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
+  const now = Date.now();
+  if (modelsCache && now - modelsCache.fetchedAt < MODELS_CACHE_TTL_MS) {
+    return modelsCache.body;
+  }
+  const res = await fetch(OPENROUTER_MODELS_URL);
+  if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
+  const body = (await res.json()) as OpenRouterModelsResponse;
+  modelsCache = { fetchedAt: now, body };
+  return body;
 }
 
 // Read the trailing N lines of the JSONL log filtered by analyzer. Loads the
@@ -189,6 +235,53 @@ export function registerApiRoutes(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ ok: false, error: message });
+    }
+  });
+
+  router.get('/api/analyzers/:id/prompt', (req, res) => {
+    const id = req.params?.id;
+    if (!id || !KNOWN_ANALYZER_IDS.has(id)) {
+      res.status(404).json({ error: 'unknown analyzer' });
+      return;
+    }
+    const rt = getRuntime();
+    const defaultPrompt = DEFAULT_SYSTEM_PROMPTS[id];
+    const current =
+      (rt?.cfg.analyzers as Record<string, { customSystemPrompt?: string }> | undefined)?.[id]
+        ?.customSystemPrompt ?? null;
+    res.json({ analyzer: id, default: defaultPrompt, current });
+  });
+
+  router.get('/api/openrouter/models', async (_req, res) => {
+    const rt = getRuntime();
+    if (!rt) {
+      res.status(503).json({ error: 'plugin not started' });
+      return;
+    }
+    try {
+      const result = await getOpenRouterModels();
+      res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: message });
+    }
+  });
+
+  router.post('/api/questdb/test', async (req, res) => {
+    const body = (req.body ?? {}) as { url?: string };
+    const rt = getRuntime();
+    const url = body.url || rt?.cfg.questdb.url;
+    if (!url) {
+      res.status(400).json({ ok: false, error: 'no URL provided and none in saved config' });
+      return;
+    }
+    try {
+      const client = new QuestDBClient({ url });
+      const ok = await client.probe();
+      res.json({ ok, url });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ ok: false, url, error: message });
     }
   });
 

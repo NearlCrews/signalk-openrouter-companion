@@ -7,7 +7,19 @@ import type { Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer
 
 export interface HealthCfg {
   triggers: AnalyzerTriggerCfg;
+  customSystemPrompt?: string;
 }
+
+export const HEALTH_DEFAULT_SYSTEM_PROMPT = [
+  'You are an experienced marine electrical specialist reading raw battery telemetry from a Signal K server.',
+  'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
+  'Produce a concise plain-English daily report covering every battery bank.',
+  'For each bank: state of charge, voltage and current trends, cycle count, and cell balance (if cell data is present).',
+  'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
+  'If you cannot identify a cause from the data, say so rather than guess.',
+  'Surface anything that looks unusual: voltage outside an obvious range for the bank, cell imbalance over the configured threshold, SoC drifting low.',
+  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the headline (overall state across all banks), then mention each bank by name in one tight clause covering SoC, voltage, balance, and anything notable.',
+].join(' ');
 
 interface CellSnapshot {
   index: number;
@@ -35,9 +47,11 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   readonly id = 'health';
   readonly title = 'Battery Health Advisor';
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly systemPrompt: string;
 
   constructor(cfg: HealthCfg) {
     this.triggers = buildTriggers(cfg.triggers);
+    this.systemPrompt = cfg.customSystemPrompt?.trim() || HEALTH_DEFAULT_SYSTEM_PROMPT;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {
@@ -72,17 +86,6 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   }
 
   buildPrompt(input: HealthInput): { system: string; user: string } {
-    const system = [
-      'You are an experienced marine electrical specialist reading raw battery telemetry from a Signal K server.',
-      'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
-      'Produce a concise plain-English daily report covering every battery bank.',
-      'For each bank: state of charge, voltage and current trends, cycle count, and cell balance (if cell data is present).',
-      'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
-      'If you cannot identify a cause from the data, say so rather than guess.',
-      'Surface anything that looks unusual: voltage outside an obvious range for the bank, cell imbalance over the configured threshold, SoC drifting low.',
-      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the headline (overall state across all banks), then mention each bank by name in one tight clause covering SoC, voltage, balance, and anything notable.',
-    ].join(' ');
-
     const banks = input.banks;
 
     const lines: string[] = [];
@@ -108,7 +111,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
       }
       lines.push('');
     }
-    return { system, user: lines.join('\n') };
+    return { system: this.systemPrompt, user: lines.join('\n') };
   }
 }
 

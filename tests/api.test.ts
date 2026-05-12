@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Analyzer } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime, RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
-import { registerApiRoutes } from '../src/core/api.js';
+import { _resetOpenRouterModelsCache, registerApiRoutes } from '../src/core/api.js';
 import { OpenRouterError } from '../src/core/openrouter.js';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
@@ -80,15 +80,18 @@ describe('plugin REST API', () => {
   });
 
   describe('routes registered via registerWithRouter', () => {
-    it('registers status, openrouter test, fire, and reports routes', () => {
+    it('registers status, openrouter test, fire, reports, prompt, models, and questdb-test routes', () => {
       const plugin = createPlugin(app as never);
       const { router, routes } = makeRecordingRouter();
       plugin.registerWithRouter(router);
       expect(routes.map((r) => `${r.method.toUpperCase()} ${r.path}`).sort()).toEqual([
+        'GET /api/analyzers/:id/prompt',
         'GET /api/analyzers/:id/reports',
+        'GET /api/openrouter/models',
         'GET /api/status',
         'POST /api/analyzers/:id/fire',
         'POST /api/openrouter/test',
+        'POST /api/questdb/test',
       ]);
     });
 
@@ -152,7 +155,17 @@ describe('plugin REST API', () => {
     function makeRuntime(overrides: Partial<PluginRuntime> = {}): PluginRuntime {
       const calls: string[] = [];
       return {
-        cfg: { openrouter: { model: 'm', maxCallsPerDay: 100 }, questdb: { enabled: false } },
+        cfg: {
+          openrouter: { model: 'm', maxCallsPerDay: 100 },
+          questdb: { enabled: false, url: 'http://localhost:9000' },
+          analyzers: {
+            maintenance: {},
+            health: {},
+            aging: {},
+            drift: {},
+            alerts: {},
+          },
+        },
         llm: {
           complete: async () => ({
             text: 'OK',
@@ -223,7 +236,17 @@ describe('plugin REST API', () => {
           calls.push({ kind, ctx });
         });
       const rt: PluginRuntime = {
-        cfg: { openrouter: { model: 'm', maxCallsPerDay: 100 }, questdb: { enabled: false } },
+        cfg: {
+          openrouter: { model: 'm', maxCallsPerDay: 100 },
+          questdb: { enabled: false, url: 'http://localhost:9000' },
+          analyzers: {
+            maintenance: {},
+            health: {},
+            aging: {},
+            drift: {},
+            alerts: {},
+          },
+        },
         llm: {} as never,
         budget: { callsToday: () => 0 } as never,
         questdbLive: null,
@@ -301,7 +324,17 @@ describe('plugin REST API', () => {
   describe('/api/analyzers/:id/reports handler', () => {
     function makeRuntimeWithLog(logPath: string): PluginRuntime {
       return {
-        cfg: { openrouter: { model: 'm', maxCallsPerDay: 100 }, questdb: { enabled: false } },
+        cfg: {
+          openrouter: { model: 'm', maxCallsPerDay: 100 },
+          questdb: { enabled: false, url: 'http://localhost:9000' },
+          analyzers: {
+            maintenance: {},
+            health: {},
+            aging: {},
+            drift: {},
+            alerts: {},
+          },
+        },
         llm: {} as never,
         budget: { callsToday: () => 0 } as never,
         questdbLive: null,
@@ -384,6 +417,240 @@ describe('plugin REST API', () => {
         query: { limit: '0' },
       });
       expect((zero.body as { reports: unknown[] }).reports).toHaveLength(1);
+    });
+  });
+
+  describe('/api/analyzers/:id/prompt handler', () => {
+    function makeRuntimeWithPromptOverride(id: string, custom?: string): PluginRuntime {
+      const analyzersCfg: Record<string, { customSystemPrompt?: string }> = {
+        maintenance: {},
+        health: {},
+        aging: {},
+        drift: {},
+        alerts: {},
+      };
+      if (custom) analyzersCfg[id] = { customSystemPrompt: custom };
+      return {
+        cfg: {
+          openrouter: { model: 'm', maxCallsPerDay: 100 },
+          questdb: { enabled: false, url: 'http://localhost:9000' },
+          analyzers: analyzersCfg as PluginRuntime['cfg']['analyzers'],
+        },
+        llm: {} as never,
+        budget: { callsToday: () => 0 } as never,
+        questdbLive: null,
+        questdbProbed: false,
+        analyzers: [],
+        apiKeySet: true,
+        router: null,
+        logPath: '/tmp/unused.jsonl',
+      };
+    }
+
+    it('returns 404 for unknown analyzer', async () => {
+      const rt = makeRuntimeWithPromptOverride('health');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'get', '/api/analyzers/:id/prompt', {
+        params: { id: 'bogus' },
+      });
+      expect(r.status).toBe(404);
+    });
+
+    it('returns default prompt with current=null when no override is set', async () => {
+      const rt = makeRuntimeWithPromptOverride('health');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'get', '/api/analyzers/:id/prompt', {
+        params: { id: 'health' },
+      });
+      expect(r.status).toBe(200);
+      const body = r.body as { analyzer: string; default: string; current: string | null };
+      expect(body.analyzer).toBe('health');
+      expect(body.default).toContain('marine electrical specialist');
+      expect(body.current).toBeNull();
+    });
+
+    it('returns current=<override> when configured', async () => {
+      const rt = makeRuntimeWithPromptOverride('health', 'CUSTOM_PROMPT');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'get', '/api/analyzers/:id/prompt', {
+        params: { id: 'health' },
+      });
+      expect((r.body as { current: string | null }).current).toBe('CUSTOM_PROMPT');
+    });
+  });
+
+  describe('/api/openrouter/models handler', () => {
+    beforeEach(() => {
+      _resetOpenRouterModelsCache();
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      _resetOpenRouterModelsCache();
+    });
+
+    function emptyRuntime(): PluginRuntime {
+      return {
+        cfg: {
+          openrouter: { model: 'm', maxCallsPerDay: 100 },
+          questdb: { enabled: false, url: 'http://localhost:9000' },
+          analyzers: {
+            maintenance: {},
+            health: {},
+            aging: {},
+            drift: {},
+            alerts: {},
+          },
+        },
+        llm: {} as never,
+        budget: { callsToday: () => 0 } as never,
+        questdbLive: null,
+        questdbProbed: false,
+        analyzers: [],
+        apiKeySet: true,
+        router: null,
+        logPath: '/tmp/unused.jsonl',
+      };
+    }
+
+    it('returns 503 before plugin start', async () => {
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => null);
+      const r = await call(routes, 'get', '/api/openrouter/models');
+      expect(r.status).toBe(503);
+    });
+
+    it('proxies upstream JSON on success and caches the result', async () => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: [{ id: 'a/b' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const rt = emptyRuntime();
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+
+      const first = await call(routes, 'get', '/api/openrouter/models');
+      expect(first.status).toBe(200);
+      expect((first.body as { data: Array<{ id: string }> }).data[0]?.id).toBe('a/b');
+
+      // Second call within the TTL must not re-hit the upstream.
+      const second = await call(routes, 'get', '/api/openrouter/models');
+      expect(second.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 502 when upstream is unreachable', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response('Bad Gateway', {
+              status: 502,
+              headers: { 'content-type': 'text/plain' },
+            }),
+        ),
+      );
+      const rt = emptyRuntime();
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'get', '/api/openrouter/models');
+      expect(r.status).toBe(502);
+      expect(r.body).toMatchObject({ error: 'upstream HTTP 502' });
+    });
+  });
+
+  describe('/api/questdb/test handler', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function makeRuntime(url: string): PluginRuntime {
+      return {
+        cfg: {
+          openrouter: { model: 'm', maxCallsPerDay: 100 },
+          questdb: { enabled: true, url },
+          analyzers: {
+            maintenance: {},
+            health: {},
+            aging: {},
+            drift: {},
+            alerts: {},
+          },
+        },
+        llm: {} as never,
+        budget: { callsToday: () => 0 } as never,
+        questdbLive: null,
+        questdbProbed: false,
+        analyzers: [],
+        apiKeySet: true,
+        router: null,
+        logPath: '/tmp/unused.jsonl',
+      };
+    }
+
+    it('returns 400 when no url and no plugin runtime', async () => {
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => null);
+      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      expect(r.status).toBe(400);
+    });
+
+    it('returns ok:true when QuestDB probe succeeds against the saved url', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ columns: [], dataset: [] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+        ),
+      );
+      const rt = makeRuntime('http://qdb:9000');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, url: 'http://qdb:9000' });
+    });
+
+    it('uses the url from the request body if provided', async () => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ columns: [], dataset: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const rt = makeRuntime('http://saved:9000');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'post', '/api/questdb/test', {
+        body: { url: 'http://override:9000' },
+      });
+      expect((r.body as { url: string }).url).toBe('http://override:9000');
+      const calledWith = String(fetchMock.mock.calls[0]?.[0] ?? '');
+      expect(calledWith.startsWith('http://override:9000/')).toBe(true);
+    });
+
+    it('returns ok:false when QuestDB probe fails', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('boom', { status: 500 })),
+      );
+      const rt = makeRuntime('http://qdb:9000');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      expect(r.status).toBe(200);
+      expect((r.body as { ok: boolean }).ok).toBe(false);
     });
   });
 });

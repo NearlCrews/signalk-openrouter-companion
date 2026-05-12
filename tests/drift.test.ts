@@ -223,14 +223,17 @@ describe('DriftAnalyzer', () => {
   });
 
   describe('buildPrompt', () => {
-    it('reflects the configured baseline length in the system prompt', () => {
+    it('surfaces the configured baseline length in the user prompt', () => {
+      // After Session D the system prompt is fully static (so it can be
+      // overridden via customSystemPrompt without losing meaning). Window
+      // lengths now live in the user prompt's data section.
       const a = new DriftAnalyzer(makeCfg({ baselineDays: 14 }));
       const out = a.buildPrompt({
         generatedAt: '2026-05-10T08:00:00.000Z',
         windowDays: { thisWeek: 7, baseline: 14 },
         engines: [],
       });
-      expect(out.system).toContain('trailing 14-day baseline');
+      expect(out.user).toContain('past 7d vs trailing 14d baseline');
     });
 
     it('produces deterministic system + user content from a representative input', () => {

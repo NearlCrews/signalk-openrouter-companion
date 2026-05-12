@@ -169,11 +169,17 @@ export default function createPlugin(app: ServerApiLike): {
             new MaintenanceAnalyzer({
               triggers: cfg.analyzers.maintenance.triggers,
               minSessionSeconds: cfg.analyzers.maintenance.minSessionSeconds,
+              customSystemPrompt: cfg.analyzers.maintenance.customSystemPrompt,
             }),
           );
         }
         if (cfg.analyzers.health.enabled) {
-          analyzers.push(new HealthAnalyzer({ triggers: cfg.analyzers.health.triggers }));
+          analyzers.push(
+            new HealthAnalyzer({
+              triggers: cfg.analyzers.health.triggers,
+              customSystemPrompt: cfg.analyzers.health.customSystemPrompt,
+            }),
+          );
         }
         if (cfg.analyzers.aging.enabled) {
           analyzers.push(
@@ -181,6 +187,7 @@ export default function createPlugin(app: ServerApiLike): {
               triggers: cfg.analyzers.aging.triggers,
               shortWindowDays: cfg.analyzers.aging.shortWindowDays,
               longWindowDays: cfg.analyzers.aging.longWindowDays,
+              customSystemPrompt: cfg.analyzers.aging.customSystemPrompt,
             }),
           );
         }
@@ -189,11 +196,17 @@ export default function createPlugin(app: ServerApiLike): {
             new DriftAnalyzer({
               triggers: cfg.analyzers.drift.triggers,
               baselineDays: cfg.analyzers.drift.baselineDays,
+              customSystemPrompt: cfg.analyzers.drift.customSystemPrompt,
             }),
           );
         }
         if (cfg.analyzers.alerts.enabled) {
-          analyzers.push(new AlertAnalyzer({ triggers: cfg.analyzers.alerts.triggers }));
+          analyzers.push(
+            new AlertAnalyzer({
+              triggers: cfg.analyzers.alerts.triggers,
+              customSystemPrompt: cfg.analyzers.alerts.customSystemPrompt,
+            }),
+          );
         }
 
         const budgetPromise = BudgetTracker.load({
@@ -221,7 +234,16 @@ export default function createPlugin(app: ServerApiLike): {
                   model: cfg.openrouter.model,
                   maxCallsPerDay: cfg.openrouter.maxCallsPerDay,
                 },
-                questdb: { enabled: cfg.questdb.enabled },
+                questdb: { enabled: cfg.questdb.enabled, url: cfg.questdb.url },
+                analyzers: {
+                  maintenance: {
+                    customSystemPrompt: cfg.analyzers.maintenance.customSystemPrompt,
+                  },
+                  health: { customSystemPrompt: cfg.analyzers.health.customSystemPrompt },
+                  aging: { customSystemPrompt: cfg.analyzers.aging.customSystemPrompt },
+                  drift: { customSystemPrompt: cfg.analyzers.drift.customSystemPrompt },
+                  alerts: { customSystemPrompt: cfg.analyzers.alerts.customSystemPrompt },
+                },
               },
               llm,
               budget,

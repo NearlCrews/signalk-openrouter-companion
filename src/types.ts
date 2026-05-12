@@ -59,21 +59,25 @@ export interface PluginOptions {
       engineStartSettleSeconds: number;
       minSessionSeconds: number;
       extraWatchedPaths: string[];
+      customSystemPrompt?: string;
     };
     health: {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
+      customSystemPrompt?: string;
     };
     aging: {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
       shortWindowDays: number;
       longWindowDays: number;
+      customSystemPrompt?: string;
     };
     drift: {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
       baselineDays: number;
+      customSystemPrompt?: string;
     };
     alerts: {
       enabled: boolean;
@@ -82,6 +86,7 @@ export interface PluginOptions {
       socExitHysteresis: number;
       cellImbalanceV: number;
       imbalanceSettleSec: number;
+      customSystemPrompt?: string;
     };
   };
   output: {

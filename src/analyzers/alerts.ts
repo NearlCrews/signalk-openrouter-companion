@@ -48,7 +48,20 @@ const ALERT_ROUTING: Record<
 
 export interface AlertCfg {
   triggers: AnalyzerTriggerCfg;
+  customSystemPrompt?: string;
 }
+
+// MAX_ALERT_MESSAGE_CHARS is mentioned literally in the prompt below so a
+// custom override can still see the safe headline budget. If we bumped the
+// const we'd want to update the prompt string too.
+export const ALERTS_DEFAULT_SYSTEM_PROMPT = [
+  'You are a marine electrical specialist reading raw battery telemetry from a Signal K server.',
+  'A battery bank just crossed a state threshold.',
+  'Write a very short headline (under 64 characters) that will display on a chartplotter\'s NMEA 2000 alert. Lead with the bank id and what crossed, e.g., "House SoC 38%" or "Starter cell imbalance 0.12 V".',
+  'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
+  'Stick to facts present in the data. Do not speculate beyond the numbers.',
+  'Output is rendered on a chartplotter and in the Signal K data browser. Plain prose, no markdown, no headers, no bullets. One short sentence.',
+].join(' ');
 
 export interface AlertInput {
   subkind: BatteryEventKind;
@@ -66,11 +79,13 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   readonly id = 'alerts';
   readonly title = 'Battery Alerts';
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly systemPrompt: string;
 
   constructor(cfg: AlertCfg) {
     this.triggers = buildTriggers(cfg.triggers, (sub) =>
       isBatteryEventKind(sub) ? { kind: 'battery-event', subkind: sub } : null,
     );
+    this.systemPrompt = cfg.customSystemPrompt?.trim() || ALERTS_DEFAULT_SYSTEM_PROMPT;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {
@@ -95,15 +110,6 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   }
 
   buildPrompt(input: AlertInput): { system: string; user: string } {
-    const system = [
-      'You are a marine electrical specialist reading raw battery telemetry from a Signal K server.',
-      'A battery bank just crossed a state threshold.',
-      `Write a very short headline (under ${MAX_ALERT_MESSAGE_CHARS} characters) that will display on a chartplotter's NMEA 2000 alert. Lead with the bank id and what crossed, e.g., "House SoC 38%" or "Starter cell imbalance 0.12 V".`,
-      'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
-      'Stick to facts present in the data. Do not speculate beyond the numbers.',
-      'Output is rendered on a chartplotter and in the Signal K data browser. Plain prose, no markdown, no headers, no bullets. One short sentence.',
-    ].join(' ');
-
     const lines = [`Event: ${input.subkind}`, `Bank: ${input.bankId}`];
     const ed = input.eventData;
     if (typeof ed.soc === 'number') lines.push(`Triggering SoC: ${fmtRatio(ed.soc)}`);
@@ -115,7 +121,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     lines.push(`Current now: ${fmtUnit(snap.current, 'A')}`);
     lines.push(`SoC now: ${fmtRatio(snap.stateOfCharge)}`);
     if (snap.cycles != null) lines.push(`Cycles: ${snap.cycles}`);
-    return { system, user: lines.join('\n') };
+    return { system: this.systemPrompt, user: lines.join('\n') };
   }
 
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {

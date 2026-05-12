@@ -15,7 +15,18 @@ import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } f
 export interface MaintenanceCfg {
   triggers: AnalyzerTriggerCfg;
   minSessionSeconds: number;
+  customSystemPrompt?: string;
 }
+
+export const MAINTENANCE_DEFAULT_SYSTEM_PROMPT = [
+  'You are an experienced marine engine technician reading raw telemetry from a Signal K server.',
+  'Produce a concise plain-English report of the engine session described in the user content.',
+  'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
+  'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s). Do not invent unit conversions you cannot derive.',
+  'If any engine notification slot is non-normal, surface it prominently.',
+  'If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing. Any claim must cite the field that supports it.',
+  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the session headline (engine, duration, what happened), then weave in alarm state and battery state if there is anything worth noting.',
+].join(' ');
 
 interface SessionSummary {
   engineId: string;
@@ -58,12 +69,14 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   readonly title = 'Maintenance Advisor';
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly minSessionSeconds: number;
+  private readonly systemPrompt: string;
 
   constructor(cfg: MaintenanceCfg) {
     this.triggers = buildTriggers(cfg.triggers, (sub) =>
       sub === 'engine-stop' ? { kind: 'engine-stop' } : null,
     );
     this.minSessionSeconds = cfg.minSessionSeconds;
+    this.systemPrompt = cfg.customSystemPrompt?.trim() || MAINTENANCE_DEFAULT_SYSTEM_PROMPT;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<MaintenanceInput | null> {
@@ -107,16 +120,6 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   }
 
   buildPrompt(input: MaintenanceInput): { system: string; user: string } {
-    const system = [
-      'You are an experienced marine engine technician reading raw telemetry from a Signal K server.',
-      'Produce a concise plain-English report of the engine session described in the user content.',
-      'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
-      'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s). Do not invent unit conversions you cannot derive.',
-      'If any engine notification slot is non-normal, surface it prominently.',
-      'If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing. Any claim must cite the field that supports it.',
-      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the session headline (engine, duration, what happened), then weave in alarm state and battery state if there is anything worth noting.',
-    ].join(' ');
-
     const { session, telemetry, engineNotifications, batteries } = input;
     const f = (v: unknown) => fmtNumber(v, { nan: 'n/a (no samples)' });
 
@@ -147,7 +150,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     for (const b of batteries) {
       lines.push(`- ${b.id}: ${JSON.stringify(b)}`);
     }
-    return { system, user: lines.join('\n') };
+    return { system: this.systemPrompt, user: lines.join('\n') };
   }
 }
 
