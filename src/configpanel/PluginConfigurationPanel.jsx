@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 
 const API_BASE = '/plugins/signalk-openrouter-companion/api';
 const POLL_MS = 5000;
+const REPORT_LIMIT = 10;
 
 const S = {
   root: {
@@ -43,7 +44,7 @@ const S = {
     verticalAlign: 'middle',
   }),
   btn: {
-    padding: '6px 14px',
+    padding: '6px 12px',
     border: 'none',
     borderRadius: 6,
     fontSize: 12,
@@ -51,6 +52,11 @@ const S = {
     background: '#3b82f6',
     color: '#fff',
     cursor: 'pointer',
+  },
+  btnSecondary: {
+    background: '#f1f5f9',
+    color: '#475569',
+    border: '1px solid #e2e8f0',
   },
   btnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
   inlineRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 },
@@ -72,15 +78,32 @@ const S = {
   analyzerRow: {
     display: 'flex',
     alignItems: 'center',
-    padding: '8px 12px',
+    gap: 10,
+    padding: '10px 14px',
     background: '#f8f9fa',
     border: '1px solid #e0e0e0',
     borderRadius: 8,
     marginBottom: 6,
     fontSize: 13,
   },
-  analyzerTitle: { flex: 1 },
-  analyzerState: { fontSize: 11, color: '#888' },
+  analyzerTitle: { flex: 1, fontWeight: 500 },
+  analyzerState: { fontSize: 11, color: '#888', minWidth: 60, textAlign: 'right' },
+  reportDrawer: {
+    background: '#fff',
+    border: '1px solid #e0e0e0',
+    borderRadius: 8,
+    marginTop: -2,
+    marginBottom: 8,
+    padding: 12,
+  },
+  reportEntry: {
+    padding: '10px 12px',
+    borderBottom: '1px solid #f1f5f9',
+  },
+  reportTs: { fontSize: 11, color: '#888', fontFamily: 'monospace' },
+  reportBody: { fontSize: 12, color: '#333', marginTop: 4, whiteSpace: 'pre-wrap' },
+  reportFailure: { fontSize: 12, color: '#ef4444', marginTop: 4 },
+  fireResult: { fontSize: 11, marginLeft: 4 },
 };
 
 function questdbLabel(qdb) {
@@ -91,11 +114,73 @@ function questdbLabel(qdb) {
     : { text: 'Unreachable', color: '#ef4444' };
 }
 
+function AnalyzerRow({ analyzer, fireState, onFire, onView, viewing, reports, reportsLoading }) {
+  const disabled = !analyzer.enabled;
+  return (
+    <>
+      <div style={S.analyzerRow}>
+        <span style={S.dot(analyzer.enabled ? '#10b981' : '#9ca3af')} />
+        <span style={S.analyzerTitle}>{analyzer.title}</span>
+        {fireState && (
+          <span
+            style={{
+              ...S.fireResult,
+              color: fireState.ok ? '#10b981' : '#ef4444',
+            }}
+          >
+            {fireState.text}
+          </span>
+        )}
+        <button
+          type="button"
+          style={{ ...S.btn, ...(disabled || fireState?.pending ? S.btnDisabled : {}) }}
+          disabled={disabled || fireState?.pending}
+          onClick={() => onFire(analyzer.id)}
+        >
+          {fireState?.pending ? 'Firing...' : 'Fire now'}
+        </button>
+        <button
+          type="button"
+          style={{ ...S.btn, ...S.btnSecondary }}
+          onClick={() => onView(analyzer.id)}
+        >
+          {viewing ? 'Hide' : 'View reports'}
+        </button>
+        <span style={S.analyzerState}>{analyzer.enabled ? 'enabled' : 'disabled'}</span>
+      </div>
+      {viewing && (
+        <div style={S.reportDrawer}>
+          {reportsLoading && <div style={S.empty}>Loading reports...</div>}
+          {!reportsLoading && (!reports || reports.length === 0) && (
+            <div style={S.empty}>No reports yet for this analyzer.</div>
+          )}
+          {!reportsLoading &&
+            reports?.map((r) => (
+              <div key={r.ts} style={S.reportEntry}>
+                <div style={S.reportTs}>
+                  {r.ts} · trigger={r.trigger}
+                  {r.engineId ? ` · engine=${r.engineId}` : ''}
+                  {r.durationSec ? ` · ${r.durationSec}s` : ''}
+                </div>
+                {r.report && <div style={S.reportBody}>{r.report}</div>}
+                {r.failure && <div style={S.reportFailure}>FAILURE: {r.failure}</div>}
+              </div>
+            ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function PluginConfigurationPanel({ configuration, save }) {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [fireState, setFireState] = useState({});
+  const [reportsByAnalyzer, setReportsByAnalyzer] = useState({});
+  const [reportsLoading, setReportsLoading] = useState({});
+  const [viewing, setViewing] = useState({});
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -128,16 +213,51 @@ export default function PluginConfigurationPanel({ configuration, save }) {
       const body = await res.json();
       setTestResult(
         res.ok
-          ? {
-              ok: true,
-              text: `OK (${body.totalTokens} tokens, ${body.model})`,
-            }
+          ? { ok: true, text: `OK (${body.totalTokens} tokens, ${body.model})` }
           : { ok: false, text: body.error || `HTTP ${res.status}` },
       );
     } catch (e) {
       setTestResult({ ok: false, text: e.message });
     }
     setTesting(false);
+  };
+
+  const fireAnalyzer = async (id) => {
+    setFireState((s) => ({ ...s, [id]: { pending: true } }));
+    try {
+      const res = await fetch(`${API_BASE}/analyzers/${id}/fire`, { method: 'POST' });
+      const body = await res.json();
+      setFireState((s) => ({
+        ...s,
+        [id]: res.ok
+          ? { ok: true, text: 'Dispatched' }
+          : { ok: false, text: body.error || `HTTP ${res.status}` },
+      }));
+      // If the drawer is open, refresh it so the new report shows up.
+      if (viewing[id]) {
+        setTimeout(() => loadReports(id), 800);
+      }
+    } catch (e) {
+      setFireState((s) => ({ ...s, [id]: { ok: false, text: e.message } }));
+    }
+  };
+
+  const loadReports = useCallback(async (id) => {
+    setReportsLoading((s) => ({ ...s, [id]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/analyzers/${id}/reports?limit=${REPORT_LIMIT}`);
+      const body = await res.json();
+      setReportsByAnalyzer((s) => ({ ...s, [id]: body.reports || [] }));
+    } catch {
+      setReportsByAnalyzer((s) => ({ ...s, [id]: [] }));
+    }
+    setReportsLoading((s) => ({ ...s, [id]: false }));
+  }, []);
+
+  const toggleView = (id) => {
+    const next = !viewing[id];
+    setViewing((s) => ({ ...s, [id]: next }));
+    if (next && !reportsByAnalyzer[id]) loadReports(id);
   };
 
   const apiKeySet = status?.openrouter?.apiKeySet;
@@ -211,11 +331,16 @@ export default function PluginConfigurationPanel({ configuration, save }) {
           <div style={S.sectionTitle}>Analyzers</div>
           <div>
             {status.analyzers.map((a) => (
-              <div key={a.id} style={S.analyzerRow}>
-                <span style={S.dot(a.enabled ? '#10b981' : '#9ca3af')} />
-                <span style={S.analyzerTitle}>{a.title}</span>
-                <span style={S.analyzerState}>{a.enabled ? 'enabled' : 'disabled'}</span>
-              </div>
+              <AnalyzerRow
+                key={a.id}
+                analyzer={a}
+                fireState={fireState[a.id]}
+                onFire={fireAnalyzer}
+                onView={toggleView}
+                viewing={viewing[a.id]}
+                reports={reportsByAnalyzer[a.id]}
+                reportsLoading={reportsLoading[a.id]}
+              />
             ))}
           </div>
         </>

@@ -229,6 +229,8 @@ export default function createPlugin(app: ServerApiLike): {
               questdbProbed: true,
               analyzers,
               apiKeySet: true,
+              router,
+              logPath,
             };
             for (const a of analyzers) {
               for (const t of a.triggers) {
