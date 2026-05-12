@@ -1,7 +1,8 @@
+import { clampPositiveInt } from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
-import { escapeSqlLiteral } from '../core/questdb.js';
+import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -46,9 +47,11 @@ export interface AgingInput extends AnalysisInput {
   banks: BankAging[];
 }
 
-// Sanitize a configured day-count: must be a finite integer >= 1.
-function sanitizeDays(v: number, fallback: number): number {
-  return Number.isFinite(v) && v >= 1 ? Math.trunc(v) : fallback;
+function resolveWindowDays(cfg: AgingCfg): readonly number[] {
+  const short = clampPositiveInt(cfg.shortWindowDays, 30);
+  const long = clampPositiveInt(cfg.longWindowDays, 90);
+  const [a, b] = short <= long ? [short, long] : [long, short];
+  return a === b ? [a] : [a, b];
 }
 
 export class AgingAnalyzer implements Analyzer<AgingInput> {
@@ -57,14 +60,9 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly windowDays: readonly number[];
 
-  constructor(private cfg: AgingCfg) {
+  constructor(cfg: AgingCfg) {
     this.triggers = buildTriggers(cfg.triggers);
-    const short = sanitizeDays(cfg.shortWindowDays, 30);
-    const long = sanitizeDays(cfg.longWindowDays, 90);
-    // Order matters for the prompt (short first, long second). If a user
-    // accidentally inverts them, swap. Collapse short == long to one window.
-    const [a, b] = short <= long ? [short, long] : [long, short];
-    this.windowDays = a === b ? [a] : [a, b];
+    this.windowDays = resolveWindowDays(cfg);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {
@@ -118,8 +116,9 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   }
 
   buildPrompt(input: AgingInput): { system: string; user: string } {
-    const windowDesc = this.windowDays.map((d) => `${d}-day`).join(' and ');
-    const longestWindow = this.windowDays.at(-1) ?? 90;
+    const days = input.banks[0]?.windows.map((w) => w.days) ?? Array.from(this.windowDays);
+    const windowDesc = days.map((d) => `${d}-day`).join(' and ');
+    const longestWindow = days.at(-1) ?? 90;
     const system = [
       'You are a marine LiFePO4 battery specialist reviewing capacity degradation trends from a Signal K vessel.',
       'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
@@ -215,11 +214,12 @@ async function queryWindow(
   const out = new Map<string, PathSummary>();
   try {
     const r = await client.query(sql);
-    const pIdx = r.columns.findIndex((c) => c.name === 'path');
-    const fIdx = r.columns.findIndex((c) => c.name === 'first_val');
-    const lIdx = r.columns.findIndex((c) => c.name === 'last_val');
-    const nIdx = r.columns.findIndex((c) => c.name === 'n');
+    const cols = indexColumns(r);
+    const pIdx = cols.get('path') ?? -1;
     if (pIdx < 0) return out;
+    const fIdx = cols.get('first_val') ?? -1;
+    const lIdx = cols.get('last_val') ?? -1;
+    const nIdx = cols.get('n') ?? -1;
     for (const row of r.dataset) {
       const path = row[pIdx];
       if (typeof path !== 'string') continue;

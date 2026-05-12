@@ -1,5 +1,5 @@
 import { fmtRatio, fmtUnit } from '../core/format.js';
-import { NOTIFICATION_PATH_PREFIX } from '../core/paths.js';
+import { alertNotificationPath } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import { ALERTS_SUPPORTED_EVENTS, type AnalyzerTriggerCfg } from '../types.js';
@@ -106,7 +106,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
     const subkind = ctx.batteryEvent?.subkind;
     if (!subkind) return;
-    const path = `${NOTIFICATION_PATH_PREFIX}alert.${subkind}`;
+    const path = alertNotificationPath(subkind);
     const state: 'alert' | 'normal' = ENTER_SUBKINDS.includes(subkind) ? 'alert' : 'normal';
     const message = truncateForN2K(text);
     await deps.publisher.publishOnPath(message, { analyzerId: this.id, ctx }, { path, state });

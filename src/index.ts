@@ -19,6 +19,7 @@ import {
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
+import { bankPathPrefix, enginePaths } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
@@ -307,10 +308,10 @@ export default function createPlugin(app: ServerApiLike): {
         };
 
         for (const engineId of engineIds) {
-          subscribeEnginePath(engineId, `propulsion.${engineId}.revolutions`);
+          subscribeEnginePath(engineId, enginePaths(engineId).rpm);
         }
 
-        const engineRpmPaths = new Set(engineIds.map((id) => `propulsion.${id}.revolutions`));
+        const engineRpmPaths = new Set(engineIds.map((id) => enginePaths(id).rpm));
         for (const path of watched) {
           if (engineRpmPaths.has(path)) continue;
           subscribeWatchedPath(path);
@@ -330,7 +331,7 @@ export default function createPlugin(app: ServerApiLike): {
             const newEngines = discoverEngineIds(fresh).filter((id) => !engineIds.includes(id));
             for (const id of newEngines) {
               engineIds.push(id);
-              subscribeEnginePath(id, `propulsion.${id}.revolutions`);
+              subscribeEnginePath(id, enginePaths(id).rpm);
             }
             const newBanks = discoverBankIds(fresh).filter((id) => !bankIds.includes(id));
             if (newBanks.length > 0) {
@@ -340,7 +341,7 @@ export default function createPlugin(app: ServerApiLike): {
               );
               for (const id of newBanks) {
                 bankIds.push(id);
-                const prefix = `electrical.batteries.${id}.`;
+                const prefix = bankPathPrefix(id);
                 for (const path of freshWatched) {
                   if (engineRpmPaths.has(path)) continue;
                   if (path.startsWith(prefix)) subscribeWatchedPath(path);

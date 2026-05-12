@@ -1,7 +1,8 @@
+import { clampPositiveInt } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
 import { fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
-import { escapeSqlLiteral } from '../core/questdb.js';
+import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -83,10 +84,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(cfg.triggers);
-    this.baselineDays =
-      Number.isFinite(cfg.baselineDays) && cfg.baselineDays >= 1
-        ? Math.trunc(cfg.baselineDays)
-        : DEFAULT_BASELINE_DAYS;
+    this.baselineDays = clampPositiveInt(cfg.baselineDays, DEFAULT_BASELINE_DAYS);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
@@ -102,25 +100,24 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     const baselineEnd = weekStart;
     const baselineStart = baselineEnd - this.baselineDays * DAY_MS;
 
-    const engines: EngineDrift[] = [];
-    for (const engineId of engineIds) {
-      const thisWeek = await binEngineWindow(questdb, context, engineId, weekStart, weekEnd);
-      if (!thisWeek || totalBinCount(thisWeek) === 0) continue;
-      const baseline = await binEngineWindow(
-        questdb,
-        context,
-        engineId,
-        baselineStart,
-        baselineEnd,
-      );
-      if (!baseline || totalBinCount(baseline) === 0) continue;
-      engines.push({
-        engineId,
-        thisWeek,
-        baseline,
-        deltas: computeDeltas(thisWeek, baseline),
-      });
-    }
+    const engines = (
+      await Promise.all(
+        engineIds.map(async (engineId): Promise<EngineDrift | null> => {
+          const [thisWeek, baseline] = await Promise.all([
+            binEngineWindow(questdb, context, engineId, weekStart, weekEnd),
+            binEngineWindow(questdb, context, engineId, baselineStart, baselineEnd),
+          ]);
+          if (!thisWeek || totalBinCount(thisWeek) === 0) return null;
+          if (!baseline || totalBinCount(baseline) === 0) return null;
+          return {
+            engineId,
+            thisWeek,
+            baseline,
+            deltas: computeDeltas(thisWeek, baseline),
+          };
+        }),
+      )
+    ).filter((e): e is EngineDrift => e !== null);
     if (engines.length === 0) return null;
 
     return {
@@ -233,10 +230,11 @@ async function binEngineWindow(
 
   try {
     const res = await questdb.query(sql);
-    const binIdx = res.columns.findIndex((c) => c.name === 'bin');
-    const nIdx = res.columns.findIndex((c) => c.name === 'n');
-    const fuelIdx = res.columns.findIndex((c) => c.name === 'mean_fuel');
-    const sogIdx = res.columns.findIndex((c) => c.name === 'mean_sog');
+    const cols = indexColumns(res);
+    const binIdx = cols.get('bin') ?? -1;
+    const nIdx = cols.get('n') ?? -1;
+    const fuelIdx = cols.get('mean_fuel') ?? -1;
+    const sogIdx = cols.get('mean_sog') ?? -1;
     if (binIdx < 0 || nIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
     if (res.dataset.length === 0) return null;
     const out: Record<BinKey, BinStats> = Object.fromEntries(

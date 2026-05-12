@@ -11,6 +11,17 @@ export function escapeSqlLiteral(s: string): string {
   return s.replace(/'/g, "''");
 }
 
+// Build a name-to-index lookup for a QueryResult's columns. Cheaper and less
+// repetitive than calling r.columns.findIndex per field at the call site.
+export function indexColumns(r: QueryResult): Map<string, number> {
+  const out = new Map<string, number>();
+  for (let i = 0; i < r.columns.length; i += 1) {
+    const c = r.columns[i];
+    if (c) out.set(c.name, i);
+  }
+  return out;
+}
+
 export class QuestDBClient {
   constructor(private cfg: QuestDBCfg) {}
 
@@ -65,8 +76,9 @@ export class QuestDBClient {
     const r = await this.query(sql, abortSignal);
     const row = r.dataset[0];
     if (!row || row.every((v) => v == null)) return null;
+    const cols = indexColumns(r);
     const get = (name: string): number => {
-      const idx = r.columns.findIndex((c) => c.name === name);
+      const idx = cols.get(name) ?? -1;
       const v = idx >= 0 ? row[idx] : null;
       return typeof v === 'number' ? v : Number.NaN;
     };

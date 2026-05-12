@@ -135,7 +135,7 @@ function parseRetryAfter(h: string | null): number | null {
 const BACKOFF_LADDER = [500, 1500, 4500] as const;
 
 function backoffMs(attempt: number, retryAfterMs: number | null): number {
-  const base = BACKOFF_LADDER[Math.min(attempt, BACKOFF_LADDER.length - 1)] ?? 0;
+  const base = BACKOFF_LADDER[Math.min(attempt, BACKOFF_LADDER.length - 1)] as number;
   if (retryAfterMs == null) return base;
   return Math.max(base, retryAfterMs);
 }

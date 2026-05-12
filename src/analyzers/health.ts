@@ -1,4 +1,5 @@
 import { fmtNumber } from '../core/format.js';
+import { bankPaths } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
@@ -59,7 +60,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
         nominalCapacityJ: get('capacity.nominal'),
         cycles: get('cycles'),
         temperatureK: get('temperature'),
-        voltage24h: deps.buffer.summarize(`electrical.batteries.${id}.voltage`, startMs, endMs),
+        voltage24h: deps.buffer.summarize(bankPaths(id).voltage, startMs, endMs),
         cells: cells.length > 0 ? cells : null,
       };
     });

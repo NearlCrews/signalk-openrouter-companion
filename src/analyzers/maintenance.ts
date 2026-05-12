@@ -1,5 +1,6 @@
 import { WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
+import { engineNotificationsPath, enginePathPrefix } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
@@ -137,9 +138,10 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
 }
 
 function listWatchedPaths(deps: AnalyzerDeps, engineId: string): string[] {
+  const engPrefix = enginePathPrefix(engineId);
   const out = new Set<string>();
   for (const path of deps.buffer.pathKeys()) {
-    if (path.startsWith(`propulsion.${engineId}.`)) {
+    if (path.startsWith(engPrefix)) {
       out.add(path);
       continue;
     }
@@ -153,7 +155,7 @@ function snapshotEngineNotifications(
   deps: AnalyzerDeps,
   engineId: string,
 ): Record<string, unknown> {
-  const tree = deps.app.getSelfPath(`notifications.propulsion.${engineId}`);
+  const tree = deps.app.getSelfPath(engineNotificationsPath(engineId));
   if (!tree || typeof tree !== 'object') return {};
   const out: Record<string, unknown> = {};
   for (const [slot, node] of Object.entries(tree as Record<string, unknown>)) {

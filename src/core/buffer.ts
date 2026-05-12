@@ -11,8 +11,14 @@ export interface BufferOptions {
 
 export class RollingBuffer {
   private store = new Map<string, BufferEntry[]>();
+  private readonly trimTo: number;
 
-  constructor(private opts: BufferOptions) {}
+  constructor(private opts: BufferOptions) {
+    // When the array exceeds maxEntriesPerPath, trim down to trimTo (90% of
+    // cap) so the next ~10% of records skip count eviction entirely. Cached
+    // here so the saturated record() hot path stays free of arithmetic.
+    this.trimTo = opts.maxEntriesPerPath - Math.ceil(opts.maxEntriesPerPath / 10);
+  }
 
   record(path: string, value: unknown, ts: number, source: string): void {
     let arr = this.store.get(path);
@@ -72,11 +78,8 @@ export class RollingBuffer {
       firstFresh += 1;
     }
     if (firstFresh > 0) arr.splice(0, firstFresh);
-    // Amortize the O(n) splice cost at saturation: when over cap, trim down by
-    // 10% of cap so the next ~10% of records skip count eviction entirely.
-    const cap = this.opts.maxEntriesPerPath;
-    if (arr.length > cap) {
-      arr.splice(0, arr.length - cap + Math.ceil(cap / 10));
+    if (arr.length > this.opts.maxEntriesPerPath) {
+      arr.splice(0, arr.length - this.trimTo);
     }
   }
 }

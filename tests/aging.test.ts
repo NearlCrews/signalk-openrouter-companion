@@ -36,6 +36,15 @@ function makeCfg(overrides: Partial<{ shortWindowDays: number; longWindowDays: n
 
 // Aging issues one batched query per window with a `dateadd('d', -<days>, ...)`
 // boundary. Dispatch by parsing the days back out of the SQL.
+function windowStats<B extends { windows: { days: number; stats: S }[] }, S>(
+  bank: B,
+  days: number,
+): S {
+  const w = bank.windows.find((x) => x.days === days);
+  if (!w) throw new Error(`no ${days}d window`);
+  return w.stats;
+}
+
 function stubQuestDB(perWindow: Partial<Record<number, QuerySpec[]>>): MockQuestDB {
   return makeQuestDBStub((sql) => {
     const m = sql.match(/dateadd\('d', -(\d+),/);
@@ -181,7 +190,7 @@ describe('AgingAnalyzer', () => {
     expect(r!.selfContext).toBe(app.selfContext);
 
     expect(bank.windows.map((w) => w.days)).toEqual([30, 90]);
-    const w30 = bank.windows.find((w) => w.days === 30)!.stats;
+    const w30 = windowStats(bank, 30);
     expect(w30.capacityStart).toBe(5_500_000);
     expect(w30.capacityEnd).toBe(5_400_000);
     expect(w30.capacitySamples).toBe(60);
@@ -189,7 +198,7 @@ describe('AgingAnalyzer', () => {
     expect(w30.capacityDeltaPct).toBeCloseTo(-1.8182, 3);
     expect(w30.lossPer100Cycles).toBeCloseTo(36.3636, 3);
 
-    const w90 = bank.windows.find((w) => w.days === 90)!.stats;
+    const w90 = windowStats(bank, 90);
     expect(w90.capacityStart).toBe(5_700_000);
     expect(w90.cyclesDelta).toBe(20);
     expect(w90.capacityDeltaPct).toBeCloseTo(-5.2632, 3);
@@ -274,12 +283,35 @@ describe('AgingAnalyzer', () => {
     expect(stub.calls.some((q) => q.includes('-60,'))).toBe(true);
   });
 
-  it('inverts shortWindowDays and longWindowDays when user provides them backwards', () => {
+  it('sorts windows ascending when user inverts short/long days', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
+    const stub = stubQuestDB({
+      30: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_450_000,
+          last: 5_400_000,
+          n: 30,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 99, last: 100, n: 30 },
+      ],
+      90: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_500_000,
+          last: 5_400_000,
+          n: 90,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 95, last: 100, n: 90 },
+      ],
+    });
     const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 90, longWindowDays: 30 }));
-    // Internal field is exposed via buildPrompt: the longer window is described
-    // as the projection window. Easier: collectContext queries should hit -30
-    // and -90 regardless of the input order.
-    expect(a.triggers).toBeDefined();
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
+    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    expect(r).not.toBeNull();
+    expect(r!.banks[0]!.windows.map((w) => w.days)).toEqual([30, 90]);
+    expect(stub.calls).toHaveLength(2);
   });
 
   it('collapses to a single window when shortWindowDays == longWindowDays', async () => {

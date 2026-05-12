@@ -1,3 +1,5 @@
+import { notificationReportPath, pluginPutPath } from './core/paths.js';
+
 export interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
   put: { enabled: boolean; path: string };
@@ -96,7 +98,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        put: { enabled: true, path: pluginPutPath('maintenance') },
         events: ['engine-stop'],
       },
       engineStopRpmHzThreshold: 1.0,
@@ -110,7 +112,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.health.run' },
+        put: { enabled: true, path: pluginPutPath('health') },
         events: [],
       },
     },
@@ -118,7 +120,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 1 * *', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.aging.run' },
+        put: { enabled: true, path: pluginPutPath('aging') },
         events: [],
       },
       shortWindowDays: 30,
@@ -128,7 +130,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 * * 0', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.drift.run' },
+        put: { enabled: true, path: pluginPutPath('drift') },
         events: [],
       },
       baselineDays: 30,
@@ -137,7 +139,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false, path: 'plugins.openrouter-companion.alerts.run' },
+        put: { enabled: false, path: pluginPutPath('alerts') },
         events: ['low-soc-enter', 'low-soc-exit', 'cell-imbalance-enter', 'cell-imbalance-exit'],
       },
       lowSocPercent: 30,
@@ -147,7 +149,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
     },
   },
   output: {
-    notificationPath: 'notifications.openrouter-companion.maintenance.report',
+    notificationPath: notificationReportPath('maintenance'),
     notificationState: 'normal',
     logFilename: 'reports.jsonl',
   },
