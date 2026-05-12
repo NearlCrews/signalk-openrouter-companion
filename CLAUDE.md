@@ -5,7 +5,7 @@ Project memory for Claude Code. Read at the start of every session.
 ## Architecture (Critical)
 
 - This repo is **ONE npm package**. Each type of monitoring is a separate `Analyzer` module inside `src/analyzers/`. Never create a sibling repo or a separate npm package per domain. (On 2026-05-10 a session mistakenly created `signalk-openrouter-batteries-companion` and had to consolidate. Don't repeat that.)
-- The `Analyzer` interface in `src/analyzers/Analyzer.ts` is the extension point. New analyzers implement: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
+- The `Analyzer` interface in `src/analyzers/Analyzer.ts` is the extension point. New analyzers implement: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, `publishOutput`. State + trend analyzers delegate to `deps.publisher.publishReport(this.id, ctx, text)` (canonical report path, `state: nominal`); transition analyzers (alerts) use `deps.publisher.publishOnPath` with a per-event path and explicit alert state.
 - Standardized triggers block per analyzer: `{ cron: { enabled, pattern, timezone }, put: { enabled, path }, events: string[] }`. Same shape for every analyzer; the events array's enum is per-analyzer.
 - Shared infra in `src/core/`: `logger`, `buffer`, `budget`, `engineDetector`, `batteryMonitor`, `cronScheduler`, `triggerRouter`, `openrouter`, `questdb`, `publisher`, `discovery`, `skNode`, `format`, `paths`, `triggers`, `cfg`.
 - Five analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":

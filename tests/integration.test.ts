@@ -74,7 +74,9 @@ describe('integration: engine session -> report', () => {
     expect(lastDelta.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.maintenance.report',
     );
-    expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('normal');
+    // Reports use 'nominal' (informational) per SK 1.8.2; cannon does not
+    // emit a PGN 126983 alert for nominal-state notifications.
+    expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('nominal');
     expect(lastDelta.updates[0]?.values[0]?.value.message).toContain('Engine session');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
@@ -184,8 +186,7 @@ describe('integration: engine session -> report', () => {
         const alert = app.published.find((p) => {
           const d = p.delta as { updates: { values: { path: string }[] }[] };
           return (
-            d.updates[0]?.values[0]?.path ===
-            'notifications.openrouter-companion.alert.low-soc-enter'
+            d.updates[0]?.values[0]?.path === 'notifications.electrical.batteries.house.lowSoc'
           );
         });
         expect(alert).toBeDefined();
@@ -195,9 +196,7 @@ describe('integration: engine session -> report', () => {
 
     const alertDelta = app.published.find((p) => {
       const d = p.delta as { updates: { values: { path: string }[] }[] };
-      return (
-        d.updates[0]?.values[0]?.path === 'notifications.openrouter-companion.alert.low-soc-enter'
-      );
+      return d.updates[0]?.values[0]?.path === 'notifications.electrical.batteries.house.lowSoc';
     });
     const value = (
       alertDelta?.delta as {

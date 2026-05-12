@@ -1,5 +1,10 @@
 import { fmtRatio, fmtUnit } from '../core/format.js';
-import { alertNotificationPath, BATTERIES_PARENT_PATH } from '../core/paths.js';
+import {
+  alertIdFor,
+  BATTERIES_PARENT_PATH,
+  type BatteryAlertKind,
+  batteryAlertPath,
+} from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import { ALERTS_SUPPORTED_EVENTS, type AnalyzerTriggerCfg } from '../types.js';
@@ -11,17 +16,11 @@ import type {
   TriggerSpec,
 } from './Analyzer.js';
 
-const ENTER_SUBKINDS: ReadonlySet<BatteryEventKind> = new Set([
-  'low-soc-enter',
-  'cell-imbalance-enter',
-]);
-
-// PGN 126985 (Alert Text) carries this through the NMEA 2000 emitter. The wire
-// can hold ~200 chars but Garmin chartplotters truncate alertTextDescription
-// around 64-80 chars on display and Raymarine 80-120. 80 guarantees the
-// headline sentence (which the prompt is engineered to produce first) shows up
-// on common MFDs; the full prose still lives in the SK notification and JSONL.
-const MAX_ALERT_MESSAGE_CHARS = 80;
+// PGN 126985 (Alert Text Description) is the field chartplotters display.
+// Real-world caps observed across MFDs (Raymarine Axiom ~60, B&G Zeus ~70,
+// Furuno TZTouch ~80, Garmin ~72), so 64 chars is the safe headline budget.
+// Anything longer survives in the Signal K notification and the JSONL log.
+const MAX_ALERT_MESSAGE_CHARS = 64;
 
 function truncateForN2K(message: string): string {
   if (message.length <= MAX_ALERT_MESSAGE_CHARS) return message;
@@ -33,6 +32,26 @@ function truncateForN2K(message: string): string {
 
 function isBatteryEventKind(s: string): s is BatteryEventKind {
   return (ALERTS_SUPPORTED_EVENTS as readonly string[]).includes(s);
+}
+
+// Collapse the enter/exit subkind axis into (kind, state) so the published
+// notification uses one canonical per-bank path per concern with state on it,
+// instead of two stomping paths (enter overwrites exit and vice versa).
+function alertRouting(
+  subkind: BatteryEventKind,
+): { kind: BatteryAlertKind; state: 'alert' | 'normal' } | null {
+  switch (subkind) {
+    case 'low-soc-enter':
+      return { kind: 'lowSoc', state: 'alert' };
+    case 'low-soc-exit':
+      return { kind: 'lowSoc', state: 'normal' };
+    case 'cell-imbalance-enter':
+      return { kind: 'cellImbalance', state: 'alert' };
+    case 'cell-imbalance-exit':
+      return { kind: 'cellImbalance', state: 'normal' };
+    default:
+      return null;
+  }
 }
 
 export interface AlertCfg {
@@ -87,10 +106,10 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     const system = [
       'You are a marine electrical specialist reading raw battery telemetry from a Signal K server.',
       'A battery bank just crossed a state threshold.',
-      'Write a short notification (under 150 words): lead with the bank id and what crossed (e.g., "House bank SoC dropped to 38%"), then the current state, then the most likely cause if obvious from the data.',
+      `Write a very short headline (under ${MAX_ALERT_MESSAGE_CHARS} characters) that will display on a chartplotter's NMEA 2000 alert. Lead with the bank id and what crossed, e.g., "House SoC 38%" or "Starter cell imbalance 0.12 V".`,
       'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
-      'Stick to facts present in the data. Do not speculate beyond the numbers. If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing.',
-      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (under 150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers.',
+      'Stick to facts present in the data. Do not speculate beyond the numbers.',
+      'Output is rendered on a chartplotter and in the Signal K data browser. Plain prose, no markdown, no headers, no bullets. One short sentence.',
     ].join(' ');
 
     const lines = [`Event: ${input.subkind}`, `Bank: ${input.bankId}`];
@@ -109,10 +128,16 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
 
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
     const subkind = ctx.batteryEvent?.subkind;
-    if (!subkind) return;
-    const path = alertNotificationPath(subkind);
-    const state: 'alert' | 'normal' = ENTER_SUBKINDS.has(subkind) ? 'alert' : 'normal';
+    const bankId = ctx.bankId;
+    if (!subkind || !bankId) return;
+    const routing = alertRouting(subkind);
+    if (!routing) return;
+    const path = batteryAlertPath(bankId, routing.kind);
     const message = truncateForN2K(text);
-    await deps.publisher.publishOnPath(message, { analyzerId: this.id, ctx }, { path, state });
+    await deps.publisher.publishOnPath(
+      message,
+      { analyzerId: this.id, ctx },
+      { path, state: routing.state, alertId: alertIdFor(path) },
+    );
   }
 }

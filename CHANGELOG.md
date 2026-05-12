@@ -2,6 +2,91 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-05-12
+
+This release aligns the plugin's notification output with the NMEA 2000
+alert PGN family (126983 / 126985) as bridged by
+`signalk-nmea2000-emitter-cannon`. The changes were derived from a
+signalk-plugin-expert audit of the cannon's actual mapping conventions.
+
+### Breaking changes
+- **Alert notification paths moved**. Battery alerts now publish on
+  canonical per-bank Signal K paths (`notifications.electrical.batteries.<bankId>.lowSoc`
+  and `.cellImbalance`) instead of the producer-namespaced shared paths
+  (`notifications.openrouter-companion.alert.low-soc-enter`, etc). One path
+  per (bank, kind), with `state: alert` on enter and `state: normal` on exit
+  (no more `-enter`/`-exit` subkind paths). This avoids cannon's
+  one-cache-slot-per-path collision when multiple banks alert simultaneously,
+  and lets any third-party bridge already watching
+  `notifications.electrical.batteries.*` consume the alerts.
+- **`output.notificationPath` and `output.notificationState` config fields
+  removed**. They were dead knobs: every analyzer overrides per-publish via
+  `publishOutput`, so the cfg defaults never reached the wire. The
+  corresponding admin-UI dropdown is gone too. Existing
+  `signalk-openrouter-companion.json` config files that set these fields
+  will silently ignore them at load (mergeWithDefaults ignores unknown
+  keys).
+- **`Analyzer.publishOutput` is now required** (was optional). The
+  TriggerRouter no longer falls back to `ReportPublisher.publish()`; that
+  method has been removed alongside the cfg fields it depended on. Plugins
+  extending the `Analyzer` interface must provide a `publishOutput`
+  implementation; `deps.publisher.publishReport(this.id, ctx, text)` is
+  the canonical shorthand.
+
+### Changed (notification PGN alignment)
+- Reports now use `state: 'nominal'` (was `'normal'`). Per Signal K 1.8.2,
+  `nominal` is the informational/no-action state; `normal` means
+  "recovered after an alarm". Cannon's `alertTypes` table has no entry for
+  `nominal`, so the chartplotter does NOT get a spurious PGN 126983 alert
+  for narrative reports (maintenance / health / aging / drift).
+- Notification `method` is now state-driven. Cannon maps the SK `method`
+  array to PGN 126983 `alertState`: includes `'sound'` -> Active; nonempty
+  without `'sound'` -> Silenced; empty -> Acknowledged. This plugin now
+  emits `['visual', 'sound']` for `alert`/`alarm`/`emergency`/`warn`
+  states (audible) and `['visual']` for `nominal`/`normal` (silent),
+  yielding the correct chartplotter UX.
+- Notification value carries an optional `alertId` (16-bit). Battery
+  alerts now set it to a stable FNV-1a hash of the SK path so the
+  chartplotter sees the same alert reappear across cannon restarts.
+  Without this, cannon's auto-counter resets on config reload and the
+  chartplotter treats post-restart alerts as new.
+- `MAX_ALERT_MESSAGE_CHARS` tightened from 80 to 64. The wire field
+  (PGN 126985 alertTextDescription) holds ~200 chars but real-world MFD
+  display caps are tighter (Raymarine Axiom ~60, B&G Zeus ~70, Furuno
+  TZTouch ~80, Garmin ~72); 64 keeps the headline visible everywhere.
+- `MaintenanceAnalyzer` now defines `publishOutput` (was relying on the
+  removed router fallback to `publish()`). Mirrors the other state and
+  trend analyzers.
+- Failure notifications (`publishFailure`) now publish on the analyzer's
+  canonical report path (e.g., `notifications.openrouter-companion.maintenance.report`)
+  with `state: 'warn'` and audible method, so a chartplotter user actually
+  notices when the LLM call failed.
+
+### Added (notification PGN helpers)
+- `core/paths.ts::batteryAlertPath(bankId, kind)`: canonical per-bank
+  battery alert path builder. Replaces `alertNotificationPath(subkind)`.
+- `core/paths.ts::alertIdFor(path)`: deterministic 16-bit nonzero alert
+  identifier derived from the SK path via FNV-1a.
+- `core/publisher.ts::SignalKNotificationValue.alertId?: number`: optional
+  alert identifier passed through to the SK delta and consumed by cannon
+  for PGN 126983.
+
+### Removed
+- `core/paths.ts::alertNotificationPath` and `ALERT_NOTIFICATION_PREFIX`
+  (replaced by `batteryAlertPath` + canonical paths).
+- `ReportPublisher.publish()` (no consumer left after the router fallback
+  was removed; `publishReport` and `publishOnPath` cover all cases).
+- `output.notificationPath` and `output.notificationState` from
+  `PluginOptions`, `DEFAULT_OPTIONS`, `PublisherCfg`, and the admin schema.
+- `alerts.ts::ENTER_SUBKINDS`. State now drives the audible-method picker;
+  no per-subkind enter set needed.
+
+### Internal
+- `core/publisher.ts::methodFor(state)` and `AUDIBLE_STATES` set picks the
+  notification method based on state (one O(1) Set.has).
+- `core/publisher.ts::makeDelta` signature simplified: dropped the unused
+  `_meta` parameter, made `path` required, added optional `alertId`.
+
 ## [0.2.0] - 2026-05-12
 
 ### Added (trend analyzers and configurable history)

@@ -60,5 +60,10 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly triggers: ReadonlyArray<TriggerSpec>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
-  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
+  // publishOutput is required: each analyzer owns its own publishing path
+  // and state. State analyzers and trend analyzers typically delegate to
+  // `deps.publisher.publishReport(this.id, ctx, text)`. Transition
+  // analyzers like `alerts` use `deps.publisher.publishOnPath` with a
+  // canonical per-event path and an explicit alert state.
+  publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
 }

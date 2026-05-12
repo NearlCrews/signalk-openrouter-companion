@@ -71,8 +71,6 @@ describe('AlertAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
@@ -85,8 +83,6 @@ describe('AlertAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     app.setSelfPath('electrical.batteries', {
@@ -111,8 +107,6 @@ describe('AlertAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     const ctx: TriggerCtx = {
@@ -124,12 +118,19 @@ describe('AlertAnalyzer', () => {
     await a.publishOutput?.('SoC is at 25%, check house bank.', ctx, makeDeps(app, buf, publisher));
     expect(app.published).toHaveLength(1);
     const d = app.published[0]?.delta as {
-      updates: { values: { path: string; value: { state: string } }[] }[];
+      updates: {
+        values: {
+          path: string;
+          value: { state: string; method: string[]; alertId?: number };
+        }[];
+      }[];
     };
-    expect(d.updates[0]?.values[0]?.path).toBe(
-      'notifications.openrouter-companion.alert.low-soc-enter',
-    );
+    expect(d.updates[0]?.values[0]?.path).toBe('notifications.electrical.batteries.house.lowSoc');
     expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
+    // alert state -> method includes 'sound' so cannon emits Active PGN 126983.
+    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual', 'sound']);
+    // Stable, nonzero 16-bit alertId derived from the path.
+    expect(typeof d.updates[0]?.values[0]?.value.alertId).toBe('number');
     const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
     expect(JSON.parse(line).analyzer).toBe('alerts');
   });
@@ -140,8 +141,6 @@ describe('AlertAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     const ctx: TriggerCtx = {
@@ -168,8 +167,6 @@ describe('AlertAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     const ctx: TriggerCtx = {
@@ -192,8 +189,6 @@ describe('AlertAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     const ctx: TriggerCtx = {
@@ -204,11 +199,12 @@ describe('AlertAnalyzer', () => {
     };
     await a.publishOutput?.('SoC recovered to 40%.', ctx, makeDeps(app, buf, publisher));
     const d = app.published[0]?.delta as {
-      updates: { values: { path: string; value: { state: string } }[] }[];
+      updates: { values: { path: string; value: { state: string; method: string[] } }[] }[];
     };
-    expect(d.updates[0]?.values[0]?.path).toBe(
-      'notifications.openrouter-companion.alert.low-soc-exit',
-    );
+    // Exit re-uses the same canonical per-bank path as enter, with state=normal.
+    expect(d.updates[0]?.values[0]?.path).toBe('notifications.electrical.batteries.house.lowSoc');
     expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
+    // Exit is visual-only so cannon clears the cached PGN without re-pinging audible.
+    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual']);
   });
 });

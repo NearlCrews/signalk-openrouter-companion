@@ -394,8 +394,6 @@ describe('AgingAnalyzer', () => {
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orc',
-      notificationPath: 'unused',
-      notificationState: 'normal',
       logPath: join(dir, 'reports.jsonl'),
     });
     const a = new AgingAnalyzer(makeCfg());
@@ -410,7 +408,10 @@ describe('AgingAnalyzer', () => {
       updates: { values: { path: string; value: { state: string; message: string } }[] }[];
     };
     expect(d.updates[0]?.values[0]?.path).toBe('notifications.openrouter-companion.aging.report');
-    expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
+    // Reports are informational ('nominal'), not "recovered-after-alarm" ('normal').
+    // cannon's alertTypes table has no entry for nominal, so the chartplotter
+    // does not get a spurious PGN 126983 alert for the narrative report.
+    expect(d.updates[0]?.values[0]?.value.state).toBe('nominal');
     const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
     expect(JSON.parse(line).analyzer).toBe('aging');
   });

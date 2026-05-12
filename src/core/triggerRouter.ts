@@ -29,12 +29,7 @@ export class TriggerRouter {
     analyzers: Analyzer[],
     private deps: AnalyzerDeps,
   ) {
-    this.entries = analyzers.map((a) => ({
-      analyzer: a,
-      publish: a.publishOutput
-        ? a.publishOutput.bind(a)
-        : async (text, ctx, deps) => deps.publisher.publish(text, { analyzerId: a.id, ctx }),
-    }));
+    this.entries = analyzers.map((a) => ({ analyzer: a, publish: a.publishOutput.bind(a) }));
   }
 
   // Skip SK admin-UI churn when the status string hasn't changed.

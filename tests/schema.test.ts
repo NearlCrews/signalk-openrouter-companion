@@ -5,7 +5,7 @@ import {
   type EnabledGatedNode,
   type TriggerSchemaNode,
 } from '../src/schema.js';
-import { ALARM_STATES, mergeWithDefaults } from '../src/types.js';
+import { mergeWithDefaults } from '../src/types.js';
 
 /**
  * Walks into the enabled-true branch of a `dependencies.enabled.oneOf` block.
@@ -24,7 +24,7 @@ function enabledTrueBranch(node: EnabledGatedNode | Record<string, unknown>): {
 }
 
 describe('schema', () => {
-  it('declares apiKey as required and notificationState as full ALARM_STATE enum', () => {
+  it('declares apiKey as required and exposes no output config (the dead notificationPath/State knobs were removed in the notification-PGN-alignment pass)', () => {
     const s = buildSchema();
     expect(s.type).toBe('object');
     expect(s.title).toBe('OpenRouter Companion');
@@ -34,8 +34,9 @@ describe('schema', () => {
       properties: Record<string, Record<string, unknown>>;
     };
     expect(openrouter.required).toEqual(['apiKey']);
-    const output = s.properties.output as { properties: Record<string, Record<string, unknown>> };
-    expect(output.properties.notificationState.enum).toEqual([...ALARM_STATES]);
+    // output/* schema is gone now: every analyzer owns its own publish path
+    // and state via publishOutput.
+    expect(s.properties.output).toBeUndefined();
   });
 
   it('hides analyzer detail fields behind a dependencies.enabled gate', () => {
@@ -174,9 +175,8 @@ describe('schema', () => {
     // and wrapper). mergeWithDefaults fills in the runtime values.
     expect(openrouter.baseUrl).toBeUndefined();
     expect(openrouter.requestTimeoutMs).toBeUndefined();
-    const output = u.output as Record<string, Record<string, unknown>>;
-    expect(output.notificationPath).toBeUndefined();
-    expect(output.logFilename).toBeUndefined();
+    // The output/* uiSchema block is gone alongside its schema counterpart.
+    expect(u.output).toBeUndefined();
   });
 
   it('uiSchema renders events as checkboxes with humanized labels, omitting events for analyzers without any', () => {

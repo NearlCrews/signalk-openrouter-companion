@@ -1,4 +1,4 @@
-import { notificationReportPath, pluginPutPath } from './core/paths.js';
+import { pluginPutPath } from './core/paths.js';
 
 export interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
@@ -85,8 +85,6 @@ export interface PluginOptions {
     };
   };
   output: {
-    notificationPath: string;
-    notificationState: NotificationState;
     logFilename: string;
   };
 }
@@ -163,8 +161,6 @@ export const DEFAULT_OPTIONS: PluginOptions = {
     },
   },
   output: {
-    notificationPath: notificationReportPath('maintenance'),
-    notificationState: 'normal',
     logFilename: 'reports.jsonl',
   },
 };

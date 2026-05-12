@@ -7,6 +7,7 @@ function makeAnalyzer(overrides: Partial<Analyzer> & Pick<Analyzer, 'id' | 'trig
     title: overrides.id,
     collectContext: vi.fn(async () => ({ ok: true })),
     buildPrompt: vi.fn(() => ({ system: 's', user: 'u' })),
+    publishOutput: vi.fn(async () => {}),
     ...overrides,
   } as Analyzer;
 }

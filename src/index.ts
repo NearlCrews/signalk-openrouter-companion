@@ -154,8 +154,6 @@ export default function createPlugin(app: ServerApiLike): {
         const publisher = new ReportPublisher({
           app,
           pluginId: PLUGIN_ID,
-          notificationPath: cfg.output.notificationPath,
-          notificationState: cfg.output.notificationState,
           logPath,
         });
 

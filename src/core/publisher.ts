@@ -11,6 +11,27 @@ export interface SignalKNotificationValue {
   state: NotificationState;
   method: string[];
   message: string;
+  // Optional stable 16-bit alert identifier. signalk-nmea2000-emitter-cannon
+  // uses this verbatim for PGN 126983's "Alert Identifier"; supplying our own
+  // means the chartplotter sees the same alert reappear across cannon restarts
+  // instead of an apparently-new alert with a fresh auto-counter id.
+  alertId?: number;
+}
+
+// SK states that warrant an audible NMEA 2000 alarm on the chartplotter.
+// signalk-nmea2000-emitter-cannon maps `value.method` to PGN 126983's
+// "Alert State": method includes 'sound' -> Active; method nonempty without
+// 'sound' -> Silenced; method empty -> Acknowledged. We want Active for any
+// non-informational state.
+const AUDIBLE_STATES: ReadonlySet<NotificationState> = new Set([
+  'alert',
+  'alarm',
+  'emergency',
+  'warn',
+]);
+
+function methodFor(state: NotificationState): string[] {
+  return AUDIBLE_STATES.has(state) ? ['visual', 'sound'] : ['visual'];
 }
 
 export interface SignalKNotificationDelta {
@@ -28,8 +49,6 @@ export interface PublisherCfg {
     selfContext?: string;
   };
   pluginId: string;
-  notificationPath: string;
-  notificationState: NotificationState;
   logPath: string;
 }
 
@@ -54,23 +73,16 @@ export class ReportPublisher {
   constructor(private cfg: PublisherCfg) {}
 
   // SKVersion.v1: all notification paths this plugin emits live in v1.
-  async publish(text: string, meta: PublishMeta): Promise<void> {
-    const now = new Date();
-    this.cfg.app.handleMessage(
-      this.cfg.pluginId,
-      this.makeDelta(text, this.cfg.notificationState, now, meta),
-      SKVersion.v1,
-    );
-    await this.appendLog(this.buildEntry(text, meta, now));
-  }
-
+  // Failure notifications publish on the same canonical report path the
+  // analyzer's successful report would, so subscribers see the warn next to
+  // the prior nominal report instead of on a separate channel.
   async publishFailure(analyzerId: string, ctx: TriggerCtx, err: unknown): Promise<void> {
     const now = new Date();
     const reason = stringify(err);
     const message = `${analyzerId} report unavailable: ${reason}`;
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(message, 'warn', now, { analyzerId, ctx }),
+      this.makeDelta(message, 'warn', now, notificationReportPath(analyzerId)),
       SKVersion.v1,
     );
     await this.appendLog({
@@ -82,22 +94,28 @@ export class ReportPublisher {
   async publishOnPath(
     text: string,
     meta: PublishMeta,
-    override: { path: string; state: NotificationState },
+    override: { path: string; state: NotificationState; alertId?: number },
   ): Promise<void> {
     const now = new Date();
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(text, override.state, now, meta, override.path),
+      this.makeDelta(text, override.state, now, override.path, override.alertId),
       SKVersion.v1,
     );
     await this.appendLog(this.buildEntry(text, meta, now));
   }
 
+  // Default state is 'nominal' (informational): per SK 1.8.2, 'nominal' is the
+  // no-action state, while 'normal' means "recovered after an alarm". The
+  // narrative-report analyzers (maintenance/health/aging/drift) are pure info
+  // dumps so cannon should NOT emit an N2K alert PGN for them; passing
+  // 'nominal' achieves that because cannon's alertTypes table has no entry
+  // for nominal and the PGN is suppressed.
   async publishReport(
     analyzerId: string,
     ctx: TriggerCtx,
     text: string,
-    state: NotificationState = 'normal',
+    state: NotificationState = 'nominal',
   ): Promise<void> {
     await this.publishOnPath(
       text,
@@ -110,25 +128,22 @@ export class ReportPublisher {
     text: string,
     state: NotificationState,
     now: Date,
-    _meta: PublishMeta,
-    path: string = this.cfg.notificationPath,
+    path: string,
+    alertId?: number,
   ): SignalKNotificationDelta {
+    const value: SignalKNotificationValue = {
+      state,
+      method: methodFor(state),
+      message: text,
+    };
+    if (alertId !== undefined) value.alertId = alertId;
     return {
       context: this.cfg.app.selfContext ?? 'vessels.self',
       updates: [
         {
           $source: this.cfg.pluginId,
           timestamp: now.toISOString(),
-          values: [
-            {
-              path,
-              value: {
-                state,
-                method: ['visual'],
-                message: text,
-              },
-            },
-          ],
+          values: [{ path, value }],
         },
       ],
     };

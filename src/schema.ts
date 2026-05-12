@@ -1,7 +1,6 @@
 import type { BatteryEventKind } from './analyzers/Analyzer.js';
 import {
   AGING_SUPPORTED_EVENTS,
-  ALARM_STATES,
   ALERTS_SUPPORTED_EVENTS,
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
@@ -516,25 +515,6 @@ function buildSchemaInner(): PluginSchema {
           },
         },
       },
-      output: {
-        type: 'object',
-        title: 'Report output',
-        description:
-          'Where reports are published. Notification paths default to ' +
-          'notifications.openrouter-companion.<analyzer>.<...>; log filename ' +
-          "defaults to reports.jsonl. Advanced overrides live in the plugin's " +
-          'JSON config file.',
-        properties: {
-          notificationState: {
-            type: 'string',
-            title: 'Default notification state',
-            description:
-              'Signal K notification state used when a report is published (alert subkinds override this).',
-            enum: [...ALARM_STATES],
-            default: DEFAULT_OPTIONS.output.notificationState,
-          },
-        },
-      },
     },
   };
 }
@@ -620,9 +600,6 @@ function buildUiSchemaInner(): PluginUiSchema {
         ],
         triggers: triggerUiSchema({ supportedEvents: ALERTS_SUPPORTED_EVENTS }),
       },
-    },
-    output: {
-      'ui:order': ['notificationState'],
     },
   };
 }
