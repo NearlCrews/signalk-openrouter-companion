@@ -91,15 +91,19 @@ describe('MaintenanceAnalyzer.collectContext', () => {
       lowOilPressure: { state: 'normal', message: 'OK' },
       maintenanceNeeded: { state: 'alert', message: 'Service due' },
     });
-    expect(r!.batteries).toEqual([
-      {
-        id: 'house',
-        voltage: 13.6,
-        current: 0.5,
-        stateOfCharge: 0.92,
-        nominalCapacityJ: 5_400_000,
-      },
-    ]);
+    expect(r!.batteries).toHaveLength(1);
+    const bank = r!.batteries[0]!;
+    expect(bank).toMatchObject({
+      id: 'house',
+      voltage: 13.6,
+      current: 0.5,
+      stateOfCharge: 0.92,
+      nominalCapacityJ: 5_400_000,
+    });
+    // Voltage was recorded once during the session window, so summarize returns
+    // a one-sample summary; SoC was never buffered, so it stays null.
+    expect(bank.voltageSession).toMatchObject({ min: 13.6, max: 13.6, count: 1 });
+    expect(bank.socSession).toBeNull();
   });
 });
 

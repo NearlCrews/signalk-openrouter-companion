@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { AgingAnalyzer } from './analyzers/aging.js';
@@ -95,6 +96,7 @@ export default function createPlugin(app: ServerApiLike): {
         const cfg = mergeWithDefaults(rawSettings);
         if (!cfg.openrouter.apiKey) {
           app.setPluginStatus('Awaiting API key configuration');
+          signalReady();
           return;
         }
         lifecycleController = new AbortController();
@@ -104,6 +106,10 @@ export default function createPlugin(app: ServerApiLike): {
         });
 
         const dataDir = app.getDataDirPath();
+        // SK server is responsible for the dir, but on first plugin install
+        // it may not exist yet; mkdir defensively so publisher.appendLog and
+        // BudgetTracker.load don't trip on ENOENT.
+        mkdirSync(dataDir, { recursive: true });
         const logPath = join(dataDir, cfg.output.logFilename);
         const budgetPath = join(dataDir, 'budget.json');
 
@@ -221,30 +227,48 @@ export default function createPlugin(app: ServerApiLike): {
             logger.debug('router ready');
             signalReady();
           })
-          .catch((err) => logger.debug(`startup aborted: ${stringify(err)}`));
+          .catch((err) => {
+            // AbortError is the normal stop() path; anything else is a real
+            // startup failure that should surface to the admin UI status banner
+            // and the SK server log, not get swallowed at debug level.
+            signalReady();
+            const isAbort =
+              err instanceof Error &&
+              (err.name === 'AbortError' || err.message.includes('aborted'));
+            if (isAbort) {
+              logger.debug(`startup aborted: ${stringify(err)}`);
+              return;
+            }
+            logger.error(err);
+            app.setPluginError(`Startup failed: ${stringify(err)}`);
+          });
 
-        detector.on('engine-stop', (e: EngineEvent) => {
-          if (!router) return;
-          const sess = e.session;
-          if (!sess) return;
-          const ctx: TriggerCtx = {
-            kind: 'engine-stop',
-            firedAt: new Date(sess.sessionEnd),
-            engineSession: {
-              engineId: e.engineId,
-              start: new Date(sess.sessionStart),
-              end: new Date(sess.sessionEnd),
-              durationSec: sess.durationSec,
-            },
-          };
-          void router.dispatch('engine-stop', ctx);
-        });
+        unsubs.push(
+          detector.on('engine-stop', (e: EngineEvent) => {
+            if (!router) return;
+            const sess = e.session;
+            if (!sess) return;
+            const ctx: TriggerCtx = {
+              kind: 'engine-stop',
+              firedAt: new Date(sess.sessionEnd),
+              engineSession: {
+                engineId: e.engineId,
+                start: new Date(sess.sessionStart),
+                end: new Date(sess.sessionEnd),
+                durationSec: sess.durationSec,
+              },
+            };
+            void router.dispatch('engine-stop', ctx);
+          }),
+        );
 
-        detector.on('possible-stop', (e) => {
-          logger.debug(
-            `possible-stop: engine ${e.engineId} silent for >${WATCHDOG_SEC}s while running`,
-          );
-        });
+        unsubs.push(
+          detector.on('possible-stop', (e) => {
+            logger.debug(
+              `possible-stop: engine ${e.engineId} silent for >${WATCHDOG_SEC}s while running`,
+            );
+          }),
+        );
 
         const dispatchBatteryEvent = (e: BatteryEvent): void => {
           if (!router) return;
@@ -260,7 +284,7 @@ export default function createPlugin(app: ServerApiLike): {
           };
           void router.dispatch('battery-event', ctx, { batterySubkind: e.kind });
         };
-        for (const k of ALERTS_SUPPORTED_EVENTS) monitor.on(k, dispatchBatteryEvent);
+        for (const k of ALERTS_SUPPORTED_EVENTS) unsubs.push(monitor.on(k, dispatchBatteryEvent));
 
         const available = app.streambundle.getAvailablePaths();
         const engineIds = discoverEngineIds(available);
@@ -349,16 +373,18 @@ export default function createPlugin(app: ServerApiLike): {
               }
             }
             if (engineIds.length > 0 || bankIds.length > 0) {
-              app.setPluginStatus('Running');
+              app.setPluginStatus(runningStatus(analyzers.length));
             }
           }, RESCAN_INTERVAL_MS),
         );
 
-        app.setPluginStatus(
-          engineIds.length === 0 && bankIds.length === 0
-            ? 'Running, no engine or battery data yet (re-scanning every 60s)'
-            : 'Running',
-        );
+        if (analyzers.length === 0) {
+          app.setPluginStatus('No analyzers enabled. Enable at least one in plugin settings.');
+        } else if (engineIds.length === 0 && bankIds.length === 0) {
+          app.setPluginStatus('Running, no engine or battery data yet (re-scanning every 60s)');
+        } else {
+          app.setPluginStatus(runningStatus(analyzers.length));
+        }
       } catch (err) {
         app.setPluginError(stringify(err));
       }
@@ -390,6 +416,11 @@ export default function createPlugin(app: ServerApiLike): {
   };
 }
 
+function runningStatus(analyzerCount: number): string {
+  const label = analyzerCount === 1 ? 'analyzer' : 'analyzers';
+  return `Running with ${analyzerCount} ${label} enabled`;
+}
+
 interface AnalyzerSectionLike {
   enabled: boolean;
   triggers: { put: { enabled: boolean; path: string } };
@@ -418,7 +449,7 @@ function registerAnalyzerPut(
           const router = getRouter();
           if (!router) {
             cb({
-              state: 'COMPLETED',
+              state: 'FAILED',
               statusCode: 503,
               message: 'plugin not fully started',
             });
@@ -428,7 +459,7 @@ function registerAnalyzerPut(
           await router.dispatch('put', ctx, { putPath: path });
           cb({ state: 'COMPLETED', statusCode: 200 });
         } catch (err) {
-          cb({ state: 'COMPLETED', statusCode: 500, message: stringify(err) });
+          cb({ state: 'FAILED', statusCode: 500, message: stringify(err) });
         }
       })();
       return { state: 'PENDING' };

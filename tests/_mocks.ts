@@ -57,7 +57,7 @@ export interface MockApp {
     getSelfBus(path: string): MockBus<unknown>;
     getAvailablePaths(): string[];
   };
-  handleMessage(pluginId: string, delta: unknown): void;
+  handleMessage(pluginId: string, delta: unknown, skVersion?: unknown): void;
   registerPutHandler(
     context: string,
     path: string,

@@ -13,11 +13,12 @@ import type {
 
 const ENTER_SUBKINDS: ReadonlyArray<BatteryEventKind> = ['low-soc-enter', 'cell-imbalance-enter'];
 
-// PGN 126985 (Alert Text) carries this through the NMEA 2000 emitter. Chartplotter
-// implementations vary in how much of alertTextDescription they render; 200 ASCII
-// chars is comfortably under every cap we have seen and preserves the lead sentence
-// the prompt is engineered to produce.
-const MAX_ALERT_MESSAGE_CHARS = 200;
+// PGN 126985 (Alert Text) carries this through the NMEA 2000 emitter. The wire
+// can hold ~200 chars but Garmin chartplotters truncate alertTextDescription
+// around 64-80 chars on display and Raymarine 80-120. 80 guarantees the
+// headline sentence (which the prompt is engineered to produce first) shows up
+// on common MFDs; the full prose still lives in the SK notification and JSONL.
+const MAX_ALERT_MESSAGE_CHARS = 80;
 
 function truncateForN2K(message: string): string {
   if (message.length <= MAX_ALERT_MESSAGE_CHARS) return message;

@@ -32,6 +32,8 @@ interface BatterySnapshot {
   current: number | null;
   stateOfCharge: number | null;
   nominalCapacityJ: number | null;
+  voltageSession: TelemetryStats | null;
+  socSession: TelemetryStats | null;
 }
 
 export interface MaintenanceInput extends AnalysisInput {
@@ -77,7 +79,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       if (s) telemetry[path] = s;
     }
     const engineNotifications = snapshotEngineNotifications(deps, engineId);
-    const batteries = snapshotBatteries(deps);
+    const batteries = snapshotBatteries(deps, startMs, endMs);
 
     return {
       session: {
@@ -166,7 +168,7 @@ function snapshotEngineNotifications(
   return out;
 }
 
-function snapshotBatteries(deps: AnalyzerDeps): BatterySnapshot[] {
+function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): BatterySnapshot[] {
   const tree = deps.app.getSelfPath('electrical.batteries');
   if (!tree || typeof tree !== 'object') return [];
   const out: BatterySnapshot[] = [];
@@ -177,6 +179,12 @@ function snapshotBatteries(deps: AnalyzerDeps): BatterySnapshot[] {
       current: readNumberAt(node, 'current'),
       stateOfCharge: readNumberAt(node, 'capacity.stateOfCharge'),
       nominalCapacityJ: readNumberAt(node, 'capacity.nominal'),
+      voltageSession: deps.buffer.summarize(`electrical.batteries.${id}.voltage`, startMs, endMs),
+      socSession: deps.buffer.summarize(
+        `electrical.batteries.${id}.capacity.stateOfCharge`,
+        startMs,
+        endMs,
+      ),
     });
   }
   return out;
@@ -194,7 +202,7 @@ const UNIT_BY_SUFFIX: ReadonlyArray<readonly [suffix: string, unit: string]> = [
   ['.runTime', 's'],
   ['.fuel.rate', 'm3/s'],
   ['.fuel.level', 'ratio'],
-  ['.fuel.used', 'ratio'],
+  ['.fuel.used', 'm3'],
   ['.oilPressure', 'Pa'],
 ];
 

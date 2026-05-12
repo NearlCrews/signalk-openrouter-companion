@@ -103,7 +103,10 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       },
       engineStopRpmHzThreshold: 1.0,
       engineStopSettleSeconds: 10,
-      engineStartRpmHzThreshold: 5.0,
+      // 8 Hz (~480 RPM) sits comfortably above cold-cranking RPM (3-7 Hz on
+      // a diesel) and well below any marine idle (10+ Hz). A lower threshold
+      // can falsely fire engine-start during a long crank.
+      engineStartRpmHzThreshold: 8.0,
       engineStartSettleSeconds: 5,
       minSessionSeconds: 60,
       extraWatchedPaths: [],
@@ -144,7 +147,11 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       },
       lowSocPercent: 30,
       socExitHysteresis: 5,
-      cellImbalanceV: 0.1,
+      // 0.05 V matches LiFePO4 healthy-pack drift under load. 0.1 V was too
+      // high: by the time a real LFP imbalance hits 100 mV the BMS is
+      // already alarming. Lead-acid users on shore-charged systems may want
+      // to raise this (0.15-0.2 V); LFP is the assumed default.
+      cellImbalanceV: 0.05,
       imbalanceSettleSec: 60,
     },
   },

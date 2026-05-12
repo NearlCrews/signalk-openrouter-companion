@@ -121,6 +121,7 @@ const CELL_KEY_RE = /^cell(\d+)$/;
 function collectCells(node: unknown): CellSnapshot[] {
   if (!node || typeof node !== 'object') return [];
   const out: CellSnapshot[] = [];
+  // Flat form: electrical.batteries.<bank>.cell<N>.voltage
   for (const [key, val] of Object.entries(node as Record<string, unknown>)) {
     const cm = key.match(CELL_KEY_RE);
     const indexStr = cm?.[1];
@@ -128,6 +129,17 @@ function collectCells(node: unknown): CellSnapshot[] {
     const v = readNumberAt(val, 'voltage');
     if (v == null) continue;
     out.push({ index: Number.parseInt(indexStr, 10), voltage: v });
+  }
+  // Nested form: electrical.batteries.<bank>.cells.<N>.voltage
+  const cellsContainer = (node as Record<string, unknown>).cells;
+  if (cellsContainer && typeof cellsContainer === 'object') {
+    for (const [key, val] of Object.entries(cellsContainer as Record<string, unknown>)) {
+      const idx = Number.parseInt(key, 10);
+      if (!Number.isFinite(idx)) continue;
+      const v = readNumberAt(val, 'voltage');
+      if (v == null) continue;
+      out.push({ index: idx, voltage: v });
+    }
   }
   return out.sort((a, b) => a.index - b.index);
 }

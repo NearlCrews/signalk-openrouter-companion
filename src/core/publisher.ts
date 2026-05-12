@@ -1,4 +1,5 @@
 import { appendFile } from 'node:fs/promises';
+import { SKVersion } from '@signalk/server-api';
 import type { TriggerCtx } from '../analyzers/Analyzer.js';
 import type { NotificationState } from '../types.js';
 import { stringify } from './logger.js';
@@ -10,18 +11,22 @@ export interface SignalKNotificationValue {
   state: NotificationState;
   method: string[];
   message: string;
-  id: string;
 }
 
 export interface SignalKNotificationDelta {
+  context: string;
   updates: Array<{
+    $source: string;
     timestamp: string;
     values: Array<{ path: string; value: SignalKNotificationValue }>;
   }>;
 }
 
 export interface PublisherCfg {
-  app: { handleMessage(pluginId: string, delta: unknown): void };
+  app: {
+    handleMessage(pluginId: string, delta: unknown, skVersion?: SKVersion): void;
+    selfContext?: string;
+  };
   pluginId: string;
   notificationPath: string;
   notificationState: NotificationState;
@@ -48,11 +53,13 @@ interface JsonlEntry {
 export class ReportPublisher {
   constructor(private cfg: PublisherCfg) {}
 
+  // SKVersion.v1: all notification paths this plugin emits live in v1.
   async publish(text: string, meta: PublishMeta): Promise<void> {
     const now = new Date();
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
       this.makeDelta(text, this.cfg.notificationState, now, meta),
+      SKVersion.v1,
     );
     await this.appendLog(this.buildEntry(text, meta, now));
   }
@@ -64,6 +71,7 @@ export class ReportPublisher {
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
       this.makeDelta(message, 'warn', now, { analyzerId, ctx }),
+      SKVersion.v1,
     );
     await this.appendLog({
       ...this.buildEntry(message, { analyzerId, ctx }, now),
@@ -80,6 +88,7 @@ export class ReportPublisher {
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
       this.makeDelta(text, override.state, now, meta, override.path),
+      SKVersion.v1,
     );
     await this.appendLog(this.buildEntry(text, meta, now));
   }
@@ -101,12 +110,14 @@ export class ReportPublisher {
     text: string,
     state: NotificationState,
     now: Date,
-    meta: PublishMeta,
+    _meta: PublishMeta,
     path: string = this.cfg.notificationPath,
   ): SignalKNotificationDelta {
     return {
+      context: this.cfg.app.selfContext ?? 'vessels.self',
       updates: [
         {
+          $source: this.cfg.pluginId,
           timestamp: now.toISOString(),
           values: [
             {
@@ -115,7 +126,6 @@ export class ReportPublisher {
                 state,
                 method: ['visual'],
                 message: text,
-                id: `${meta.analyzerId}-${now.getTime()}`,
               },
             },
           ],

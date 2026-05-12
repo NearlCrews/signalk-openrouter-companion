@@ -114,6 +114,9 @@ describe('plugin lifecycle', () => {
 
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    // Wait for the router to be wired before invoking the PUT handler;
+    // otherwise getRouter() returns null and the callback fires FAILED.
+    await plugin.whenReady();
     const put = app.registeredPuts.find(
       (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
     );

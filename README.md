@@ -6,6 +6,8 @@
 
 A Signal K plugin that runs LLM analyzers over your vessel's propulsion and electrical telemetry via the OpenRouter API. Ships five analyzers split by purpose: state (now), transition (threshold crossings), and trend (over time). Each emits a short, plain-prose report or alert as a Signal K notification under `notifications.openrouter-companion.*` and appends every run to a JSONL log.
 
+> **Requires a paid OpenRouter API key.** LLM calls are billed per OpenRouter's token pricing. A per-day call cap (default 20) is enforced; raise or lower it in the admin UI. The trend analyzers (`aging`, `drift`) also need a co-installed [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb) instance for time-series history; state analyzers (`maintenance`, `health`, `alerts`) do not.
+
 ## Analyzers
 
 | Analyzer      | Kind       | Fires on                                       | Reads     | Notification path                                          |
@@ -29,7 +31,7 @@ Each analyzer is independently enabled in the admin UI and shares the standardiz
 - **Plain-prose output**, no markdown. Designed for the Signal K data browser's single-string notification renderer.
 - **Per-day OpenRouter call cap** so a misconfigured cron loop can't burn through credit.
 - **JSONL log** of every run at `<plugin-config-data>/signalk-openrouter-companion/reports.jsonl`.
-- **NMEA 2000 Alert Text compatibility**: alert messages truncate to 200 chars (word-boundary cut) for chartplotters that read PGN 126985 via `signalk-nmea2000-emitter-cannon`.
+- **NMEA 2000 Alert Text compatibility**: alert messages truncate to 80 chars (word-boundary cut) so the headline sentence survives the per-chartplotter display cap when bridged via `signalk-nmea2000-emitter-cannon` (PGN 126985 alertTextDescription).
 - **QuestDB-backed trend analyzers** with configurable history windows. State analyzers stay independent of QuestDB.
 - **Restart-safe**: `plugin.whenReady()` returns once the deferred router init has wired analyzers; tests await it instead of polling.
 
@@ -194,6 +196,9 @@ The `aging` and `drift` analyzers require QuestDB. On start, the plugin probes t
 
 ### Aging or drift returns "no data"
 Aging needs at least two samples on `electrical.batteries.<id>.capacity.actual` and `electrical.batteries.<id>.cycles` in the configured window. Drift needs at least 30 samples per RPM bin (in both the past week and the baseline window) to compute a delta. On a vessel newly outfitted with QuestDB, give it the full window before expecting trend output.
+
+### Drift bins are diesel-tuned
+Drift sorts RPM samples into four bins: idle (5-15 Hz, ~300-900 RPM), low cruise (15-30 Hz, ~900-1800 RPM), high cruise (30-50 Hz, ~1800-3000 RPM), top end (50+ Hz, 3000+ RPM). That maps cleanly to a marine diesel. Outboard owners will see most of their cruise and WOT (4000-6500 RPM, ~67-108 Hz) collapsed into the top-end bin, so band-level signal in that range is coarse. Per-engine configurable bin edges are on the roadmap.
 
 ### Alert message truncated with `…` suffix
 This is by design: alerts cap at 200 ASCII chars (word-boundary cut) so chartplotters reading NMEA 2000 PGN 126985 (Alert Text) via `signalk-nmea2000-emitter-cannon` get clean, in-budget text. The full message is still in `reports.jsonl`.

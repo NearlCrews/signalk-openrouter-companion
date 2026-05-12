@@ -2,7 +2,9 @@ const ENGINE_RPM_PATTERN = /^propulsion\.([^.]+)\.revolutions$/;
 const BANK_PATTERN = /^electrical\.batteries\.([^.]+)\./;
 
 export const SOC_PATH_RE = /^electrical\.batteries\.([^.]+)\.capacity\.stateOfCharge$/;
-export const CELL_VOLT_PATH_RE = /^electrical\.batteries\.([^.]+)\.cell(\d+)\.voltage$/;
+// Both BMS forms in the wild: `cellN.voltage` (vendor-extension flat form)
+// and `cells.<n>.voltage` (the more common community form). Accept both.
+export const CELL_VOLT_PATH_RE = /^electrical\.batteries\.([^.]+)\.(?:cell|cells\.)(\d+)\.voltage$/;
 
 export function discoverEngineIds(paths: string[]): string[] {
   const out = new Set<string>();
