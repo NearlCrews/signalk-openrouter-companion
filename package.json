@@ -1,7 +1,7 @@
 {
   "name": "signalk-openrouter-companion",
   "version": "0.2.0",
-  "description": "OpenRouter-powered analyzers for Signal K: engine maintenance reports and more.",
+  "description": "OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, threshold alerts, battery aging, and engine drift.",
   "main": "dist/index.js",
   "type": "module",
   "files": ["dist/", "assets/icons/", "README.md", "LICENSE", "CHANGELOG.md"],

@@ -2,22 +2,38 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-05-12
 
-### Added
+### Added (trend analyzers and configurable history)
 - Battery aging tracker: `AgingAnalyzer` produces a monthly trend report per battery bank, computing capacity-loss-per-100-cycles over two rolling windows (default 30 and 90 days) from QuestDB and ranking banks by degradation rate. Default trigger: cron `0 8 1 * *` (1st of month, 8am) plus on-demand PUT to `plugins.openrouter-companion.aging.run`. Publishes on `notifications.openrouter-companion.aging.report`.
 - Engine performance drift: `DriftAnalyzer` produces a weekly trend report comparing the past week's per-RPM-bin fuel rate and SOG against a configurable trailing baseline (default 30 days, from QuestDB), to surface gradual changes (fouled prop, dirty hull, fuel-quality drift, alternator load creep). Default trigger: cron `0 8 * * 0` (Sunday, 8am) plus on-demand PUT to `plugins.openrouter-companion.drift.run`. Publishes on `notifications.openrouter-companion.drift.report`.
 - Configurable history lookback for trend analyzers. Aging exposes `shortWindowDays` (default 30) and `longWindowDays` (default 90); drift exposes `baselineDays` (default 30). Adjustable in the admin UI within sensible bounds (aging short: 7-365 days, aging long: 7-1095 days, drift: 14-365 days).
+- `plugin.whenReady()`: returns a promise that resolves once the deferred `Promise.all([probe, budget]).then()` block in `start()` has wired the router. Replaces the brittle 'router ready' debug-log polling the integration tests were using; resets on every `start()` so a restart hands out a fresh promise.
 
-### Changed
+### Changed (prompt and query architecture)
 - `MaintenanceAnalyzer` no longer fetches 30-day baselines from QuestDB or includes them in its prompt. Per-session reports now describe just that session, with battery aging and engine drift moved to dedicated trend analyzers.
 - `HealthAnalyzer` no longer fetches 30-day SoC baselines from QuestDB or includes them in its prompt. Daily reports now describe today's battery snapshot only.
+- All analyzer prompts now require plain prose (no markdown headers, bullets, dividers) so the Signal K data browser's single-string notification renderer displays them legibly.
+- Drift `binEngineWindow` pushes RPM-binning into QuestDB via an ASOF JOIN'd CTE; previously the plugin fetched raw timeseries and binned in JS. One query per (engine, window) now returns pre-aggregated `bin/n/mean_fuel/mean_sog` rows.
+- Aging queries are batched per window across all banks: one SQL per window regardless of how many banks were discovered.
 
-### Internal
+### Internal (shared infrastructure and efficiency)
+- Shared infrastructure in `src/core/`:
+  - `paths.ts`: notification and PUT path prefixes, `notificationReportPath(id)`, `pluginPutPath(id, verb)`, `bankPathPrefix(id)`, `enginePathPrefix(id)`, `engineNotificationsPath(id)`, `alertNotificationPath(subkind)`, `bankPaths(id)`, `enginePaths(id)`, `SOG_PATH`. `types.ts::DEFAULT_OPTIONS` derives the four PUT paths and the maintenance notification path from these helpers.
+  - `triggers.ts::buildTriggers(cfg, eventMapper?)`: collapses the five copies of the cron + put + events block every analyzer was hand-rolling.
+  - `format.ts`: adds `fmtUnit` and `fmtRatio` on top of the existing `fmtNumber`/`fmtPct`.
+  - `questdb.ts`: adds `escapeSqlLiteral` and `indexColumns(r)` so the column-index lookup is one Map per QueryResult instead of `findIndex` per field. `aging.queryWindow`, `drift.binEngineWindow`, and `questdb.baselineFor` all consume both.
+  - `publisher.ts`: adds `publishReport(analyzerId, ctx, text)` shorthand. State and trend analyzers consume it.
+  - `cfg.ts::clampPositiveInt(v, fallback, opts?)`: absorbs aging's `sanitizeDays` and drift's inline baseline-days clamp.
+- Test infrastructure: `tests/_mocks.ts` adds `makeAnalyzerDeps` and `makeQuestDBStub`. All five analyzer tests consume the shared factories instead of redefining their own.
+- Drift `collectContext` parallelizes per-engine queries: each engine's thisWeek + baseline pair runs concurrently via `Promise.all`, and the engines themselves run concurrently via another `Promise.all`. Multi-engine vessels no longer pay 2N round-trip latency.
+- `RollingBuffer.evict` count-eviction is amortized: when the per-path array exceeds `maxEntriesPerPath`, trim down by 10% of cap so the next ~10% of `record()` calls skip count eviction entirely. `trimTo` is cached in the constructor so the saturated hot path stays free of arithmetic.
+- `BatteryMonitor.observeSoc` and `EngineDetector.observe` fold their per-source cutoff sweep and max scan into a single pass over the Map.
+- `src/index.ts` `subscribeWatchedPath` hoists the SOC/cell regex match to subscribe-time so the per-delta callback doesn't recompile and re-match regexes.
 - `tests/drift.test.ts` injects a typed stub matching the QuestDBClient `query` surface instead of stubbing global `fetch`. The global-fetch approach was process-wide and clashed with parallel test workers, producing intermittent flakes.
-- Simplify pass over the codebase: shared `core/triggers.ts` (`buildTriggers`), `core/paths.ts` (notification and PUT path helpers), extended `core/format.ts` (`fmtUnit`, `fmtRatio`), `core/questdb.ts` (`escapeSqlLiteral`), and `core/publisher.ts` (`publishReport` shorthand). Tests share `makeAnalyzerDeps` via `_mocks.ts`. `RollingBuffer.evict` count-eviction is now amortized.
+- Dropped dead `discoverBatteryWatchedPaths`, `ServerApiLike.subscriptionmanager`, and the test-mock `pushSubscriptionDelta`/`registeredSubscriptions` scaffolding.
 
-## [0.2.0] - 2026-05-11
+### Initial 0.2.0 (consolidation + battery analyzers)
 
 ### Added
 - Battery health monitoring: `HealthAnalyzer` produces a daily summary covering every discovered battery bank (SoC, voltage, current, cycles, cell balance, 30-day baselines if QuestDB is co-installed). Triggers: cron (default `0 8 * * *`) plus on-demand PUT to `plugins.openrouter-companion.health.run`. Publishes on `notifications.openrouter-companion.health.report`.
