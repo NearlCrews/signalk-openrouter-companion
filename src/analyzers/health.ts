@@ -1,9 +1,11 @@
+import { resolveSystemPrompt } from '../core/cfg.js';
 import { fmtNumber } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
 
 export interface HealthCfg {
   triggers: AnalyzerTriggerCfg;
@@ -45,13 +47,13 @@ export interface HealthInput {
 
 export class HealthAnalyzer implements Analyzer<HealthInput> {
   readonly id = 'health';
-  readonly title = 'Battery Health Advisor';
+  readonly title = ANALYZER_TITLES.health;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly systemPrompt: string;
 
   constructor(cfg: HealthCfg) {
     this.triggers = buildTriggers(cfg.triggers);
-    this.systemPrompt = cfg.customSystemPrompt?.trim() || HEALTH_DEFAULT_SYSTEM_PROMPT;
+    this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, HEALTH_DEFAULT_SYSTEM_PROMPT);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {

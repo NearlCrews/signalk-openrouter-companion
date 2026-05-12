@@ -14,3 +14,11 @@ export function clampPositiveInt(
   if (n > max) return max;
   return n;
 }
+
+// Pick the user's customSystemPrompt if it has non-whitespace content,
+// otherwise the analyzer's built-in default. Centralizes the trim/fallback
+// pattern that every analyzer constructor would otherwise repeat verbatim.
+export function resolveSystemPrompt(custom: string | undefined, fallback: string): string {
+  const trimmed = custom?.trim();
+  return trimmed ? trimmed : fallback;
+}

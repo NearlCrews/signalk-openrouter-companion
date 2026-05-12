@@ -4,7 +4,9 @@ import { AGING_DEFAULT_SYSTEM_PROMPT } from '../analyzers/aging.js';
 import { ALERTS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/alerts.js';
 import { DRIFT_DEFAULT_SYSTEM_PROMPT } from '../analyzers/drift.js';
 import { HEALTH_DEFAULT_SYSTEM_PROMPT } from '../analyzers/health.js';
+import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '../analyzers/ids.js';
 import { MAINTENANCE_DEFAULT_SYSTEM_PROMPT } from '../analyzers/maintenance.js';
+import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
@@ -29,17 +31,10 @@ export interface RouterLike {
 }
 
 export interface PluginRuntime {
-  cfg: {
-    openrouter: { model: string; maxCallsPerDay: number };
-    questdb: { enabled: boolean; url: string };
-    analyzers: {
-      maintenance: { customSystemPrompt?: string };
-      health: { customSystemPrompt?: string };
-      aging: { customSystemPrompt?: string };
-      drift: { customSystemPrompt?: string };
-      alerts: { customSystemPrompt?: string };
-    };
-  };
+  // PluginOptions is the storage shape; the runtime only reads, so a typed
+  // alias is enough. Avoids drift between the stripped duplicate that this
+  // type used to declare and the real option type in src/types.ts.
+  cfg: Pick<PluginOptions, 'openrouter' | 'questdb' | 'analyzers'>;
   llm: OpenRouterClient;
   budget: BudgetTracker;
   questdbLive: QuestDBClient | null;
@@ -50,7 +45,7 @@ export interface PluginRuntime {
   logPath: string;
 }
 
-export const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
+export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
   maintenance: MAINTENANCE_DEFAULT_SYSTEM_PROMPT,
   health: HEALTH_DEFAULT_SYSTEM_PROMPT,
   aging: AGING_DEFAULT_SYSTEM_PROMPT,
@@ -58,15 +53,6 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
   alerts: ALERTS_DEFAULT_SYSTEM_PROMPT,
 };
 
-const ANALYZER_META: ReadonlyArray<{ id: string; title: string }> = [
-  { id: 'maintenance', title: 'Maintenance Advisor' },
-  { id: 'health', title: 'Daily Battery Health Summary' },
-  { id: 'aging', title: 'Battery Aging Tracker' },
-  { id: 'drift', title: 'Engine Performance Drift' },
-  { id: 'alerts', title: 'Battery Threshold Alerts' },
-];
-
-const KNOWN_ANALYZER_IDS = new Set(ANALYZER_META.map((m) => m.id));
 const REPORTS_DEFAULT_LIMIT = 10;
 const REPORTS_MAX_LIMIT = 100;
 
@@ -94,7 +80,11 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
       enabled: rt.cfg.questdb.enabled,
       reachable: !rt.cfg.questdb.enabled ? null : rt.questdbProbed ? rt.questdbLive !== null : null,
     },
-    analyzers: ANALYZER_META.map((m) => ({ ...m, enabled: enabled.has(m.id) })),
+    analyzers: ANALYZER_IDS.map((id) => ({
+      id,
+      title: ANALYZER_TITLES[id],
+      enabled: enabled.has(id),
+    })),
   };
 }
 
@@ -211,12 +201,12 @@ export function registerApiRoutes(
 
   router.post('/api/analyzers/:id/fire', async (req, res) => {
     const id = req.params?.id;
-    if (!id || !KNOWN_ANALYZER_IDS.has(id)) {
+    if (!id || !isAnalyzerId(id)) {
       res.status(404).json({ ok: false, error: 'unknown analyzer' });
       return;
     }
     const rt = getRuntime();
-    if (!rt || !rt.router) {
+    if (!rt?.router) {
       res.status(503).json({ ok: false, error: 'plugin not started' });
       return;
     }
@@ -240,15 +230,13 @@ export function registerApiRoutes(
 
   router.get('/api/analyzers/:id/prompt', (req, res) => {
     const id = req.params?.id;
-    if (!id || !KNOWN_ANALYZER_IDS.has(id)) {
+    if (!id || !isAnalyzerId(id)) {
       res.status(404).json({ error: 'unknown analyzer' });
       return;
     }
     const rt = getRuntime();
     const defaultPrompt = DEFAULT_SYSTEM_PROMPTS[id];
-    const current =
-      (rt?.cfg.analyzers as Record<string, { customSystemPrompt?: string }> | undefined)?.[id]
-        ?.customSystemPrompt ?? null;
+    const current = rt?.cfg.analyzers[id]?.customSystemPrompt ?? null;
     res.json({ analyzer: id, default: defaultPrompt, current });
   });
 
@@ -287,7 +275,7 @@ export function registerApiRoutes(
 
   router.get('/api/analyzers/:id/reports', async (req, res) => {
     const id = req.params?.id;
-    if (!id || !KNOWN_ANALYZER_IDS.has(id)) {
+    if (!id || !isAnalyzerId(id)) {
       res.status(404).json({ error: 'unknown analyzer' });
       return;
     }

@@ -224,9 +224,6 @@ describe('DriftAnalyzer', () => {
 
   describe('buildPrompt', () => {
     it('surfaces the configured baseline length in the user prompt', () => {
-      // After Session D the system prompt is fully static (so it can be
-      // overridden via customSystemPrompt without losing meaning). Window
-      // lengths now live in the user prompt's data section.
       const a = new DriftAnalyzer(makeCfg({ baselineDays: 14 }));
       const out = a.buildPrompt({
         generatedAt: '2026-05-10T08:00:00.000Z',

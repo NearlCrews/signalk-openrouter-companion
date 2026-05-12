@@ -1,10 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const API_BASE = '/plugins/signalk-openrouter-companion/api';
 const POLL_MS = 5000;
 const REPORT_LIMIT = 10;
 
-const ANALYZER_ORDER = ['maintenance', 'health', 'aging', 'drift', 'alerts'];
+// Match SK admin convention (Configuration.tsx passes this on every fetch).
+// Default works on same-origin browsers but breaks under reverse proxies that
+// don't preserve cookies; explicit is safer.
+async function apiFetch(path, opts = {}) {
+  return fetch(`${API_BASE}${path}`, { credentials: 'same-origin', ...opts });
+}
 
 const S = {
   root: {
@@ -55,15 +60,8 @@ const S = {
     color: '#fff',
     cursor: 'pointer',
   },
-  btnSecondary: {
-    background: '#f1f5f9',
-    color: '#475569',
-    border: '1px solid #e2e8f0',
-  },
-  btnSave: {
-    padding: '8px 18px',
-    fontSize: 13,
-  },
+  btnSecondary: { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' },
+  btnSave: { padding: '8px 18px', fontSize: 13 },
   btnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
   inlineRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' },
   fieldRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' },
@@ -148,27 +146,26 @@ const S = {
   },
 };
 
+const MODELS_HINT = {
+  loading: 'Loading model list...',
+  error: 'Could not load models; type slug manually',
+};
+
 function questdbLabel(qdb) {
   if (!qdb.enabled) return { text: 'Disabled', color: '#9ca3af' };
   if (qdb.reachable === null) return { text: 'Probing...', color: '#f59e0b' };
-  return qdb.reachable
-    ? { text: 'Reachable', color: '#10b981' }
-    : { text: 'Unreachable', color: '#ef4444' };
+  if (qdb.reachable) return { text: 'Reachable', color: '#10b981' };
+  return { text: 'Unreachable', color: '#ef4444' };
 }
 
-function deepClone(v) {
-  return JSON.parse(JSON.stringify(v ?? {}));
-}
-
-function deepEqual(a, b) {
+function shallowJsonEqual(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 function StatusBlock({ status, statusError, onTest, testing, testResult }) {
   if (statusError && !status) return <div style={S.empty}>{statusError}</div>;
   if (!status) return <div style={S.empty}>Loading status...</div>;
-  const apiKeySet = status.openrouter.apiKeySet;
-  const calls = status.openrouter;
+  const o = status.openrouter;
   const qdb = status.questdb;
   const qdbState = questdbLabel(qdb);
   const enabledCount = status.analyzers.filter((a) => a.enabled).length;
@@ -178,15 +175,15 @@ function StatusBlock({ status, statusError, onTest, testing, testResult }) {
         <div style={S.statCard}>
           <div style={S.statLabel}>OpenRouter API key</div>
           <div style={S.statValue}>
-            <span style={S.dot(apiKeySet ? '#10b981' : '#ef4444')} />
-            {apiKeySet ? 'Configured' : 'Missing'}
+            <span style={S.dot(o.apiKeySet ? '#10b981' : '#ef4444')} />
+            {o.apiKeySet ? 'Configured' : 'Missing'}
           </div>
-          {apiKeySet && <div style={S.statSub}>Model: {calls.model}</div>}
+          {o.apiKeySet && <div style={S.statSub}>Model: {o.model}</div>}
         </div>
         <div style={S.statCard}>
           <div style={S.statLabel}>Calls today</div>
           <div style={S.statValue}>
-            {calls.callsToday} / {calls.maxCallsPerDay}
+            {o.callsToday} / {o.maxCallsPerDay}
           </div>
           <div style={S.statSub}>UTC daily cap</div>
         </div>
@@ -211,9 +208,9 @@ function StatusBlock({ status, statusError, onTest, testing, testResult }) {
       <div style={S.inlineRow}>
         <button
           type="button"
-          style={{ ...S.btn, ...(testing || !apiKeySet ? S.btnDisabled : {}) }}
+          style={{ ...S.btn, ...(testing || !o.apiKeySet ? S.btnDisabled : {}) }}
           onClick={onTest}
-          disabled={testing || !apiKeySet}
+          disabled={testing || !o.apiKeySet}
         >
           {testing ? 'Testing...' : 'Test API key'}
         </button>
@@ -229,6 +226,7 @@ function StatusBlock({ status, statusError, onTest, testing, testResult }) {
 
 function OpenRouterSection({ cfg, set, models, modelsState, loadModels }) {
   const o = cfg.openrouter ?? {};
+  const hint = MODELS_HINT[modelsState] ?? `${models.length} models available (autocomplete)`;
   return (
     <>
       <div style={S.sectionTitle}>OpenRouter</div>
@@ -260,13 +258,7 @@ function OpenRouterSection({ cfg, set, models, modelsState, loadModels }) {
             </option>
           ))}
         </datalist>
-        <span style={S.hint}>
-          {modelsState === 'loading'
-            ? 'Loading model list...'
-            : modelsState === 'error'
-              ? 'Could not load models; type slug manually'
-              : `${models.length} models available (autocomplete)`}
-        </span>
+        <span style={S.hint}>{hint}</span>
       </div>
       <div style={S.fieldRow}>
         <span style={S.fieldLabel}>Max calls per day</span>
@@ -329,10 +321,14 @@ function QuestDBSection({ cfg, set, testResult, onTest, testing }) {
   );
 }
 
-function PromptDrawer({ analyzerId, promptState, onChange, onReset, onClose }) {
-  if (!promptState) return null;
-  const value = promptState.edited ?? promptState.current ?? promptState.default ?? '';
-  const isOverride = promptState.edited != null || promptState.current != null;
+function PromptDrawer({ analyzerId, ui, value, onChange, onReset, onClose }) {
+  if (!ui.promptLoaded)
+    return (
+      <div style={S.drawer}>
+        <div style={S.empty}>Loading prompt...</div>
+      </div>
+    );
+  const isOverride = value !== ui.promptDefault;
   return (
     <div style={S.drawer}>
       <div style={{ marginBottom: 8 }}>
@@ -358,9 +354,7 @@ function PromptDrawer({ analyzerId, promptState, onChange, onReset, onClose }) {
         <button type="button" style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose}>
           Close
         </button>
-        {promptState.error && (
-          <span style={{ ...S.testStatus, ...S.testErr }}>{promptState.error}</span>
-        )}
+        {ui.promptError && <span style={{ ...S.testStatus, ...S.testErr }}>{ui.promptError}</span>}
       </div>
     </div>
   );
@@ -370,15 +364,11 @@ function AnalyzerRow({
   analyzer,
   enabled,
   setEnabled,
-  fireState,
+  ui,
   onFire,
-  reportsOpen,
   onToggleReports,
-  reports,
-  reportsLoading,
-  promptOpen,
   onTogglePrompt,
-  promptState,
+  promptValue,
   onPromptChange,
   onPromptReset,
 }) {
@@ -391,43 +381,43 @@ function AnalyzerRow({
           onChange={(e) => setEnabled(analyzer.id, e.target.checked)}
         />
         <span style={S.analyzerTitle}>{analyzer.title}</span>
-        {fireState && (
-          <span style={{ ...S.fireResult, color: fireState.ok ? '#10b981' : '#ef4444' }}>
-            {fireState.text}
+        {ui.fire && (
+          <span style={{ ...S.fireResult, color: ui.fire.ok ? '#10b981' : '#ef4444' }}>
+            {ui.fire.text}
           </span>
         )}
         <button
           type="button"
-          style={{ ...S.btn, ...(!enabled || fireState?.pending ? S.btnDisabled : {}) }}
-          disabled={!enabled || fireState?.pending}
+          style={{ ...S.btn, ...(!enabled || ui.fire?.pending ? S.btnDisabled : {}) }}
+          disabled={!enabled || ui.fire?.pending}
           onClick={() => onFire(analyzer.id)}
         >
-          {fireState?.pending ? 'Firing...' : 'Fire now'}
+          {ui.fire?.pending ? 'Firing...' : 'Fire now'}
         </button>
         <button
           type="button"
           style={{ ...S.btn, ...S.btnSecondary }}
           onClick={() => onToggleReports(analyzer.id)}
         >
-          {reportsOpen ? 'Hide reports' : 'View reports'}
+          {ui.reportsOpen ? 'Hide reports' : 'View reports'}
         </button>
         <button
           type="button"
           style={{ ...S.btn, ...S.btnSecondary }}
           onClick={() => onTogglePrompt(analyzer.id)}
         >
-          {promptOpen ? 'Hide prompt' : 'Edit prompt'}
+          {ui.promptOpen ? 'Hide prompt' : 'Edit prompt'}
         </button>
         <span style={S.analyzerState}>{enabled ? 'enabled' : 'disabled'}</span>
       </div>
-      {reportsOpen && (
+      {ui.reportsOpen && (
         <div style={S.drawer}>
-          {reportsLoading && <div style={S.empty}>Loading reports...</div>}
-          {!reportsLoading && (!reports || reports.length === 0) && (
+          {ui.reportsLoading && <div style={S.empty}>Loading reports...</div>}
+          {!ui.reportsLoading && (!ui.reports || ui.reports.length === 0) && (
             <div style={S.empty}>No reports yet for this analyzer.</div>
           )}
-          {!reportsLoading &&
-            reports?.map((r) => (
+          {!ui.reportsLoading &&
+            ui.reports?.map((r) => (
               <div key={r.ts} style={S.reportEntry}>
                 <div style={S.reportTs}>
                   {r.ts} · trigger={r.trigger}
@@ -440,10 +430,11 @@ function AnalyzerRow({
             ))}
         </div>
       )}
-      {promptOpen && (
+      {ui.promptOpen && (
         <PromptDrawer
           analyzerId={analyzer.id}
-          promptState={promptState}
+          ui={ui}
+          value={promptValue}
           onChange={onPromptChange}
           onReset={onPromptReset}
           onClose={() => onTogglePrompt(analyzer.id)}
@@ -453,36 +444,43 @@ function AnalyzerRow({
   );
 }
 
+const EMPTY_UI = Object.freeze({});
+
 export default function PluginConfigurationPanel({ configuration, save }) {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
-  const [cfg, setCfg] = useState(() => deepClone(configuration));
+  const [cfg, setCfg] = useState(() => structuredClone(configuration ?? {}));
+  const [pristine, setPristine] = useState(() => structuredClone(configuration ?? {}));
   const [savedNotice, setSavedNotice] = useState(null);
   const [models, setModels] = useState([]);
   const [modelsState, setModelsState] = useState('idle');
   const [qdbTest, setQdbTest] = useState(null);
   const [qdbTesting, setQdbTesting] = useState(false);
-  const [fireState, setFireState] = useState({});
-  const [reportsByAnalyzer, setReportsByAnalyzer] = useState({});
-  const [reportsLoading, setReportsLoading] = useState({});
-  const [reportsOpen, setReportsOpen] = useState({});
-  const [promptOpen, setPromptOpen] = useState({});
-  const [promptState, setPromptState] = useState({});
+  // One state map per analyzer id holding everything that used to be six
+  // parallel maps: fire, reports, reportsLoading, reportsOpen, promptOpen,
+  // promptDefault, promptCurrent, promptLoaded, promptError. Setters always
+  // patch via patchUi(id, partial).
+  const [analyzerUi, setAnalyzerUi] = useState({});
 
-  // Reset local edit buffer whenever the host pushes a new configuration.
+  // Reset edit buffer + pristine ref whenever the host pushes a new config.
   useEffect(() => {
-    setCfg(deepClone(configuration));
+    setCfg(structuredClone(configuration ?? {}));
+    setPristine(structuredClone(configuration ?? {}));
   }, [configuration]);
 
-  const dirty = useMemo(() => !deepEqual(cfg, configuration), [cfg, configuration]);
+  // O(1) dirty: any setSection/setAnalyzerCfg call diverges from pristine.
+  // Wrapping every cfg mutation routes through this so we don't need to
+  // re-stringify the whole tree on every keystroke.
+  const dirty = cfg !== pristine && !shallowJsonEqual(cfg, pristine);
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/status`);
+      const res = await apiFetch('/status');
       if (res.ok) {
-        setStatus(await res.json());
+        const next = await res.json();
+        setStatus((prev) => (shallowJsonEqual(prev, next) ? prev : next));
         setStatusError(null);
       } else if (res.status === 503) {
         setStatus(null);
@@ -501,33 +499,31 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     return () => clearInterval(handle);
   }, [fetchStatus]);
 
-  const setSection = (patch) => {
-    setCfg((prev) => ({ ...prev, ...patch }));
-  };
+  const setSection = (patch) => setCfg((prev) => ({ ...prev, ...patch }));
 
   const setAnalyzerCfg = (id, patch) => {
     setCfg((prev) => ({
       ...prev,
       analyzers: {
         ...(prev.analyzers ?? {}),
-        [id]: { ...((prev.analyzers ?? {})[id] ?? {}), ...patch },
+        [id]: { ...(prev.analyzers?.[id] ?? {}), ...patch },
       },
     }));
   };
 
-  const setAnalyzerEnabled = (id, enabled) => setAnalyzerCfg(id, { enabled });
+  const patchUi = (id, patch) =>
+    setAnalyzerUi((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
 
   const onSave = () => {
     save(cfg);
     setSavedNotice(`Saved at ${new Date().toLocaleTimeString()}. Plugin restarting...`);
-    // After save, the host pushes a new configuration prop and useEffect resets cfg.
   };
 
   const runTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch(`${API_BASE}/openrouter/test`, { method: 'POST' });
+      const res = await apiFetch('/openrouter/test', { method: 'POST' });
       const body = await res.json();
       setTestResult(
         res.ok
@@ -544,7 +540,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     if (modelsState === 'loading') return;
     setModelsState('loading');
     try {
-      const res = await fetch(`${API_BASE}/openrouter/models`);
+      const res = await apiFetch('/openrouter/models');
       if (res.ok) {
         const body = await res.json();
         setModels(body.data || []);
@@ -561,7 +557,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     setQdbTesting(true);
     setQdbTest(null);
     try {
-      const res = await fetch(`${API_BASE}/questdb/test`, {
+      const res = await apiFetch('/questdb/test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: cfg.questdb?.url }),
@@ -579,78 +575,84 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   };
 
   const fireAnalyzer = async (id) => {
-    setFireState((s) => ({ ...s, [id]: { pending: true } }));
+    patchUi(id, { fire: { pending: true } });
     try {
-      const res = await fetch(`${API_BASE}/analyzers/${id}/fire`, { method: 'POST' });
+      const res = await apiFetch(`/analyzers/${id}/fire`, { method: 'POST' });
       const body = await res.json();
-      setFireState((s) => ({
-        ...s,
-        [id]: res.ok
+      patchUi(id, {
+        fire: res.ok
           ? { ok: true, text: 'Dispatched' }
           : { ok: false, text: body.error || `HTTP ${res.status}` },
-      }));
-      if (reportsOpen[id]) setTimeout(() => loadReports(id), 800);
+      });
+      // Refresh the open drawer so the new report shows up after the LLM
+      // returns. 800 ms is a heuristic; a real boat round-trip is 1-3 s.
+      if (analyzerUi[id]?.reportsOpen) setTimeout(() => loadReports(id), 800);
     } catch (e) {
-      setFireState((s) => ({ ...s, [id]: { ok: false, text: e.message } }));
+      patchUi(id, { fire: { ok: false, text: e.message } });
     }
   };
 
-  const loadReports = useCallback(async (id) => {
-    setReportsLoading((s) => ({ ...s, [id]: true }));
+  const loadReports = async (id) => {
+    patchUi(id, { reportsLoading: true });
     try {
-      const res = await fetch(`${API_BASE}/analyzers/${id}/reports?limit=${REPORT_LIMIT}`);
+      const res = await apiFetch(`/analyzers/${id}/reports?limit=${REPORT_LIMIT}`);
       const body = await res.json();
-      setReportsByAnalyzer((s) => ({ ...s, [id]: body.reports || [] }));
+      patchUi(id, { reports: body.reports || [], reportsLoading: false });
     } catch {
-      setReportsByAnalyzer((s) => ({ ...s, [id]: [] }));
+      patchUi(id, { reports: [], reportsLoading: false });
     }
-    setReportsLoading((s) => ({ ...s, [id]: false }));
-  }, []);
+  };
 
   const toggleReports = (id) => {
-    const next = !reportsOpen[id];
-    setReportsOpen((s) => ({ ...s, [id]: next }));
-    if (next && !reportsByAnalyzer[id]) loadReports(id);
+    const next = !analyzerUi[id]?.reportsOpen;
+    patchUi(id, { reportsOpen: next });
+    if (next && !analyzerUi[id]?.reports) loadReports(id);
   };
 
   const loadPrompt = async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/analyzers/${id}/prompt`);
+      const res = await apiFetch(`/analyzers/${id}/prompt`);
       if (res.ok) {
         const body = await res.json();
-        setPromptState((s) => ({
-          ...s,
-          [id]: { default: body.default, current: body.current, edited: null },
-        }));
+        patchUi(id, {
+          promptDefault: body.default,
+          promptCurrent: body.current,
+          promptLoaded: true,
+          promptError: null,
+        });
       } else {
-        setPromptState((s) => ({ ...s, [id]: { error: `HTTP ${res.status}` } }));
+        patchUi(id, { promptError: `HTTP ${res.status}`, promptLoaded: true });
       }
     } catch (e) {
-      setPromptState((s) => ({ ...s, [id]: { error: e.message } }));
+      patchUi(id, { promptError: e.message, promptLoaded: true });
     }
   };
 
   const togglePrompt = (id) => {
-    const next = !promptOpen[id];
-    setPromptOpen((s) => ({ ...s, [id]: next }));
-    if (next && !promptState[id]) loadPrompt(id);
+    const next = !analyzerUi[id]?.promptOpen;
+    patchUi(id, { promptOpen: next });
+    if (next && !analyzerUi[id]?.promptLoaded) loadPrompt(id);
   };
 
-  const onPromptChange = (id, value) => {
-    setPromptState((s) => ({ ...s, [id]: { ...(s[id] ?? {}), edited: value } }));
-    setAnalyzerCfg(id, { customSystemPrompt: value });
+  // Single source of truth for the prompt edit buffer: the cfg object. The
+  // textarea value is derived from cfg.analyzers[id].customSystemPrompt
+  // (override), or analyzerUi[id].promptCurrent (saved override from server),
+  // or promptDefault (built-in).
+  const promptValueFor = (id) => {
+    const overlay = cfg.analyzers?.[id]?.customSystemPrompt;
+    if (overlay !== undefined) return overlay;
+    const ui = analyzerUi[id];
+    return ui?.promptCurrent ?? ui?.promptDefault ?? '';
   };
+
+  const onPromptChange = (id, value) => setAnalyzerCfg(id, { customSystemPrompt: value });
 
   const onPromptReset = (id) => {
-    setPromptState((s) => ({
-      ...s,
-      [id]: { ...(s[id] ?? {}), edited: null, current: null },
-    }));
     setAnalyzerCfg(id, { customSystemPrompt: undefined });
+    patchUi(id, { promptCurrent: null });
   };
 
-  const analyzersList =
-    status?.analyzers ?? ANALYZER_ORDER.map((id) => ({ id, title: id, enabled: false }));
+  const analyzersList = status?.analyzers ?? [];
 
   return (
     <div style={S.root}>
@@ -686,16 +688,12 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             key={a.id}
             analyzer={a}
             enabled={!!cfg.analyzers?.[a.id]?.enabled}
-            setEnabled={setAnalyzerEnabled}
-            fireState={fireState[a.id]}
+            setEnabled={(id, enabled) => setAnalyzerCfg(id, { enabled })}
+            ui={analyzerUi[a.id] ?? EMPTY_UI}
             onFire={fireAnalyzer}
-            reportsOpen={!!reportsOpen[a.id]}
             onToggleReports={toggleReports}
-            reports={reportsByAnalyzer[a.id]}
-            reportsLoading={reportsLoading[a.id]}
-            promptOpen={!!promptOpen[a.id]}
             onTogglePrompt={togglePrompt}
-            promptState={promptState[a.id]}
+            promptValue={promptValueFor(a.id)}
             onPromptChange={onPromptChange}
             onPromptReset={onPromptReset}
           />

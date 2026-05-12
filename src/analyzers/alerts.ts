@@ -1,3 +1,4 @@
+import { resolveSystemPrompt } from '../core/cfg.js';
 import { fmtRatio, fmtUnit } from '../core/format.js';
 import {
   alertIdFor,
@@ -15,6 +16,7 @@ import type {
   TriggerCtx,
   TriggerSpec,
 } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
 
 // PGN 126985 (Alert Text Description) is the field chartplotters display.
 // Real-world caps observed across MFDs (Raymarine Axiom ~60, B&G Zeus ~70,
@@ -51,13 +53,13 @@ export interface AlertCfg {
   customSystemPrompt?: string;
 }
 
-// MAX_ALERT_MESSAGE_CHARS is mentioned literally in the prompt below so a
-// custom override can still see the safe headline budget. If we bumped the
-// const we'd want to update the prompt string too.
+// Built once at module load using the MAX_ALERT_MESSAGE_CHARS constant so
+// bumping the constant updates the prompt automatically. Custom overrides
+// see whatever budget the operator typed.
 export const ALERTS_DEFAULT_SYSTEM_PROMPT = [
   'You are a marine electrical specialist reading raw battery telemetry from a Signal K server.',
   'A battery bank just crossed a state threshold.',
-  'Write a very short headline (under 64 characters) that will display on a chartplotter\'s NMEA 2000 alert. Lead with the bank id and what crossed, e.g., "House SoC 38%" or "Starter cell imbalance 0.12 V".',
+  `Write a very short headline (under ${MAX_ALERT_MESSAGE_CHARS} characters) that will display on a chartplotter's NMEA 2000 alert. Lead with the bank id and what crossed, e.g., "House SoC 38%" or "Starter cell imbalance 0.12 V".`,
   'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
   'Stick to facts present in the data. Do not speculate beyond the numbers.',
   'Output is rendered on a chartplotter and in the Signal K data browser. Plain prose, no markdown, no headers, no bullets. One short sentence.',
@@ -77,7 +79,7 @@ export interface AlertInput {
 
 export class AlertAnalyzer implements Analyzer<AlertInput> {
   readonly id = 'alerts';
-  readonly title = 'Battery Alerts';
+  readonly title = ANALYZER_TITLES.alerts;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly systemPrompt: string;
 
@@ -85,7 +87,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     this.triggers = buildTriggers(cfg.triggers, (sub) =>
       isBatteryEventKind(sub) ? { kind: 'battery-event', subkind: sub } : null,
     );
-    this.systemPrompt = cfg.customSystemPrompt?.trim() || ALERTS_DEFAULT_SYSTEM_PROMPT;
+    this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, ALERTS_DEFAULT_SYSTEM_PROMPT);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {

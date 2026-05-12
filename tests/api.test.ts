@@ -2,11 +2,18 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Analyzer } from '../src/analyzers/Analyzer.js';
+import type { AnalyzerId } from '../src/analyzers/ids.js';
 import type { PluginRuntime, RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
 import { _resetOpenRouterModelsCache, registerApiRoutes } from '../src/core/api.js';
 import { OpenRouterError } from '../src/core/openrouter.js';
 import createPlugin from '../src/index.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  type MockApp,
+  makeMockApp,
+  makePluginRuntime,
+  makeTmpDir,
+} from './_mocks.js';
 
 interface RecordedRoute {
   method: 'get' | 'post';
@@ -152,41 +159,17 @@ describe('plugin REST API', () => {
   });
 
   describe('/api/openrouter/test handler', () => {
-    function makeRuntime(overrides: Partial<PluginRuntime> = {}): PluginRuntime {
-      const calls: string[] = [];
-      return {
-        cfg: {
-          openrouter: { model: 'm', maxCallsPerDay: 100 },
-          questdb: { enabled: false, url: 'http://localhost:9000' },
-          analyzers: {
-            maintenance: {},
-            health: {},
-            aging: {},
-            drift: {},
-            alerts: {},
-          },
-        },
-        llm: {
-          complete: async () => ({
-            text: 'OK',
-            model: 'anthropic/claude-haiku-4.5',
-            usage: { promptTokens: 5, completionTokens: 1, totalTokens: 6 },
-            raw: {},
-          }),
-        } as never,
-        budget: { callsToday: () => calls.length } as never,
-        questdbLive: null,
-        questdbProbed: false,
-        analyzers: [],
-        apiKeySet: true,
-        router: null,
-        logPath: '/tmp/unused.jsonl',
-        ...overrides,
-      };
-    }
+    const okLlm = {
+      complete: async () => ({
+        text: 'OK',
+        model: 'anthropic/claude-haiku-4.5',
+        usage: { promptTokens: 5, completionTokens: 1, totalTokens: 6 },
+        raw: {},
+      }),
+    } as never as PluginRuntime['llm'];
 
     it('returns ok+token usage on a successful ping', async () => {
-      const rt = makeRuntime();
+      const rt = makePluginRuntime({ llm: okLlm });
       const { router, routes } = makeRecordingRouter();
       registerApiRoutes(router, () => rt);
       const r = await call(routes, 'post', '/api/openrouter/test');
@@ -200,7 +183,7 @@ describe('plugin REST API', () => {
     });
 
     it('returns 400 when no API key is configured', async () => {
-      const rt = makeRuntime({ apiKeySet: false });
+      const rt = makePluginRuntime({ llm: okLlm, apiKeySet: false });
       const { router, routes } = makeRecordingRouter();
       registerApiRoutes(router, () => rt);
       const r = await call(routes, 'post', '/api/openrouter/test');
@@ -209,7 +192,7 @@ describe('plugin REST API', () => {
     });
 
     it('passes through OpenRouter HTTP status on error', async () => {
-      const rt = makeRuntime({
+      const rt = makePluginRuntime({
         llm: {
           complete: async () => {
             throw new OpenRouterError(401, 'invalid key');
@@ -235,27 +218,10 @@ describe('plugin REST API', () => {
         (async (kind: string, ctx: unknown): Promise<void> => {
           calls.push({ kind, ctx });
         });
-      const rt: PluginRuntime = {
-        cfg: {
-          openrouter: { model: 'm', maxCallsPerDay: 100 },
-          questdb: { enabled: false, url: 'http://localhost:9000' },
-          analyzers: {
-            maintenance: {},
-            health: {},
-            aging: {},
-            drift: {},
-            alerts: {},
-          },
-        },
-        llm: {} as never,
-        budget: { callsToday: () => 0 } as never,
-        questdbLive: null,
-        questdbProbed: false,
+      const rt = makePluginRuntime({
         analyzers: opts.enabledIds.map(fakeAnalyzer),
-        apiKeySet: true,
         router: { dispatch } as never,
-        logPath: '/tmp/unused.jsonl',
-      };
+      });
       return { rt, calls };
     }
 
@@ -323,27 +289,10 @@ describe('plugin REST API', () => {
 
   describe('/api/analyzers/:id/reports handler', () => {
     function makeRuntimeWithLog(logPath: string): PluginRuntime {
-      return {
-        cfg: {
-          openrouter: { model: 'm', maxCallsPerDay: 100 },
-          questdb: { enabled: false, url: 'http://localhost:9000' },
-          analyzers: {
-            maintenance: {},
-            health: {},
-            aging: {},
-            drift: {},
-            alerts: {},
-          },
-        },
-        llm: {} as never,
-        budget: { callsToday: () => 0 } as never,
-        questdbLive: null,
-        questdbProbed: false,
+      return makePluginRuntime({
         analyzers: [fakeAnalyzer('health'), fakeAnalyzer('maintenance')],
-        apiKeySet: true,
-        router: null,
         logPath,
-      };
+      });
     }
 
     it('returns 404 for unknown analyzer', async () => {
@@ -421,30 +370,9 @@ describe('plugin REST API', () => {
   });
 
   describe('/api/analyzers/:id/prompt handler', () => {
-    function makeRuntimeWithPromptOverride(id: string, custom?: string): PluginRuntime {
-      const analyzersCfg: Record<string, { customSystemPrompt?: string }> = {
-        maintenance: {},
-        health: {},
-        aging: {},
-        drift: {},
-        alerts: {},
-      };
-      if (custom) analyzersCfg[id] = { customSystemPrompt: custom };
-      return {
-        cfg: {
-          openrouter: { model: 'm', maxCallsPerDay: 100 },
-          questdb: { enabled: false, url: 'http://localhost:9000' },
-          analyzers: analyzersCfg as PluginRuntime['cfg']['analyzers'],
-        },
-        llm: {} as never,
-        budget: { callsToday: () => 0 } as never,
-        questdbLive: null,
-        questdbProbed: false,
-        analyzers: [],
-        apiKeySet: true,
-        router: null,
-        logPath: '/tmp/unused.jsonl',
-      };
+    function makeRuntimeWithPromptOverride(id: AnalyzerId, custom?: string): PluginRuntime {
+      const analyzers = custom ? { [id]: { customSystemPrompt: custom } } : {};
+      return makePluginRuntime({ cfg: { analyzers } });
     }
 
     it('returns 404 for unknown analyzer', async () => {
@@ -491,29 +419,7 @@ describe('plugin REST API', () => {
       _resetOpenRouterModelsCache();
     });
 
-    function emptyRuntime(): PluginRuntime {
-      return {
-        cfg: {
-          openrouter: { model: 'm', maxCallsPerDay: 100 },
-          questdb: { enabled: false, url: 'http://localhost:9000' },
-          analyzers: {
-            maintenance: {},
-            health: {},
-            aging: {},
-            drift: {},
-            alerts: {},
-          },
-        },
-        llm: {} as never,
-        budget: { callsToday: () => 0 } as never,
-        questdbLive: null,
-        questdbProbed: false,
-        analyzers: [],
-        apiKeySet: true,
-        router: null,
-        logPath: '/tmp/unused.jsonl',
-      };
-    }
+    const emptyRuntime = (): PluginRuntime => makePluginRuntime();
 
     it('returns 503 before plugin start', async () => {
       const { router, routes } = makeRecordingRouter();
@@ -570,29 +476,8 @@ describe('plugin REST API', () => {
       vi.unstubAllGlobals();
     });
 
-    function makeRuntime(url: string): PluginRuntime {
-      return {
-        cfg: {
-          openrouter: { model: 'm', maxCallsPerDay: 100 },
-          questdb: { enabled: true, url },
-          analyzers: {
-            maintenance: {},
-            health: {},
-            aging: {},
-            drift: {},
-            alerts: {},
-          },
-        },
-        llm: {} as never,
-        budget: { callsToday: () => 0 } as never,
-        questdbLive: null,
-        questdbProbed: false,
-        analyzers: [],
-        apiKeySet: true,
-        router: null,
-        logPath: '/tmp/unused.jsonl',
-      };
-    }
+    const makeRuntime = (url: string): PluginRuntime =>
+      makePluginRuntime({ cfg: { questdb: { enabled: true, url } } });
 
     it('returns 400 when no url and no plugin runtime', async () => {
       const { router, routes } = makeRecordingRouter();

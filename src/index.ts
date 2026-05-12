@@ -230,20 +230,9 @@ export default function createPlugin(app: ServerApiLike): {
             });
             runtime = {
               cfg: {
-                openrouter: {
-                  model: cfg.openrouter.model,
-                  maxCallsPerDay: cfg.openrouter.maxCallsPerDay,
-                },
-                questdb: { enabled: cfg.questdb.enabled, url: cfg.questdb.url },
-                analyzers: {
-                  maintenance: {
-                    customSystemPrompt: cfg.analyzers.maintenance.customSystemPrompt,
-                  },
-                  health: { customSystemPrompt: cfg.analyzers.health.customSystemPrompt },
-                  aging: { customSystemPrompt: cfg.analyzers.aging.customSystemPrompt },
-                  drift: { customSystemPrompt: cfg.analyzers.drift.customSystemPrompt },
-                  alerts: { customSystemPrompt: cfg.analyzers.alerts.customSystemPrompt },
-                },
+                openrouter: cfg.openrouter,
+                questdb: cfg.questdb,
+                analyzers: cfg.analyzers,
               },
               llm,
               budget,

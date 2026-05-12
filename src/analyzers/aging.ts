@@ -1,4 +1,4 @@
-import { clampPositiveInt } from '../core/cfg.js';
+import { clampPositiveInt, resolveSystemPrompt } from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
 import { asFiniteNumber, fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
@@ -10,6 +10,7 @@ import {
   type AnalyzerTriggerCfg,
 } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
 
 export interface AgingCfg {
   triggers: AnalyzerTriggerCfg;
@@ -18,9 +19,8 @@ export interface AgingCfg {
   customSystemPrompt?: string;
 }
 
-// Default prompt is generic about window length because shortWindowDays /
-// longWindowDays are configurable: the actual window deltas appear in the
-// user prompt's data block so the model still has the numbers it needs.
+// Static: window lengths come through the user prompt's data block, not the
+// system prompt, so customSystemPrompt overrides do not lose any numbers.
 export const AGING_DEFAULT_SYSTEM_PROMPT = [
   'You are a marine LiFePO4 battery specialist reviewing capacity degradation trends from a Signal K vessel.',
   'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
@@ -75,7 +75,7 @@ function resolveWindowDays(cfg: AgingCfg): readonly number[] {
 
 export class AgingAnalyzer implements Analyzer<AgingInput> {
   readonly id = 'aging';
-  readonly title = 'Battery Aging Tracker';
+  readonly title = ANALYZER_TITLES.aging;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly windowDays: readonly number[];
   private readonly systemPrompt: string;
@@ -83,7 +83,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   constructor(cfg: AgingCfg) {
     this.triggers = buildTriggers(cfg.triggers);
     this.windowDays = resolveWindowDays(cfg);
-    this.systemPrompt = cfg.customSystemPrompt?.trim() || AGING_DEFAULT_SYSTEM_PROMPT;
+    this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, AGING_DEFAULT_SYSTEM_PROMPT);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {

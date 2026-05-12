@@ -1,4 +1,4 @@
-import { clampPositiveInt } from '../core/cfg.js';
+import { clampPositiveInt, resolveSystemPrompt } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
 import { asFiniteNumber, fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
@@ -6,6 +6,7 @@ import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
 
 const DAY_MS = 86_400_000;
 const PAST_WEEK_DAYS = 7;
@@ -28,9 +29,8 @@ export interface DriftCfg {
   customSystemPrompt?: string;
 }
 
-// Default prompt is generic about window length because baselineDays is
-// configurable; the actual past-week / baseline lengths appear in the user
-// prompt's data block so the model still sees them.
+// Static: window lengths come through the user prompt's data block, not the
+// system prompt, so customSystemPrompt overrides do not lose any numbers.
 export const DRIFT_DEFAULT_SYSTEM_PROMPT = [
   'You are an experienced marine engine specialist comparing recent engine performance to its longer-term baseline.',
   'Units: propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for this path: do not convert to rad/s). fuel.rate is in m^3/s. navigation.speedOverGround is in m/s.',
@@ -94,7 +94,7 @@ export interface DriftInput extends AnalysisInput {
 
 export class DriftAnalyzer implements Analyzer<DriftInput> {
   readonly id = 'drift';
-  readonly title = 'Engine Performance Drift';
+  readonly title = ANALYZER_TITLES.drift;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly baselineDays: number;
   private readonly systemPrompt: string;
@@ -102,7 +102,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(cfg.triggers);
     this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS);
-    this.systemPrompt = cfg.customSystemPrompt?.trim() || DRIFT_DEFAULT_SYSTEM_PROMPT;
+    this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, DRIFT_DEFAULT_SYSTEM_PROMPT);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {

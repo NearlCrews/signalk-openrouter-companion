@@ -1,3 +1,4 @@
+import { resolveSystemPrompt } from '../core/cfg.js';
 import { WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
 import {
@@ -11,6 +12,7 @@ import { readNumberAt, readValueAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
 
 export interface MaintenanceCfg {
   triggers: AnalyzerTriggerCfg;
@@ -66,7 +68,7 @@ const MAINT_FALLBACK_WINDOW_MS = 30 * 60 * 1000;
 
 export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   readonly id = 'maintenance';
-  readonly title = 'Maintenance Advisor';
+  readonly title = ANALYZER_TITLES.maintenance;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly minSessionSeconds: number;
   private readonly systemPrompt: string;
@@ -76,7 +78,10 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       sub === 'engine-stop' ? { kind: 'engine-stop' } : null,
     );
     this.minSessionSeconds = cfg.minSessionSeconds;
-    this.systemPrompt = cfg.customSystemPrompt?.trim() || MAINTENANCE_DEFAULT_SYSTEM_PROMPT;
+    this.systemPrompt = resolveSystemPrompt(
+      cfg.customSystemPrompt,
+      MAINTENANCE_DEFAULT_SYSTEM_PROMPT,
+    );
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<MaintenanceInput | null> {

@@ -2,11 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { vi } from 'vitest';
-import type { AnalyzerDeps } from '../src/analyzers/Analyzer.js';
+import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
+import type { PluginRuntime } from '../src/core/api.js';
 import type { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
 import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
+import { DEFAULT_OPTIONS } from '../src/types.js';
 
 export type Listener<T> = (v: T) => void;
 
@@ -172,6 +174,44 @@ export function makeAnalyzerDeps(
     budget: {} as never,
     llm: {} as never,
     logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
+  };
+}
+
+// Build a PluginRuntime literal with sane defaults. Tests override only the
+// fields they care about; everything else comes from DEFAULT_OPTIONS and
+// zero-cost stubs. Replaces six near-identical literals that had grown
+// across tests/api.test.ts.
+export interface MakePluginRuntimeOpts {
+  apiKeySet?: boolean;
+  analyzers?: Analyzer[];
+  questdbLive?: PluginRuntime['questdbLive'];
+  questdbProbed?: boolean;
+  router?: PluginRuntime['router'];
+  llm?: PluginRuntime['llm'];
+  budget?: PluginRuntime['budget'];
+  logPath?: string;
+  cfg?: {
+    openrouter?: Partial<PluginRuntime['cfg']['openrouter']>;
+    questdb?: Partial<PluginRuntime['cfg']['questdb']>;
+    analyzers?: Partial<PluginRuntime['cfg']['analyzers']>;
+  };
+}
+
+export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRuntime {
+  return {
+    cfg: {
+      openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(opts.cfg?.openrouter ?? {}) },
+      questdb: { ...DEFAULT_OPTIONS.questdb, ...(opts.cfg?.questdb ?? {}) },
+      analyzers: { ...DEFAULT_OPTIONS.analyzers, ...(opts.cfg?.analyzers ?? {}) },
+    },
+    llm: (opts.llm ?? ({} as never)) as PluginRuntime['llm'],
+    budget: (opts.budget ?? ({ callsToday: () => 0 } as never)) as PluginRuntime['budget'],
+    questdbLive: opts.questdbLive ?? null,
+    questdbProbed: opts.questdbProbed ?? false,
+    analyzers: opts.analyzers ?? [],
+    apiKeySet: opts.apiKeySet ?? true,
+    router: opts.router ?? null,
+    logPath: opts.logPath ?? '/tmp/unused.jsonl',
   };
 }
 
