@@ -22,7 +22,7 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   - `paths.ts`: notification and PUT path prefixes, `notificationReportPath(id)`, `pluginPutPath(id, verb)`, `bankPathPrefix(id)`, `enginePathPrefix(id)`, `engineNotificationsPath(id)`, `alertNotificationPath(subkind)`, `bankPaths(id)`, `enginePaths(id)`, `SOG_PATH`. `types.ts::DEFAULT_OPTIONS` derives the four PUT paths and the maintenance notification path from these helpers.
   - `triggers.ts::buildTriggers(cfg, eventMapper?)`: collapses the five copies of the cron + put + events block every analyzer was hand-rolling.
   - `format.ts`: adds `fmtUnit` and `fmtRatio` on top of the existing `fmtNumber`/`fmtPct`.
-  - `questdb.ts`: adds `escapeSqlLiteral` and `indexColumns(r)` so the column-index lookup is one Map per QueryResult instead of `findIndex` per field. `aging.queryWindow`, `drift.binEngineWindow`, and `questdb.baselineFor` all consume both.
+  - `questdb.ts`: adds `escapeSqlLiteral` and `indexColumns(r)` so the column-index lookup is one Map per QueryResult instead of `findIndex` per field. `aging.queryWindow` and `drift.binEngineWindow` both consume them.
   - `publisher.ts`: adds `publishReport(analyzerId, ctx, text)` shorthand. State and trend analyzers consume it.
   - `cfg.ts::clampPositiveInt(v, fallback, opts?)`: absorbs aging's `sanitizeDays` and drift's inline baseline-days clamp.
 - Test infrastructure: `tests/_mocks.ts` adds `makeAnalyzerDeps` and `makeQuestDBStub`. All five analyzer tests consume the shared factories instead of redefining their own.
@@ -32,6 +32,23 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 - `src/index.ts` `subscribeWatchedPath` hoists the SOC/cell regex match to subscribe-time so the per-delta callback doesn't recompile and re-match regexes.
 - `tests/drift.test.ts` injects a typed stub matching the QuestDBClient `query` surface instead of stubbing global `fetch`. The global-fetch approach was process-wide and clashed with parallel test workers, producing intermittent flakes.
 - Dropped dead `discoverBatteryWatchedPaths`, `ServerApiLike.subscriptionmanager`, and the test-mock `pushSubscriptionDelta`/`registeredSubscriptions` scaffolding.
+- Third simplify pass over the entire codebase:
+  - `paths.ts` adds `BATTERIES_PARENT_PATH` and `PROPULSION_PREFIX`. health, alerts, and maintenance read the parent path through the constant; maintenance.snapshotBatteries uses `bankPaths(id).voltage` and `.soc`; listWatchedPaths uses `PROPULSION_PREFIX`.
+  - `format.ts::asFiniteNumber(v)` consolidates aging's `numOrNull` and three inline `typeof === number && isFinite ? v : null|0` checks in `drift.binEngineWindow`.
+  - `skNode.ts::readValueAt(node, subpath)` for non-numeric leaf reads. `maintenance.snapshotEngineNotifications` consumes it.
+  - `types.ts::AGING_DEFAULT_SHORT_DAYS`, `AGING_DEFAULT_LONG_DAYS`, `DRIFT_DEFAULT_BASELINE_DAYS` are the source-of-truth for both `DEFAULT_OPTIONS` and analyzer constructor clamp fallbacks.
+  - `AnalyzerDeps.requestRestart` and `QuestDBClient.baselineFor` deleted (both were dead in src; `baselineFor` only existed in tests). The four `baselineFor` test cases removed.
+  - `MaintenanceAnalyzer` drops `private cfg`, stores only the `minSessionSeconds` value it actually reads. `MAINT_FALLBACK_WINDOW_MS` named (was bare `30 * 60 * 1000`).
+  - `alerts.ts::ENTER_SUBKINDS` now a `ReadonlySet` with `.has()` membership.
+  - `drift.ts::emptyBins()` extracts the per-bin defaults Object.fromEntries dance into one place.
+  - `types.ts::clone` uses native `structuredClone` (Node 22+).
+  - `index.ts` passes `app` directly to `AnalyzerDeps` (was a `{ getSelfPath, selfContext }` re-export literal).
+  - `AnalyzerDeps.okStatus`: router uses it to recover from the budget-exhausted state with the same analyzer-count-aware banner that the startup path uses.
+  - `BatteryMonitor` and `EngineDetector` hoist `Sec * 1000` conversions and SoC threshold ratios into constructor-time fields; per-delta hot path no longer recomputes them.
+  - `TriggerRouter.setStatus` tracks `lastStatus` and skips no-op SK admin-UI calls.
+  - `tests/_mocks.ts::MOCK_SELF_CONTEXT` exported as a named constant.
+  - `tests/openrouter.test.ts::makeClient(overrides?)` helper compresses ~40 lines of duplicated 7-field cfg literals.
+  - All non-null assertions (`!`) in tests replaced with explicit null guards or destructure-with-throw. Lint is at zero warnings.
 
 ### Initial 0.2.0 (consolidation + battery analyzers)
 
@@ -58,7 +75,7 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 - Plugin lifecycle now creates an `AbortController` per `start()` cycle and aborts on `stop()`. The QuestDB probe at startup honors this signal so a slow probe doesn't outlive the plugin.
 - `TriggerRouter` now updates plugin status to `"Running, budget exhausted for today"` when the per-day cap is hit, and resets to `"Running"` on the next successful call. Previously this only logged at debug.
 - The engine watchdog (5s tick, 30s silence threshold) emits a debug log on `possible-stop` events (was previously silent).
-- `start(settings, restart)` now captures the `restart` callback and exposes it via `AnalyzerDeps.requestRestart` for future analyzers.
+- `start(settings, restart)` accepts the SK server's `restart` callback. (Earlier 0.2.0 development exposed it on `AnalyzerDeps.requestRestart`; that field was later removed because no analyzer ever called it.)
 - `MaintenanceAnalyzer` constructor now takes `{ triggers: AnalyzerTriggerCfg, minSessionSeconds }` (was `{ minSessionSeconds, putTriggerPath }`).
 - `croner: ^10.0.1` runtime dependency.
 - `src/core/cronScheduler.ts` wrapping croner for cron-triggered analyzers.

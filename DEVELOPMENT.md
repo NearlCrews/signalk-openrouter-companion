@@ -31,10 +31,10 @@ src/
     ├── openrouter.ts         HTTP client with retry and backoff ladder
     ├── questdb.ts            HTTP client + escapeSqlLiteral + indexColumns
     ├── discovery.ts          Engine and bank id discovery from SK paths
-    ├── skNode.ts             readNumberAt helper for SK tree traversal
-    ├── paths.ts              Centralized path-string helpers
+    ├── skNode.ts             readNumberAt + readValueAt for SK tree traversal
+    ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
     ├── triggers.ts           buildTriggers(cfg, eventMapper?) shared by all analyzers
-    ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio
+    ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
     ├── cfg.ts                clampPositiveInt for sanitized day-counts
     └── logger.ts             Wraps app.debug / app.error / stringify
 ```
@@ -104,7 +104,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-131 tests across 18 files cover:
+127 tests across 18 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt`.
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).

@@ -220,7 +220,7 @@ Run the Signal K server with `DEBUG=signalk-openrouter-companion` and tail the s
 ## Adding a custom analyzer
 
 1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
-2. Use the shared helpers in `src/core/`: `buildTriggers(cfg)` for the standardized cron/PUT/events block, `bankPaths(id)`/`enginePaths(id)`/`notificationReportPath(id)` for path strings, `escapeSqlLiteral` + `indexColumns` for QuestDB queries.
+2. Use the shared helpers in `src/core/`: `buildTriggers(cfg)` for the standardized cron/PUT/events block, `bankPaths(id)`/`enginePaths(id)`/`notificationReportPath(id)`/`pluginPutPath(id)` for path strings, `escapeSqlLiteral` + `indexColumns` for QuestDB queries, `asFiniteNumber` / `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio` for value handling, `clampPositiveInt` for sanitized config day-counts, `readNumberAt`/`readValueAt` for SK tree walks, `publisher.publishReport(this.id, ctx, text)` for the canonical report notification.
 3. Register the analyzer in `src/index.ts` alongside the existing five and add a section to `src/schema.ts`.
 4. Add a test under `tests/`, reusing `makeAnalyzerDeps` and (for trend analyzers) `makeQuestDBStub` from `tests/_mocks.ts`.
 
@@ -246,7 +246,7 @@ npm run prepublishOnly # Type-check + lint + test + build (run before any push)
 - Node 22+
 - `@signalk/server-api` 2.24+ (`peerDependency`; the SK server provides it at runtime)
 - `croner` 10 for cron scheduling
-- esbuild for bundling, Biome for lint and format, Vitest for tests (131 tests across 18 files)
+- esbuild for bundling, Biome for lint and format, Vitest for tests (127 tests across 18 files)
 
 ### Local Signal K server
 
