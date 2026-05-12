@@ -2,8 +2,8 @@
 // per-bank path builders. Centralized so the convention can't drift between
 // analyzers, schema defaults, and tests.
 
-export const NOTIFICATION_PATH_PREFIX = 'notifications.openrouter-companion.';
-export const PUT_PATH_PREFIX = 'plugins.openrouter-companion.';
+const NOTIFICATION_PATH_PREFIX = 'notifications.openrouter-companion.';
+const PUT_PATH_PREFIX = 'plugins.openrouter-companion.';
 
 export const PROPULSION_PREFIX = 'propulsion.';
 export const BATTERIES_PARENT_PATH = 'electrical.batteries';

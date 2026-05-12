@@ -6,10 +6,11 @@ import {
   type BatteryAlertKind,
   batteryAlertPath,
 } from '../core/paths.js';
-import { readNumberAt } from '../core/skNode.js';
+import { asTreeMap, readBankSnapshot } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import { ALERTS_SUPPORTED_EVENTS, type AnalyzerTriggerCfg } from '../types.js';
 import type {
+  AnalysisInput,
   Analyzer,
   AnalyzerDeps,
   BatteryEventKind,
@@ -65,7 +66,7 @@ export const ALERTS_DEFAULT_SYSTEM_PROMPT = [
   'Output is rendered on a chartplotter and in the Signal K data browser. Plain prose, no markdown, no headers, no bullets. One short sentence.',
 ].join(' ');
 
-export interface AlertInput {
+export interface AlertInput extends AnalysisInput {
   subkind: BatteryEventKind;
   bankId: string;
   eventData: { soc?: number; imbalanceV?: number };
@@ -92,9 +93,8 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {
     if (ctx.kind !== 'battery-event' || !ctx.batteryEvent || !ctx.bankId) return null;
-    const tree = deps.app.getSelfPath(BATTERIES_PARENT_PATH);
-    const bankNode =
-      tree && typeof tree === 'object' ? (tree as Record<string, unknown>)[ctx.bankId] : undefined;
+    const bankNode = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH))?.[ctx.bankId];
+    const { voltage, current, stateOfCharge, cycles } = readBankSnapshot(bankNode);
     return {
       subkind: ctx.batteryEvent.subkind,
       bankId: ctx.bankId,
@@ -102,12 +102,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
         soc: ctx.batteryEvent.soc,
         imbalanceV: ctx.batteryEvent.imbalanceV,
       },
-      snapshot: {
-        voltage: readNumberAt(bankNode, 'voltage'),
-        current: readNumberAt(bankNode, 'current'),
-        stateOfCharge: readNumberAt(bankNode, 'capacity.stateOfCharge'),
-        cycles: readNumberAt(bankNode, 'cycles'),
-      },
+      snapshot: { voltage, current, stateOfCharge, cycles },
     };
   }
 

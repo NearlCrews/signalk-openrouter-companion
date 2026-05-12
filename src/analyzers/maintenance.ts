@@ -8,7 +8,7 @@ import {
   enginePathPrefix,
   PROPULSION_PREFIX,
 } from '../core/paths.js';
-import { readNumberAt, readValueAt } from '../core/skNode.js';
+import { asTreeMap, readBankSnapshot, readValueAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -177,10 +177,10 @@ function snapshotEngineNotifications(
   deps: AnalyzerDeps,
   engineId: string,
 ): Record<string, unknown> {
-  const tree = deps.app.getSelfPath(engineNotificationsPath(engineId));
-  if (!tree || typeof tree !== 'object') return {};
+  const tree = asTreeMap(deps.app.getSelfPath(engineNotificationsPath(engineId)));
+  if (!tree) return {};
   const out: Record<string, unknown> = {};
-  for (const slot of Object.keys(tree as Record<string, unknown>)) {
+  for (const slot of Object.keys(tree)) {
     const value = readValueAt(tree, slot);
     if (value !== undefined) out[slot] = value;
   }
@@ -188,22 +188,21 @@ function snapshotEngineNotifications(
 }
 
 function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): BatterySnapshot[] {
-  const tree = deps.app.getSelfPath(BATTERIES_PARENT_PATH);
-  if (!tree || typeof tree !== 'object') return [];
-  const out: BatterySnapshot[] = [];
-  for (const [id, node] of Object.entries(tree as Record<string, unknown>)) {
+  const tree = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH));
+  if (!tree) return [];
+  return Object.entries(tree).map(([id, node]) => {
     const paths = bankPaths(id);
-    out.push({
+    const { voltage, current, stateOfCharge, nominalCapacityJ } = readBankSnapshot(node);
+    return {
       id,
-      voltage: readNumberAt(node, 'voltage'),
-      current: readNumberAt(node, 'current'),
-      stateOfCharge: readNumberAt(node, 'capacity.stateOfCharge'),
-      nominalCapacityJ: readNumberAt(node, 'capacity.nominal'),
+      voltage,
+      current,
+      stateOfCharge,
+      nominalCapacityJ,
       voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
       socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
-    });
-  }
-  return out;
+    };
+  });
 }
 
 const UNIT_BY_SUFFIX: ReadonlyArray<readonly [suffix: string, unit: string]> = [

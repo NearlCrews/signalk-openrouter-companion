@@ -1,4 +1,5 @@
 import type { BatteryEventKind } from '../analyzers/Analyzer.js';
+import { TypedEmitter } from './emitter.js';
 
 export type { BatteryEventKind } from '../analyzers/Analyzer.js';
 
@@ -34,40 +35,17 @@ interface BankState {
   recentCells: Map<number, CellReading>;
 }
 
-type Listener = (e: BatteryEvent) => void;
-
-export class BatteryMonitor {
+export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent> {
   private banks = new Map<string, BankState>();
-  private listeners = new Map<BatteryEventKind, Set<Listener>>();
   private readonly lowThreshold: number;
   private readonly exitThreshold: number;
   private readonly imbalanceSettleMs: number;
 
   constructor(private opts: BatteryMonitorOptions) {
-    // Hoisted out of the per-delta hot path: opts is fixed for the monitor's
-    // lifetime so the threshold ratios and Ms conversion are constant.
+    super();
     this.lowThreshold = opts.lowSocPercent / 100;
     this.exitThreshold = (opts.lowSocPercent + opts.socExitHysteresis) / 100;
     this.imbalanceSettleMs = opts.imbalanceSettleSec * 1000;
-  }
-
-  on(kind: BatteryEventKind, cb: Listener): () => void {
-    let set = this.listeners.get(kind);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(kind, set);
-    }
-    const target = set;
-    target.add(cb);
-    return () => {
-      target.delete(cb);
-    };
-  }
-
-  private emit(e: BatteryEvent): void {
-    const set = this.listeners.get(e.kind);
-    if (!set) return;
-    for (const cb of set) cb(e);
   }
 
   private getBank(bankId: string): BankState {

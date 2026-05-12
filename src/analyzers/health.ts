@@ -1,10 +1,10 @@
 import { resolveSystemPrompt } from '../core/cfg.js';
 import { fmtNumber } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
-import { readNumberAt } from '../core/skNode.js';
+import { asTreeMap, readBankSnapshot, readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
-import type { Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
 export interface HealthCfg {
@@ -40,7 +40,7 @@ interface BankSnapshot {
   cells: CellSnapshot[] | null;
 }
 
-export interface HealthInput {
+export interface HealthInput extends AnalysisInput {
   generatedAt: string;
   banks: BankSnapshot[];
 }
@@ -57,25 +57,19 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {
-    const tree = deps.app.getSelfPath(BATTERIES_PARENT_PATH);
-    if (!tree || typeof tree !== 'object') return null;
-    const banksRaw = Object.entries(tree as Record<string, unknown>);
+    const tree = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH));
+    if (!tree) return null;
+    const banksRaw = Object.entries(tree);
     if (banksRaw.length === 0) return null;
 
     const endMs = ctx.firedAt.getTime();
     const startMs = endMs - 24 * 3600_000;
 
     const banks: BankSnapshot[] = banksRaw.map(([id, node]) => {
-      const get = (subpath: string): number | null => readNumberAt(node, subpath);
       const cells = collectCells(node);
       return {
         id,
-        voltage: get('voltage'),
-        current: get('current'),
-        stateOfCharge: get('capacity.stateOfCharge'),
-        nominalCapacityJ: get('capacity.nominal'),
-        cycles: get('cycles'),
-        temperatureK: get('temperature'),
+        ...readBankSnapshot(node),
         voltage24h: deps.buffer.summarize(bankPaths(id).voltage, startMs, endMs),
         cells: cells.length > 0 ? cells : null,
       };

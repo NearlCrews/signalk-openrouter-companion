@@ -1,5 +1,5 @@
 import { open } from 'node:fs/promises';
-import type { Analyzer, TriggerCtx } from '../analyzers/Analyzer.js';
+import type { Analyzer } from '../analyzers/Analyzer.js';
 import { AGING_DEFAULT_SYSTEM_PROMPT } from '../analyzers/aging.js';
 import { ALERTS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/alerts.js';
 import { DRIFT_DEFAULT_SYSTEM_PROMPT } from '../analyzers/drift.js';
@@ -10,8 +10,10 @@ import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
+import type { JsonlEntry } from './publisher.js';
 import { QuestDBClient } from './questdb.js';
 import type { TriggerRouter } from './triggerRouter.js';
+import { manualPutCtx } from './triggers.js';
 
 export interface RouteRequest {
   body?: unknown;
@@ -64,7 +66,7 @@ export interface StatusResponse {
     maxCallsPerDay: number;
   };
   questdb: { enabled: boolean; reachable: boolean | null };
-  analyzers: Array<{ id: string; title: string; enabled: boolean }>;
+  analyzers: Array<{ id: AnalyzerId; title: string; enabled: boolean }>;
 }
 
 function buildStatus(rt: PluginRuntime): StatusResponse {
@@ -88,28 +90,25 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
   };
 }
 
-interface ReportEntry {
-  ts: string;
-  analyzer: string;
-  trigger: string;
-  report?: string;
-  failure?: string;
-  engineId?: string;
-  durationSec?: number;
-}
-
 interface OpenRouterModelsResponse {
-  data: Array<{ id: string; name?: string; context_length?: number; pricing?: unknown }>;
+  data: Array<{
+    id: string;
+    name?: string;
+    context_length?: number;
+    pricing?: { prompt?: string; completion?: string };
+  }>;
 }
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const MODELS_CACHE_TTL_MS = 60 * 60 * 1000;
 let modelsCache: { fetchedAt: number; body: OpenRouterModelsResponse } | null = null;
+let modelsInFlight: Promise<OpenRouterModelsResponse> | null = null;
 
 // Exposed so tests can wipe the cache between cases. Not part of the public
 // HTTP surface.
 export function _resetOpenRouterModelsCache(): void {
   modelsCache = null;
+  modelsInFlight = null;
 }
 
 async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
@@ -117,11 +116,21 @@ async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
   if (modelsCache && now - modelsCache.fetchedAt < MODELS_CACHE_TTL_MS) {
     return modelsCache.body;
   }
-  const res = await fetch(OPENROUTER_MODELS_URL);
-  if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
-  const body = (await res.json()) as OpenRouterModelsResponse;
-  modelsCache = { fetchedAt: now, body };
-  return body;
+  // Coalesce concurrent fetches: a second poll while the first is in flight
+  // (admin opens two tabs) awaits the same upstream call.
+  if (modelsInFlight) return modelsInFlight;
+  modelsInFlight = (async () => {
+    try {
+      const res = await fetch(OPENROUTER_MODELS_URL);
+      if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
+      const body = (await res.json()) as OpenRouterModelsResponse;
+      modelsCache = { fetchedAt: Date.now(), body };
+      return body;
+    } finally {
+      modelsInFlight = null;
+    }
+  })();
+  return modelsInFlight;
 }
 
 // Read the trailing N lines of the JSONL log filtered by analyzer. Loads the
@@ -132,7 +141,7 @@ async function tailReports(
   logPath: string,
   analyzerId: string,
   limit: number,
-): Promise<ReportEntry[]> {
+): Promise<JsonlEntry[]> {
   let raw: string;
   try {
     const fh = await open(logPath, 'r');
@@ -145,11 +154,11 @@ async function tailReports(
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
-  const out: ReportEntry[] = [];
+  const out: JsonlEntry[] = [];
   for (const line of raw.split('\n')) {
     if (!line) continue;
     try {
-      const entry = JSON.parse(line) as ReportEntry;
+      const entry = JSON.parse(line) as JsonlEntry;
       if (entry.analyzer === analyzerId) out.push(entry);
     } catch {
       // skip malformed lines so a single corrupt entry doesn't poison tail
@@ -158,25 +167,40 @@ async function tailReports(
   return out.slice(-limit).reverse();
 }
 
+function requireRuntime(
+  getRuntime: () => PluginRuntime | null,
+  res: RouteResponse,
+): PluginRuntime | null {
+  const rt = getRuntime();
+  if (!rt) {
+    res.status(503).json({ error: 'plugin not started' });
+    return null;
+  }
+  return rt;
+}
+
+function requireAnalyzerId(req: RouteRequest, res: RouteResponse): AnalyzerId | null {
+  const id = req.params?.id;
+  if (!isAnalyzerId(id)) {
+    res.status(404).json({ error: 'unknown analyzer' });
+    return null;
+  }
+  return id;
+}
+
 export function registerApiRoutes(
   router: RouterLike,
   getRuntime: () => PluginRuntime | null,
 ): void {
   router.get('/api/status', (_req, res) => {
-    const rt = getRuntime();
-    if (!rt) {
-      res.status(503).json({ error: 'plugin not started' });
-      return;
-    }
+    const rt = requireRuntime(getRuntime, res);
+    if (!rt) return;
     res.json(buildStatus(rt));
   });
 
   router.post('/api/openrouter/test', async (_req, res) => {
-    const rt = getRuntime();
-    if (!rt) {
-      res.status(503).json({ error: 'plugin not started' });
-      return;
-    }
+    const rt = requireRuntime(getRuntime, res);
+    if (!rt) return;
     if (!rt.apiKeySet) {
       res.status(400).json({ ok: false, error: 'API key not configured' });
       return;
@@ -200,13 +224,11 @@ export function registerApiRoutes(
   });
 
   router.post('/api/analyzers/:id/fire', async (req, res) => {
-    const id = req.params?.id;
-    if (!id || !isAnalyzerId(id)) {
-      res.status(404).json({ ok: false, error: 'unknown analyzer' });
-      return;
-    }
-    const rt = getRuntime();
-    if (!rt?.router) {
+    const id = requireAnalyzerId(req, res);
+    if (!id) return;
+    const rt = requireRuntime(getRuntime, res);
+    if (!rt) return;
+    if (!rt.router) {
       res.status(503).json({ ok: false, error: 'plugin not started' });
       return;
     }
@@ -214,13 +236,12 @@ export function registerApiRoutes(
       res.status(409).json({ ok: false, error: 'analyzer not enabled' });
       return;
     }
-    // Synthesize a put-kind ctx. Maintenance/health/aging/drift treat 'put'
-    // as "report on current state in the fallback window"; alerts requires
-    // a battery-event so a manual fire there will collectContext-return null
-    // and the router skips the LLM call (returns ok with skipped:true).
-    const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(), put: { value: 'manual' } };
+    // Maintenance/health/aging/drift treat 'put' as "report on current state
+    // in the fallback window"; alerts requires a battery-event so a manual
+    // fire there will collectContext-return null and the router skips the
+    // LLM call.
     try {
-      await rt.router.dispatch('put', ctx, { putPath: `manual:${id}` });
+      await rt.router.dispatch('put', manualPutCtx(), { putPath: `manual:${id}` });
       res.json({ ok: true, analyzer: id });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -229,11 +250,8 @@ export function registerApiRoutes(
   });
 
   router.get('/api/analyzers/:id/prompt', (req, res) => {
-    const id = req.params?.id;
-    if (!id || !isAnalyzerId(id)) {
-      res.status(404).json({ error: 'unknown analyzer' });
-      return;
-    }
+    const id = requireAnalyzerId(req, res);
+    if (!id) return;
     const rt = getRuntime();
     const defaultPrompt = DEFAULT_SYSTEM_PROMPTS[id];
     const current = rt?.cfg.analyzers[id]?.customSystemPrompt ?? null;
@@ -241,11 +259,8 @@ export function registerApiRoutes(
   });
 
   router.get('/api/openrouter/models', async (_req, res) => {
-    const rt = getRuntime();
-    if (!rt) {
-      res.status(503).json({ error: 'plugin not started' });
-      return;
-    }
+    const rt = requireRuntime(getRuntime, res);
+    if (!rt) return;
     try {
       const result = await getOpenRouterModels();
       res.json(result);
@@ -274,16 +289,10 @@ export function registerApiRoutes(
   });
 
   router.get('/api/analyzers/:id/reports', async (req, res) => {
-    const id = req.params?.id;
-    if (!id || !isAnalyzerId(id)) {
-      res.status(404).json({ error: 'unknown analyzer' });
-      return;
-    }
-    const rt = getRuntime();
-    if (!rt) {
-      res.status(503).json({ error: 'plugin not started' });
-      return;
-    }
+    const id = requireAnalyzerId(req, res);
+    if (!id) return;
+    const rt = requireRuntime(getRuntime, res);
+    if (!rt) return;
     const limitRaw = req.query?.limit;
     const limitStr = Array.isArray(limitRaw) ? limitRaw[0] : limitRaw;
     const parsed = limitStr ? Number.parseInt(limitStr, 10) : REPORTS_DEFAULT_LIMIT;

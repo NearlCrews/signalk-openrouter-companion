@@ -1,11 +1,8 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
-import { AgingAnalyzer } from './analyzers/aging.js';
-import { AlertAnalyzer } from './analyzers/alerts.js';
-import { DriftAnalyzer } from './analyzers/drift.js';
-import { HealthAnalyzer } from './analyzers/health.js';
-import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
+import { ANALYZER_IDS } from './analyzers/ids.js';
+import { ANALYZER_FACTORIES } from './analyzers/registry.js';
 import { type PluginRuntime, type RouterLike, registerApiRoutes } from './core/api.js';
 import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
 import { BudgetTracker } from './core/budget.js';
@@ -25,6 +22,7 @@ import { bankPathPrefix, enginePaths } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
+import { manualPutCtx } from './core/triggers.js';
 import { buildSchema, buildUiSchema } from './schema.js';
 import { ALERTS_SUPPORTED_EVENTS, mergeWithDefaults, type PluginOptions } from './types.js';
 
@@ -92,7 +90,7 @@ export default function createPlugin(app: ServerApiLike): {
     schema: () => buildSchema(),
     uiSchema: () => buildUiSchema(),
 
-    start: (rawSettings, restart) => {
+    start: (rawSettings, _restart) => {
       try {
         app.setPluginStatus('Starting');
         readyPromise = new Promise<void>((resolve) => {
@@ -105,10 +103,6 @@ export default function createPlugin(app: ServerApiLike): {
           return;
         }
         lifecycleController = new AbortController();
-        // `restart` is provided by the SK server in case a plugin needs to
-        // request a self-restart. No analyzer triggers a restart today, so
-        // the parameter is intentionally captured but unused.
-        void restart;
         scheduler = new CronScheduler({
           tz: cfg.analyzers.maintenance.triggers.cron.timezone || undefined,
         });
@@ -164,49 +158,11 @@ export default function createPlugin(app: ServerApiLike): {
         });
 
         const analyzers: Analyzer[] = [];
-        if (cfg.analyzers.maintenance.enabled) {
-          analyzers.push(
-            new MaintenanceAnalyzer({
-              triggers: cfg.analyzers.maintenance.triggers,
-              minSessionSeconds: cfg.analyzers.maintenance.minSessionSeconds,
-              customSystemPrompt: cfg.analyzers.maintenance.customSystemPrompt,
-            }),
-          );
-        }
-        if (cfg.analyzers.health.enabled) {
-          analyzers.push(
-            new HealthAnalyzer({
-              triggers: cfg.analyzers.health.triggers,
-              customSystemPrompt: cfg.analyzers.health.customSystemPrompt,
-            }),
-          );
-        }
-        if (cfg.analyzers.aging.enabled) {
-          analyzers.push(
-            new AgingAnalyzer({
-              triggers: cfg.analyzers.aging.triggers,
-              shortWindowDays: cfg.analyzers.aging.shortWindowDays,
-              longWindowDays: cfg.analyzers.aging.longWindowDays,
-              customSystemPrompt: cfg.analyzers.aging.customSystemPrompt,
-            }),
-          );
-        }
-        if (cfg.analyzers.drift.enabled) {
-          analyzers.push(
-            new DriftAnalyzer({
-              triggers: cfg.analyzers.drift.triggers,
-              baselineDays: cfg.analyzers.drift.baselineDays,
-              customSystemPrompt: cfg.analyzers.drift.customSystemPrompt,
-            }),
-          );
-        }
-        if (cfg.analyzers.alerts.enabled) {
-          analyzers.push(
-            new AlertAnalyzer({
-              triggers: cfg.analyzers.alerts.triggers,
-              customSystemPrompt: cfg.analyzers.alerts.customSystemPrompt,
-            }),
-          );
+        for (const id of ANALYZER_IDS) {
+          const section = cfg.analyzers[id];
+          if (!section.enabled) continue;
+          const factory = ANALYZER_FACTORIES[id] as (c: typeof section) => Analyzer;
+          analyzers.push(factory(section));
         }
 
         const budgetPromise = BudgetTracker.load({
@@ -321,55 +277,59 @@ export default function createPlugin(app: ServerApiLike): {
         for (const k of ALERTS_SUPPORTED_EVENTS) unsubs.push(monitor.on(k, dispatchBatteryEvent));
 
         const available = app.streambundle.getAvailablePaths();
-        const engineIds = discoverEngineIds(available);
-        const bankIds = discoverBankIds(available);
+        const engineIds = new Set(discoverEngineIds(available));
+        const bankIds = new Set(discoverBankIds(available));
+        const engineRpmPaths = new Set<string>();
         const watched = discoverWatchedPaths(
           available,
           cfg.analyzers.maintenance.extraWatchedPaths,
         );
 
-        const subscribeEnginePath = (engineId: string, path: string): void => {
+        // Subscribe to one self-path. The sink receives the unpacked
+        // (value, ts, source) for each delta; non-numeric callers can
+        // short-circuit inside the sink.
+        const subscribe = (
+          path: string,
+          sink: (value: unknown, ts: number, source: string) => void,
+        ): void => {
           const bus = app.streambundle.getSelfBus(path);
           const unsub = bus.onValue((delta) => {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
             const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
-            const src = d.$source ?? 'unknown';
-            const v = typeof d.value === 'number' ? d.value : null;
-            if (v != null) {
-              detector.observe(engineId, src, v, ts);
-              buffer.record(path, v, ts, src);
-            }
+            sink(d.value, ts, d.$source ?? 'unknown');
           });
           if (unsub) unsubs.push(unsub);
         };
 
+        const subscribeEnginePath = (engineId: string, path: string): void => {
+          engineRpmPaths.add(path);
+          subscribe(path, (value, ts, src) => {
+            if (typeof value !== 'number') return;
+            detector.observe(engineId, src, value, ts);
+            buffer.record(path, value, ts, src);
+          });
+        };
+
         const subscribeWatchedPath = (path: string): void => {
+          // Match the path once at subscribe time so the per-delta callback
+          // skips two regex executions per delta on a path that fires often.
           const socMatch = path.match(SOC_PATH_RE);
-          const cellMatch = !socMatch ? path.match(CELL_VOLT_PATH_RE) : null;
+          const cellMatch = socMatch ? null : path.match(CELL_VOLT_PATH_RE);
           const socBank = socMatch?.[1] ?? null;
           const cellBank = cellMatch?.[1] ?? null;
           const cellIdx = cellMatch?.[2] ? Number.parseInt(cellMatch[2], 10) : null;
-          const bus = app.streambundle.getSelfBus(path);
-          const unsub = bus.onValue((delta) => {
-            const d = delta as { value?: unknown; timestamp?: string; $source?: string };
-            const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
-            const src = d.$source ?? 'unknown';
-            buffer.record(path, d.value, ts, src);
-            if (typeof d.value !== 'number') return;
-            if (socBank) {
-              monitor.observeSoc(socBank, src, d.value, ts);
-            } else if (cellBank && cellIdx != null) {
-              monitor.observeCellV(cellBank, cellIdx, d.value, ts);
-            }
+          subscribe(path, (value, ts, src) => {
+            if (typeof value !== 'number') return;
+            buffer.record(path, value, ts, src);
+            if (socBank) monitor.observeSoc(socBank, src, value, ts);
+            else if (cellBank && cellIdx != null)
+              monitor.observeCellV(cellBank, cellIdx, value, ts);
           });
-          if (unsub) unsubs.push(unsub);
         };
 
         for (const engineId of engineIds) {
           subscribeEnginePath(engineId, enginePaths(engineId).rpm);
         }
-
-        const engineRpmPaths = new Set(engineIds.map((id) => enginePaths(id).rpm));
         for (const path of watched) {
           if (engineRpmPaths.has(path)) continue;
           subscribeWatchedPath(path);
@@ -386,19 +346,26 @@ export default function createPlugin(app: ServerApiLike): {
         intervalHandles.push(
           setInterval(() => {
             const fresh = app.streambundle.getAvailablePaths();
-            const newEngines = discoverEngineIds(fresh).filter((id) => !engineIds.includes(id));
-            for (const id of newEngines) {
-              engineIds.push(id);
+            let changed = false;
+            for (const id of discoverEngineIds(fresh)) {
+              if (engineIds.has(id)) continue;
+              engineIds.add(id);
               subscribeEnginePath(id, enginePaths(id).rpm);
+              changed = true;
             }
-            const newBanks = discoverBankIds(fresh).filter((id) => !bankIds.includes(id));
+            const newBanks: string[] = [];
+            for (const id of discoverBankIds(fresh)) {
+              if (bankIds.has(id)) continue;
+              bankIds.add(id);
+              newBanks.push(id);
+              changed = true;
+            }
             if (newBanks.length > 0) {
               const freshWatched = discoverWatchedPaths(
                 fresh,
                 cfg.analyzers.maintenance.extraWatchedPaths,
               );
               for (const id of newBanks) {
-                bankIds.push(id);
                 const prefix = bankPathPrefix(id);
                 for (const path of freshWatched) {
                   if (engineRpmPaths.has(path)) continue;
@@ -406,7 +373,7 @@ export default function createPlugin(app: ServerApiLike): {
                 }
               }
             }
-            if (engineIds.length > 0 || bankIds.length > 0) {
+            if (changed) {
               app.setPluginStatus(runningStatus(analyzers.length));
             }
           }, RESCAN_INTERVAL_MS),
@@ -414,7 +381,7 @@ export default function createPlugin(app: ServerApiLike): {
 
         if (analyzers.length === 0) {
           app.setPluginStatus('No analyzers enabled. Enable at least one in plugin settings.');
-        } else if (engineIds.length === 0 && bankIds.length === 0) {
+        } else if (engineIds.size === 0 && bankIds.size === 0) {
           app.setPluginStatus('Running, no engine or battery data yet (re-scanning every 60s)');
         } else {
           app.setPluginStatus(runningStatus(analyzers.length));
@@ -497,8 +464,7 @@ function registerAnalyzerPut(
             });
             return;
           }
-          const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(), put: { value } };
-          await router.dispatch('put', ctx, { putPath: path });
+          await router.dispatch('put', manualPutCtx(value), { putPath: path });
           cb({ state: 'COMPLETED', statusCode: 200 });
         } catch (err) {
           cb({ state: 'FAILED', statusCode: 500, message: stringify(err) });

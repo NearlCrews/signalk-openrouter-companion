@@ -22,7 +22,13 @@ function makeDeps(): AnalyzerDeps {
       raw: {},
     })),
   };
-  const publisher = { publish: vi.fn(async () => {}), publishFailure: vi.fn(async () => {}) };
+  // Mirror the real ReportPublisher surface the router actually touches:
+  // publishReport for analyzers without publishOutput, publishFailure for
+  // collectContext / LLM exceptions. publishOnPath is unused here.
+  const publisher = {
+    publishReport: vi.fn(async () => {}),
+    publishFailure: vi.fn(async () => {}),
+  };
   const logger = { debug: vi.fn(), error: vi.fn() };
   return {
     buffer: {} as never,
@@ -57,7 +63,7 @@ describe('TriggerRouter', () => {
     const router = new TriggerRouter([a], deps);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
     expect(deps.llm.complete).not.toHaveBeenCalled();
-    expect(deps.publisher.publish).not.toHaveBeenCalled();
+    expect(deps.publisher.publishReport).not.toHaveBeenCalled();
   });
 
   it('skips LLM call when budget is exhausted', async () => {
@@ -200,5 +206,22 @@ describe('TriggerRouter', () => {
       { batterySubkind: 'cell-imbalance-enter' },
     );
     expect(a.collectContext).not.toHaveBeenCalled();
+  });
+
+  it('falls back to publisher.publishReport when analyzer omits publishOutput', async () => {
+    const a: Analyzer = {
+      id: 'maintenance',
+      title: 'Maintenance',
+      triggers: [{ kind: 'engine-stop' }],
+      collectContext: vi.fn(async () => ({ ok: true })),
+      buildPrompt: vi.fn(() => ({ system: 's', user: 'u' })),
+    };
+    const deps = makeDeps();
+    const router = new TriggerRouter([a], deps);
+    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    expect(deps.publisher.publishReport).toHaveBeenCalledTimes(1);
+    expect((deps.publisher.publishReport as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      'maintenance',
+    );
   });
 });

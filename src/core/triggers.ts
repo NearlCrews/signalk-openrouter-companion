@@ -1,4 +1,4 @@
-import type { TriggerSpec } from '../analyzers/Analyzer.js';
+import type { TriggerCtx, TriggerSpec } from '../analyzers/Analyzer.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 
 // Every analyzer wires the same cron + put parsing from its triggers cfg, then
@@ -22,4 +22,10 @@ export function buildTriggers(
     }
   }
   return out;
+}
+
+// Synthesize the TriggerCtx for a manual fire (REST /api/analyzers/:id/fire
+// or PUT). Shared so the two call sites can't drift on shape.
+export function manualPutCtx(value: unknown = 'manual'): TriggerCtx {
+  return { kind: 'put', firedAt: new Date(), put: { value } };
 }

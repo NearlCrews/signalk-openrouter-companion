@@ -16,26 +16,28 @@ function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+type ResolvedBudgetOptions = BudgetOptions & { now: () => Date };
+
 export class BudgetTracker {
   private constructor(
-    private opts: Required<BudgetOptions>,
+    private opts: ResolvedBudgetOptions,
     private state: PersistedState,
   ) {}
 
   static async load(opts: BudgetOptions): Promise<BudgetTracker> {
-    const fullOpts = { now: () => new Date(), ...opts } as Required<BudgetOptions>;
+    const now = opts.now ?? (() => new Date());
     let state: PersistedState;
     try {
-      const raw = await readFile(fullOpts.statePath, 'utf-8');
+      const raw = await readFile(opts.statePath, 'utf-8');
       const parsed = JSON.parse(raw) as PersistedState;
       if (typeof parsed.day !== 'string' || typeof parsed.callsToday !== 'number') {
         throw new Error('invalid state shape');
       }
       state = parsed;
     } catch {
-      state = { day: utcDay(fullOpts.now()), callsToday: 0, lastCallTs: null };
+      state = { day: utcDay(now()), callsToday: 0, lastCallTs: null };
     }
-    return new BudgetTracker(fullOpts, state);
+    return new BudgetTracker({ ...opts, now }, state);
   }
 
   private rolloverIfNeeded(): void {

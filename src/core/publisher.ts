@@ -5,8 +5,6 @@ import type { NotificationState } from '../types.js';
 import { stringify } from './logger.js';
 import { notificationReportPath } from './paths.js';
 
-export type { NotificationState };
-
 export interface SignalKNotificationValue {
   state: NotificationState;
   method: string[];
@@ -54,7 +52,7 @@ export interface PublishMeta {
   ctx: TriggerCtx;
 }
 
-interface JsonlEntry {
+export interface JsonlEntry {
   ts: string;
   analyzer: string;
   trigger: string;
@@ -147,19 +145,21 @@ export class ReportPublisher {
   }
 
   private buildEntry(text: string, meta: PublishMeta, now: Date): JsonlEntry {
-    const entry: JsonlEntry = {
+    const base: JsonlEntry = {
       ts: now.toISOString(),
       analyzer: meta.analyzerId,
       trigger: meta.ctx.kind,
       report: text,
     };
-    if (meta.ctx.engineSession) {
-      entry.engineId = meta.ctx.engineSession.engineId;
-      entry.sessionStart = meta.ctx.engineSession.start.toISOString();
-      entry.sessionEnd = meta.ctx.engineSession.end.toISOString();
-      entry.durationSec = meta.ctx.engineSession.durationSec;
-    }
-    return entry;
+    const sess = meta.ctx.engineSession;
+    if (!sess) return base;
+    return {
+      ...base,
+      engineId: sess.engineId,
+      sessionStart: sess.start.toISOString(),
+      sessionEnd: sess.end.toISOString(),
+      durationSec: sess.durationSec,
+    };
   }
 
   private async appendLog(entry: JsonlEntry): Promise<void> {

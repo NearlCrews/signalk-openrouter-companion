@@ -1,3 +1,5 @@
+import { TypedEmitter } from './emitter.js';
+
 type EngineEventKind = 'engine-start' | 'engine-stop' | 'possible-stop';
 
 export interface EngineSession {
@@ -38,38 +40,17 @@ interface EngineState {
   recentBySource: Map<string, PerSourceReading>;
 }
 
-type Listener = (e: EngineEvent) => void;
-
-export class EngineDetector {
+export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
   private states = new Map<string, EngineState>();
-  private listeners = new Map<EngineEventKind, Set<Listener>>();
   private readonly stopSettleMs: number;
   private readonly startSettleMs: number;
   private readonly watchdogMs: number;
 
   constructor(private opts: EngineDetectorOptions) {
-    // Hoisted out of the per-delta hot path: opts is fixed for the detector's
-    // lifetime so the *1000 conversions are constant.
+    super();
     this.stopSettleMs = opts.stopSettleSec * 1000;
     this.startSettleMs = opts.startSettleSec * 1000;
     this.watchdogMs = opts.watchdogSec * 1000;
-  }
-
-  on(kind: EngineEventKind, cb: Listener): () => void {
-    let set = this.listeners.get(kind);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(kind, set);
-    }
-    const target = set;
-    target.add(cb);
-    return () => target.delete(cb);
-  }
-
-  private emit(e: EngineEvent): void {
-    const set = this.listeners.get(e.kind);
-    if (!set) return;
-    for (const cb of set) cb(e);
   }
 
   private getState(engineId: string): EngineState {

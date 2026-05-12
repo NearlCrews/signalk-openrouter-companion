@@ -14,9 +14,6 @@ export class RollingBuffer {
   private readonly trimTo: number;
 
   constructor(private opts: BufferOptions) {
-    // When the array exceeds maxEntriesPerPath, trim down to trimTo (90% of
-    // cap) so the next ~10% of records skip count eviction entirely. Cached
-    // here so the saturated record() hot path stays free of arithmetic.
     this.trimTo = opts.maxEntriesPerPath - Math.ceil(opts.maxEntriesPerPath / 10);
   }
 
@@ -45,13 +42,15 @@ export class RollingBuffer {
     fromTs: number,
     toTs: number,
   ): { min: number; max: number; mean: number; count: number; sources: string[] } | null {
-    const arr = this.slice(path, fromTs, toTs);
+    const arr = this.store.get(path);
+    if (!arr) return null;
     const sources = new Set<string>();
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     let sum = 0;
     let count = 0;
     for (const e of arr) {
+      if (e.ts < fromTs || e.ts > toTs) continue;
       sources.add(e.source);
       if (typeof e.value !== 'number' || !Number.isFinite(e.value)) continue;
       if (e.value < min) min = e.value;

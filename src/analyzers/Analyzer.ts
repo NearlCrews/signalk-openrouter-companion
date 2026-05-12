@@ -32,7 +32,7 @@ export interface TriggerCtx {
   batteryEvent?: { subkind: BatteryEventKind; soc?: number; imbalanceV?: number };
 }
 
-export type AnalysisInput = object;
+export type AnalysisInput = Record<string, unknown>;
 
 export interface AppForAnalyzer {
   getSelfPath(path: string): unknown;
@@ -55,7 +55,7 @@ export interface AnalyzerDeps {
 }
 
 export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
-  readonly id: string;
+  readonly id: import('./ids.js').AnalyzerId;
   readonly title: string;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;

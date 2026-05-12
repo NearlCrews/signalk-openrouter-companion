@@ -258,7 +258,7 @@ async function binEngineWindow(
 }
 
 function isBinKey(k: string): k is BinKey {
-  return (BIN_ORDER as readonly string[]).includes(k);
+  return k in BIN_DEFS;
 }
 
 function emptyBins(): Record<BinKey, BinStats> {

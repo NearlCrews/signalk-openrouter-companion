@@ -49,3 +49,4 @@ yarn-error.log*
 # Tooling state
 .last-verified-sha
 .claude/scheduled_tasks.lock
+.remember/

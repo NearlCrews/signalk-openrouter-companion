@@ -14,28 +14,13 @@ export interface DispatchExtras {
   batterySubkind?: BatteryEventKind;
 }
 
-type PublishFn = (text: string, ctx: TriggerCtx, deps: AnalyzerDeps) => Promise<void>;
-
-interface AnalyzerEntry {
-  analyzer: Analyzer;
-  publish: PublishFn;
-}
-
 export class TriggerRouter {
-  private entries: AnalyzerEntry[];
   private lastStatus: string | null = null;
 
   constructor(
-    analyzers: Analyzer[],
+    private analyzers: Analyzer[],
     private deps: AnalyzerDeps,
-  ) {
-    this.entries = analyzers.map((a) => ({
-      analyzer: a,
-      publish: a.publishOutput
-        ? a.publishOutput.bind(a)
-        : async (text, ctx, deps) => deps.publisher.publishReport(a.id, ctx, text),
-    }));
-  }
+  ) {}
 
   // Skip SK admin-UI churn when the status string hasn't changed.
   private setStatus(msg: string): void {
@@ -45,14 +30,13 @@ export class TriggerRouter {
   }
 
   async dispatch(kind: TriggerKind, ctx: TriggerCtx, extras: DispatchExtras = {}): Promise<void> {
-    const matches = this.entries.filter((e) =>
-      e.analyzer.triggers.some((t) => triggerMatches(t, kind, extras)),
+    const matches = this.analyzers.filter((a) =>
+      a.triggers.some((t) => triggerMatches(t, kind, extras)),
     );
-    await Promise.allSettled(matches.map((e) => this.runOne(e, ctx)));
+    await Promise.allSettled(matches.map((a) => this.runOne(a, ctx)));
   }
 
-  private async runOne(entry: AnalyzerEntry, ctx: TriggerCtx): Promise<void> {
-    const a = entry.analyzer;
+  private async runOne(a: Analyzer, ctx: TriggerCtx): Promise<void> {
     try {
       const input = await a.collectContext(ctx, this.deps);
       if (input == null) return;
@@ -65,7 +49,11 @@ export class TriggerRouter {
       const { text } = await this.deps.llm.complete({ system, user });
       await this.deps.budget.recordCall();
       this.setStatus(this.deps.okStatus ?? 'Running');
-      await entry.publish(text, ctx, this.deps);
+      if (a.publishOutput) {
+        await a.publishOutput(text, ctx, this.deps);
+      } else {
+        await this.deps.publisher.publishReport(a.id, ctx, text);
+      }
     } catch (err) {
       this.deps.logger.error(`${a.id}: ${stringify(err)}`);
       await this.deps.publisher.publishFailure(a.id, ctx, err).catch(() => {});

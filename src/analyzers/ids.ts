@@ -5,6 +5,8 @@
 export const ANALYZER_IDS = ['maintenance', 'health', 'aging', 'drift', 'alerts'] as const;
 export type AnalyzerId = (typeof ANALYZER_IDS)[number];
 
+const ANALYZER_ID_SET: ReadonlySet<string> = new Set(ANALYZER_IDS);
+
 export const ANALYZER_TITLES: Record<AnalyzerId, string> = {
   maintenance: 'Maintenance Advisor',
   health: 'Battery Health Advisor',
@@ -13,6 +15,6 @@ export const ANALYZER_TITLES: Record<AnalyzerId, string> = {
   alerts: 'Battery Alerts',
 };
 
-export function isAnalyzerId(s: string): s is AnalyzerId {
-  return (ANALYZER_TITLES as Record<string, unknown>)[s] !== undefined;
+export function isAnalyzerId(s: unknown): s is AnalyzerId {
+  return typeof s === 'string' && ANALYZER_ID_SET.has(s);
 }

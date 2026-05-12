@@ -25,3 +25,34 @@ export function readValueAt(node: unknown, subpath: string): unknown {
   }
   return undefined;
 }
+
+// Normalize a Signal K subtree fetched via app.getSelfPath into a flat
+// Record map. Returns null when the value is missing or not an object, so
+// callers can early-return rather than re-doing the typeof guard.
+export function asTreeMap(tree: unknown): Record<string, unknown> | null {
+  if (!tree || typeof tree !== 'object') return null;
+  return tree as Record<string, unknown>;
+}
+
+// Canonical numeric fields from electrical.batteries.<bank>. All values are
+// SI base units per the SK 1.8.2 spec: V, A, J for capacity, K for
+// temperature, ratio 0..1 for stateOfCharge.
+export interface BankSnapshot {
+  voltage: number | null;
+  current: number | null;
+  stateOfCharge: number | null;
+  nominalCapacityJ: number | null;
+  cycles: number | null;
+  temperatureK: number | null;
+}
+
+export function readBankSnapshot(node: unknown): BankSnapshot {
+  return {
+    voltage: readNumberAt(node, 'voltage'),
+    current: readNumberAt(node, 'current'),
+    stateOfCharge: readNumberAt(node, 'capacity.stateOfCharge'),
+    nominalCapacityJ: readNumberAt(node, 'capacity.nominal'),
+    cycles: readNumberAt(node, 'cycles'),
+    temperatureK: readNumberAt(node, 'temperature'),
+  };
+}
