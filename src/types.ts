@@ -22,6 +22,13 @@ export const ALERTS_SUPPORTED_EVENTS = [
   'cell-imbalance-exit',
 ] as const;
 
+// Trend-analyzer history-window defaults. Source-of-truth for the schema's
+// admin-UI defaults AND the analyzer constructors' clamp fallbacks; keeping
+// them in one place guarantees the two layers can't drift.
+export const AGING_DEFAULT_SHORT_DAYS = 30;
+export const AGING_DEFAULT_LONG_DAYS = 90;
+export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
+
 /**
  * Signal K notification states (the full ALARM_STATE enum). The plugin's
  * `output.notificationState` config and the publisher's typed argument both
@@ -126,8 +133,8 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true, path: pluginPutPath('aging') },
         events: [],
       },
-      shortWindowDays: 30,
-      longWindowDays: 90,
+      shortWindowDays: AGING_DEFAULT_SHORT_DAYS,
+      longWindowDays: AGING_DEFAULT_LONG_DAYS,
     },
     drift: {
       enabled: true,
@@ -136,7 +143,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true, path: pluginPutPath('drift') },
         events: [],
       },
-      baselineDays: 30,
+      baselineDays: DRIFT_DEFAULT_BASELINE_DAYS,
     },
     alerts: {
       enabled: true,
@@ -218,5 +225,5 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
 }
 
 function clone<T>(v: T): T {
-  return JSON.parse(JSON.stringify(v)) as T;
+  return structuredClone(v);
 }

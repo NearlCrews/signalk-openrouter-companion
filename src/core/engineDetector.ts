@@ -43,8 +43,17 @@ type Listener = (e: EngineEvent) => void;
 export class EngineDetector {
   private states = new Map<string, EngineState>();
   private listeners = new Map<EngineEventKind, Set<Listener>>();
+  private readonly stopSettleMs: number;
+  private readonly startSettleMs: number;
+  private readonly watchdogMs: number;
 
-  constructor(private opts: EngineDetectorOptions) {}
+  constructor(private opts: EngineDetectorOptions) {
+    // Hoisted out of the per-delta hot path: opts is fixed for the detector's
+    // lifetime so the *1000 conversions are constant.
+    this.stopSettleMs = opts.stopSettleSec * 1000;
+    this.startSettleMs = opts.startSettleSec * 1000;
+    this.watchdogMs = opts.watchdogSec * 1000;
+  }
 
   on(kind: EngineEventKind, cb: Listener): () => void {
     let set = this.listeners.get(kind);
@@ -99,7 +108,7 @@ export class EngineDetector {
       if (effectiveHz >= this.opts.startRpmHz) {
         s.belowSinceWhileStarting = null;
         if (s.aboveSince === null) s.aboveSince = ts;
-        if (ts - s.aboveSince >= this.opts.startSettleSec * 1000) {
+        if (ts - s.aboveSince >= this.startSettleMs) {
           s.running = true;
           s.sessionStartTs = s.aboveSince;
           s.belowSince = null;
@@ -114,7 +123,7 @@ export class EngineDetector {
     } else {
       if (effectiveHz < this.opts.stopRpmHz) {
         if (s.belowSince === null) s.belowSince = ts;
-        if (ts - s.belowSince >= this.opts.stopSettleSec * 1000) {
+        if (ts - s.belowSince >= this.stopSettleMs) {
           const sessionStart = s.sessionStartTs ?? s.belowSince;
           const sessionEnd = s.belowSince;
           s.running = false;
@@ -139,7 +148,7 @@ export class EngineDetector {
 
   tickWatchdog(now: number): void {
     for (const s of this.states.values()) {
-      if (s.running && now - s.lastDeltaTs > this.opts.watchdogSec * 1000) {
+      if (s.running && now - s.lastDeltaTs > this.watchdogMs) {
         this.emit({ kind: 'possible-stop', engineId: s.engineId, ts: now });
       }
     }

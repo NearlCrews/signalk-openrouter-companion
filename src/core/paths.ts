@@ -6,6 +6,9 @@ export const NOTIFICATION_PATH_PREFIX = 'notifications.openrouter-companion.';
 export const PUT_PATH_PREFIX = 'plugins.openrouter-companion.';
 export const ALERT_NOTIFICATION_PREFIX = `${NOTIFICATION_PATH_PREFIX}alert.`;
 
+export const PROPULSION_PREFIX = 'propulsion.';
+export const BATTERIES_PARENT_PATH = 'electrical.batteries';
+
 export function notificationReportPath(analyzerId: string): string {
   return `${NOTIFICATION_PATH_PREFIX}${analyzerId}.report`;
 }

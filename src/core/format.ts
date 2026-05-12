@@ -29,3 +29,10 @@ export function fmtRatio(v: number | null | undefined, opts: FmtOpts = {}): stri
   if (v == null || !Number.isFinite(v)) return nan;
   return `${v.toFixed(digits)} (${(v * 100).toFixed(0)}%)`;
 }
+
+// Coerce an unknown to a finite number, or null. Used by analyzers decoding
+// QuestDB rows (where a column may be a number, null, or an unexpected type)
+// before computing deltas, so non-finite values never enter arithmetic.
+export function asFiniteNumber(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}

@@ -183,11 +183,13 @@ describe('AgingAnalyzer', () => {
     const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
     expect(r).not.toBeNull();
     // starter has no capacity.actual/cycles data so it should be skipped.
-    expect(r!.banks).toHaveLength(1);
-    const bank = r!.banks[0]!;
+    expect(r?.banks).toHaveLength(1);
+    if (!r) throw new Error('expected aging input');
+    const bank = r.banks[0];
+    if (!bank) throw new Error('expected at least one bank');
     expect(bank.id).toBe('house');
-    expect(r!.generatedAt).toBe('2026-05-11T08:00:00.000Z');
-    expect(r!.selfContext).toBe(app.selfContext);
+    expect(r?.generatedAt).toBe('2026-05-11T08:00:00.000Z');
+    expect(r?.selfContext).toBe(app.selfContext);
 
     expect(bank.windows.map((w) => w.days)).toEqual([30, 90]);
     const w30 = windowStats(bank, 30);
@@ -246,7 +248,7 @@ describe('AgingAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
     const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
     expect(r).not.toBeNull();
-    expect(r!.banks.map((b) => b.id).sort()).toEqual([...bankIds].sort());
+    expect(r?.banks.map((b) => b.id).sort()).toEqual([...bankIds].sort());
     // Total query count is exactly 2 (one per window), independent of bank count.
     expect(stub.calls.length).toBe(2);
   });
@@ -278,7 +280,7 @@ describe('AgingAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
     const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
     expect(r).not.toBeNull();
-    expect(r!.banks[0]!.windows.map((w) => w.days)).toEqual([14, 60]);
+    expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([14, 60]);
     expect(stub.calls.some((q) => q.includes('-14,'))).toBe(true);
     expect(stub.calls.some((q) => q.includes('-60,'))).toBe(true);
   });
@@ -310,7 +312,7 @@ describe('AgingAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
     const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
     expect(r).not.toBeNull();
-    expect(r!.banks[0]!.windows.map((w) => w.days)).toEqual([30, 90]);
+    expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([30, 90]);
     expect(stub.calls).toHaveLength(2);
   });
 
@@ -332,7 +334,7 @@ describe('AgingAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
     const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
     expect(r).not.toBeNull();
-    expect(r!.banks[0]!.windows.map((w) => w.days)).toEqual([45]);
+    expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([45]);
     expect(stub.calls).toHaveLength(1);
   });
 
@@ -404,11 +406,11 @@ describe('AgingAnalyzer', () => {
       makeDeps(app, buf, null, publisher),
     );
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]!.delta as {
+    const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { state: string; message: string } }[] }[];
     };
-    expect(d.updates[0]!.values[0]!.path).toBe('notifications.openrouter-companion.aging.report');
-    expect(d.updates[0]!.values[0]!.value.state).toBe('normal');
+    expect(d.updates[0]?.values[0]?.path).toBe('notifications.openrouter-companion.aging.report');
+    expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
     const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
     expect(JSON.parse(line).analyzer).toBe('aging');
   });

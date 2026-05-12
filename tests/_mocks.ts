@@ -16,6 +16,9 @@ export interface MockBus<T> {
   listenerCount(): number;
 }
 
+export const MOCK_SELF_CONTEXT =
+  'vessels.urn:mrn:signalk:uuid:00000000-0000-0000-0000-000000000000';
+
 export function makeBus<T>(): MockBus<T> {
   const subs = new Set<Listener<T>>();
   return {
@@ -85,7 +88,7 @@ export function makeMockApp(dataDir: string): MockApp {
     unsubscribes: [],
     availablePaths: [],
     selfPaths: new Map(),
-    selfContext: 'vessels.urn:mrn:signalk:uuid:00000000-0000-0000-0000-000000000000',
+    selfContext: MOCK_SELF_CONTEXT,
     buses: new Map(),
     streambundle: {
       getSelfBus(path: string) {

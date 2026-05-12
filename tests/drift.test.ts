@@ -145,14 +145,19 @@ describe('DriftAnalyzer', () => {
       const input = r as DriftInput;
       expect(input.windowDays).toEqual({ thisWeek: 7, baseline: 30 });
       expect(input.engines).toHaveLength(1);
-      const eng = input.engines[0]!;
+      const eng = input.engines[0];
+      if (!eng) throw new Error('expected one engine');
       expect(eng.engineId).toBe('port');
       for (const bin of ['idle', 'lowCruise', 'highCruise', 'topEnd'] as const) {
         expect(eng.thisWeek[bin].count).toBe(50);
         expect(eng.baseline[bin].count).toBe(200);
-        expect(eng.deltas[bin].fuelRateDeltaPct).not.toBeNull();
-        expect(eng.deltas[bin].fuelRateDeltaPct!).toBeCloseTo(10, 0);
-        expect(eng.deltas[bin].sogDeltaPct!).toBeCloseTo(0, 1);
+        const fuel = eng.deltas[bin].fuelRateDeltaPct;
+        if (fuel == null) throw new Error(`null fuel delta in bin ${bin}`);
+        expect(fuel).toBeCloseTo(10, 0);
+        // pctDelta(0, 0) returns null for the idle bin (vessel stationary in
+        // both windows); skip the SOG assertion there.
+        const sog = eng.deltas[bin].sogDeltaPct;
+        if (sog != null) expect(sog).toBeCloseTo(0, 1);
       }
 
       // One query per (engine, window): two queries total for one engine.
@@ -186,7 +191,8 @@ describe('DriftAnalyzer', () => {
       const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
       expect(r).not.toBeNull();
       const input = r as DriftInput;
-      const eng = input.engines[0]!;
+      const eng = input.engines[0];
+      if (!eng) throw new Error('expected one engine');
       expect(eng.thisWeek.lowCruise.count).toBe(5);
       expect(eng.deltas.lowCruise.fuelRateDeltaPct).toBeNull();
       expect(eng.deltas.lowCruise.sogDeltaPct).toBeNull();

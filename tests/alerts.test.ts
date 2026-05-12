@@ -100,9 +100,9 @@ describe('AlertAnalyzer', () => {
     };
     const r = await a.collectContext(ctx, makeDeps(app, buf, publisher));
     expect(r).not.toBeNull();
-    expect(r!.subkind).toBe('low-soc-enter');
-    expect(r!.bankId).toBe('house');
-    expect((r!.snapshot as Record<string, unknown>).stateOfCharge).toBe(0.25);
+    expect(r?.subkind).toBe('low-soc-enter');
+    expect(r?.bankId).toBe('house');
+    expect((r?.snapshot as Record<string, unknown>).stateOfCharge).toBe(0.25);
   });
 
   it('publishOutput sends an alert-state notification on enter events', async () => {
@@ -121,15 +121,15 @@ describe('AlertAnalyzer', () => {
       bankId: 'house',
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     };
-    await a.publishOutput!('SoC is at 25%, check house bank.', ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.('SoC is at 25%, check house bank.', ctx, makeDeps(app, buf, publisher));
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]!.delta as {
+    const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { state: string } }[] }[];
     };
-    expect(d.updates[0]!.values[0]!.path).toBe(
+    expect(d.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.alert.low-soc-enter',
     );
-    expect(d.updates[0]!.values[0]!.value.state).toBe('alert');
+    expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
     const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
     expect(JSON.parse(line).analyzer).toBe('alerts');
   });
@@ -152,11 +152,11 @@ describe('AlertAnalyzer', () => {
     };
     const longText = `House bank SoC dropped to 25%. ${'Voltage trending down across all cells with no detectable charging source connected. '.repeat(10)}`;
     expect(longText.length).toBeGreaterThan(220);
-    await a.publishOutput!(longText, ctx, makeDeps(app, buf, publisher));
-    const d = app.published[0]!.delta as {
+    await a.publishOutput?.(longText, ctx, makeDeps(app, buf, publisher));
+    const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { message: string } }[] }[];
     };
-    const sentMessage = d.updates[0]!.values[0]!.value.message;
+    const sentMessage = d.updates[0]?.values[0]?.value.message;
     expect(sentMessage.length).toBeLessThanOrEqual(200);
     expect(sentMessage.endsWith('…')).toBe(true);
     expect(sentMessage.startsWith('House bank SoC dropped to 25%.')).toBe(true);
@@ -179,11 +179,11 @@ describe('AlertAnalyzer', () => {
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     };
     const short = 'House bank SoC dropped to 25%, check charging source.';
-    await a.publishOutput!(short, ctx, makeDeps(app, buf, publisher));
-    const d = app.published[0]!.delta as {
+    await a.publishOutput?.(short, ctx, makeDeps(app, buf, publisher));
+    const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { message: string } }[] }[];
     };
-    expect(d.updates[0]!.values[0]!.value.message).toBe(short);
+    expect(d.updates[0]?.values[0]?.value.message).toBe(short);
   });
 
   it('publishOutput sends a normal-state notification on exit events', async () => {
@@ -202,13 +202,13 @@ describe('AlertAnalyzer', () => {
       bankId: 'house',
       batteryEvent: { subkind: 'low-soc-exit', soc: 0.4 },
     };
-    await a.publishOutput!('SoC recovered to 40%.', ctx, makeDeps(app, buf, publisher));
-    const d = app.published[0]!.delta as {
+    await a.publishOutput?.('SoC recovered to 40%.', ctx, makeDeps(app, buf, publisher));
+    const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { state: string } }[] }[];
     };
-    expect(d.updates[0]!.values[0]!.path).toBe(
+    expect(d.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.alert.low-soc-exit',
     );
-    expect(d.updates[0]!.values[0]!.value.state).toBe('normal');
+    expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
   });
 });

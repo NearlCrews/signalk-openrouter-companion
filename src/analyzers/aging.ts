@@ -1,10 +1,14 @@
 import { clampPositiveInt } from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
-import { fmtNumber } from '../core/format.js';
+import { asFiniteNumber, fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
 import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
-import type { AnalyzerTriggerCfg } from '../types.js';
+import {
+  AGING_DEFAULT_LONG_DAYS,
+  AGING_DEFAULT_SHORT_DAYS,
+  type AnalyzerTriggerCfg,
+} from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
 export interface AgingCfg {
@@ -48,8 +52,8 @@ export interface AgingInput extends AnalysisInput {
 }
 
 function resolveWindowDays(cfg: AgingCfg): readonly number[] {
-  const short = clampPositiveInt(cfg.shortWindowDays, 30);
-  const long = clampPositiveInt(cfg.longWindowDays, 90);
+  const short = clampPositiveInt(cfg.shortWindowDays, AGING_DEFAULT_SHORT_DAYS);
+  const long = clampPositiveInt(cfg.longWindowDays, AGING_DEFAULT_LONG_DAYS);
   const [a, b] = short <= long ? [short, long] : [long, short];
   return a === b ? [a] : [a, b];
 }
@@ -118,7 +122,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   buildPrompt(input: AgingInput): { system: string; user: string } {
     const days = input.banks[0]?.windows.map((w) => w.days) ?? Array.from(this.windowDays);
     const windowDesc = days.map((d) => `${d}-day`).join(' and ');
-    const longestWindow = days.at(-1) ?? 90;
+    const longestWindow = days.at(-1) ?? AGING_DEFAULT_LONG_DAYS;
     const system = [
       'You are a marine LiFePO4 battery specialist reviewing capacity degradation trends from a Signal K vessel.',
       'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
@@ -157,11 +161,11 @@ function computeWindowStats(
   cap: PathSummary | undefined,
   cyc: PathSummary | undefined,
 ): WindowStats {
-  const capStart = numOrNull(cap?.first);
-  const capEnd = numOrNull(cap?.last);
+  const capStart = asFiniteNumber(cap?.first);
+  const capEnd = asFiniteNumber(cap?.last);
   const capN = cap?.n ?? 0;
-  const cycStart = numOrNull(cyc?.first);
-  const cycEnd = numOrNull(cyc?.last);
+  const cycStart = asFiniteNumber(cyc?.first);
+  const cycEnd = asFiniteNumber(cyc?.last);
   const cycN = cyc?.n ?? 0;
 
   let capacityDeltaPct: number | null = null;
@@ -236,8 +240,4 @@ async function queryWindow(
     // best-effort: caller treats missing path as insufficient data
   }
   return out;
-}
-
-function numOrNull(v: number | null | undefined): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }

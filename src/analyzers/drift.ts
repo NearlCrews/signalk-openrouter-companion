@@ -1,15 +1,14 @@
 import { clampPositiveInt } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
-import { fmtNumber, fmtPct } from '../core/format.js';
+import { asFiniteNumber, fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
 import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
-import type { AnalyzerTriggerCfg } from '../types.js';
+import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
 const DAY_MS = 86_400_000;
 const PAST_WEEK_DAYS = 7;
-const DEFAULT_BASELINE_DAYS = 30;
 // A bin must have at least this many RPM samples in both windows before its
 // delta is meaningful. Reported as null otherwise.
 const MIN_BIN_SAMPLES = 30;
@@ -86,7 +85,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(cfg.triggers);
-    this.baselineDays = clampPositiveInt(cfg.baselineDays, DEFAULT_BASELINE_DAYS);
+    this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
@@ -240,19 +239,14 @@ async function binEngineWindow(
     const sogIdx = cols.get('mean_sog') ?? -1;
     if (binIdx < 0 || nIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
     if (res.dataset.length === 0) return null;
-    const out: Record<BinKey, BinStats> = Object.fromEntries(
-      BIN_ORDER.map((k) => [k, { count: 0, meanFuelRate: null, meanSog: null }]),
-    ) as Record<BinKey, BinStats>;
+    const out = emptyBins();
     for (const row of res.dataset) {
       const binRaw = row[binIdx];
       if (typeof binRaw !== 'string' || !isBinKey(binRaw)) continue;
-      const n = row[nIdx];
-      const mf = row[fuelIdx];
-      const ms = row[sogIdx];
       out[binRaw] = {
-        count: typeof n === 'number' && Number.isFinite(n) ? n : 0,
-        meanFuelRate: typeof mf === 'number' && Number.isFinite(mf) ? mf : null,
-        meanSog: typeof ms === 'number' && Number.isFinite(ms) ? ms : null,
+        count: asFiniteNumber(row[nIdx]) ?? 0,
+        meanFuelRate: asFiniteNumber(row[fuelIdx]),
+        meanSog: asFiniteNumber(row[sogIdx]),
       };
     }
     return out;
@@ -262,7 +256,13 @@ async function binEngineWindow(
 }
 
 function isBinKey(k: string): k is BinKey {
-  return (BIN_ORDER as ReadonlyArray<string>).includes(k);
+  return (BIN_ORDER as readonly string[]).includes(k);
+}
+
+function emptyBins(): Record<BinKey, BinStats> {
+  return Object.fromEntries(
+    BIN_ORDER.map((k) => [k, { count: 0, meanFuelRate: null, meanSog: null }]),
+  ) as Record<BinKey, BinStats>;
 }
 
 function computeDeltas(

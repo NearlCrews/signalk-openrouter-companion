@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
 
+function lastLine(jsonl: string): string {
+  const line = jsonl.trim().split('\n').at(-1);
+  if (!line) throw new Error('empty JSONL');
+  return line;
+}
+
 describe('integration: engine session -> report', () => {
   let dir: string;
   let app: MockApp;
@@ -62,17 +68,17 @@ describe('integration: engine session -> report', () => {
 
     await vi.waitFor(() => expect(app.published.length).toBeGreaterThan(0), { timeout: 2000 });
 
-    const lastDelta = app.published.at(-1)!.delta as {
+    const lastDelta = app.published.at(-1)?.delta as {
       updates: { values: { path: string; value: { message: string; state: string } }[] }[];
     };
-    expect(lastDelta.updates[0]!.values[0]!.path).toBe(
+    expect(lastDelta.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.maintenance.report',
     );
-    expect(lastDelta.updates[0]!.values[0]!.value.state).toBe('normal');
-    expect(lastDelta.updates[0]!.values[0]!.value.message).toContain('Engine session');
+    expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('normal');
+    expect(lastDelta.updates[0]?.values[0]?.value.message).toContain('Engine session');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
-    const entry = JSON.parse(logRaw.trim().split('\n').at(-1)!);
+    const entry = JSON.parse(lastLine(logRaw));
     expect(entry.analyzer).toBe('maintenance');
     expect(entry.engineId).toBe('port');
 
@@ -120,14 +126,14 @@ describe('integration: engine session -> report', () => {
 
     await vi.waitFor(() => expect(app.published.length).toBeGreaterThan(0), { timeout: 30_000 });
 
-    const lastDelta = app.published.at(-1)!.delta as {
+    const lastDelta = app.published.at(-1)?.delta as {
       updates: { values: { path: string; value: { message: string; state: string } }[] }[];
     };
-    expect(lastDelta.updates[0]!.values[0]!.value.state).toBe('warn');
-    expect(lastDelta.updates[0]!.values[0]!.value.message).toContain('report unavailable');
+    expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('warn');
+    expect(lastDelta.updates[0]?.values[0]?.value.message).toContain('report unavailable');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
-    const entry = JSON.parse(logRaw.trim().split('\n').at(-1)!);
+    const entry = JSON.parse(lastLine(logRaw));
     expect(entry.analyzer).toBe('maintenance');
     expect(typeof entry.failure).toBe('string');
 
@@ -194,15 +200,15 @@ describe('integration: engine session -> report', () => {
       );
     });
     const value = (
-      alertDelta!.delta as {
+      alertDelta?.delta as {
         updates: { values: { value: { state: string; message: string } }[] }[];
       }
-    ).updates[0]!.values[0]!.value;
+    ).updates[0]?.values[0]?.value;
     expect(value.state).toBe('alert');
     expect(value.message).toContain('25%');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
-    const entry = JSON.parse(logRaw.trim().split('\n').at(-1)!);
+    const entry = JSON.parse(lastLine(logRaw));
     expect(entry.analyzer).toBe('alerts');
 
     await plugin.stop();

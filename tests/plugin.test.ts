@@ -73,10 +73,10 @@ describe('plugin lifecycle', () => {
     app.availablePaths = ['propulsion.port.revolutions'];
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
-    const beforeListeners = app.buses.get('propulsion.port.revolutions')!.listenerCount();
+    const beforeListeners = app.buses.get('propulsion.port.revolutions')?.listenerCount();
     expect(beforeListeners).toBeGreaterThan(0);
     await plugin.stop();
-    expect(app.buses.get('propulsion.port.revolutions')!.listenerCount()).toBe(0);
+    expect(app.buses.get('propulsion.port.revolutions')?.listenerCount()).toBe(0);
     expect(app.statusMessages.at(-1)).toBe('Stopped');
   });
 
@@ -87,10 +87,10 @@ describe('plugin lifecycle', () => {
     const firstPutCount = app.registeredPuts.length;
     expect(firstPutCount).toBeGreaterThan(0);
     await plugin.stop();
-    expect(app.buses.get('propulsion.port.revolutions')!.listenerCount()).toBe(0);
+    expect(app.buses.get('propulsion.port.revolutions')?.listenerCount()).toBe(0);
 
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
-    expect(app.buses.get('propulsion.port.revolutions')!.listenerCount()).toBeGreaterThan(0);
+    expect(app.buses.get('propulsion.port.revolutions')?.listenerCount()).toBeGreaterThan(0);
     expect(app.registeredPuts.length).toBe(firstPutCount * 2);
     await plugin.stop();
     expect(app.statusMessages.at(-1)).toBe('Stopped');
@@ -123,7 +123,7 @@ describe('plugin lifecycle', () => {
     expect(put).toBeDefined();
 
     const cb = vi.fn();
-    const sync = (put!.handler as (...args: unknown[]) => unknown)(
+    const sync = (put?.handler as (...args: unknown[]) => unknown)(
       'vessels.self',
       'plugins.openrouter-companion.maintenance.run',
       { reason: 'manual' },
@@ -132,7 +132,7 @@ describe('plugin lifecycle', () => {
     expect(sync).toEqual({ state: 'PENDING' });
 
     await vi.waitFor(() => expect(cb).toHaveBeenCalled(), { timeout: 2000 });
-    const arg = cb.mock.calls[0]![0] as { state: string };
+    const arg = cb.mock.calls[0]?.[0] as { state: string };
     expect(arg.state).toBe('COMPLETED');
 
     vi.unstubAllGlobals();

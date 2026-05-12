@@ -70,7 +70,6 @@ export default function createPlugin(app: ServerApiLike): {
   const unsubs: Array<() => void> = [];
   const intervalHandles: NodeJS.Timeout[] = [];
   let lifecycleController: AbortController | null = null;
-  let restartFn: (() => void) | null = null;
   let scheduler: CronScheduler | null = null;
   // Reset on every start() so a restart hands out a fresh promise.
   let signalReady: () => void = () => {};
@@ -100,7 +99,10 @@ export default function createPlugin(app: ServerApiLike): {
           return;
         }
         lifecycleController = new AbortController();
-        restartFn = restart;
+        // `restart` is provided by the SK server in case a plugin needs to
+        // request a self-restart. No analyzer triggers a restart today, so
+        // the parameter is intentionally captured but unused.
+        void restart;
         scheduler = new CronScheduler({
           tz: cfg.analyzers.maintenance.triggers.cron.timezone || undefined,
         });
@@ -205,9 +207,9 @@ export default function createPlugin(app: ServerApiLike): {
               budget,
               llm,
               logger,
-              app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
+              app,
               setStatus: (m) => app.setPluginStatus(m),
-              requestRestart: () => restartFn?.(),
+              okStatus: runningStatus(analyzers.length),
             });
             for (const a of analyzers) {
               for (const t of a.triggers) {
@@ -391,7 +393,6 @@ export default function createPlugin(app: ServerApiLike): {
     },
 
     stop: async () => {
-      restartFn = null;
       if (lifecycleController) {
         lifecycleController.abort();
         lifecycleController = null;

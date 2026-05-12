@@ -91,12 +91,12 @@ describe('HealthAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date(now) };
     const r = await a.collectContext(ctx, makeDeps(app, buf));
     expect(r).not.toBeNull();
-    const banks = r!.banks as Array<Record<string, unknown>>;
+    const banks = r?.banks as Array<Record<string, unknown>>;
     expect(banks).toHaveLength(1);
-    expect(banks[0]!.id).toBe('house');
-    expect(banks[0]!.stateOfCharge).toBe(0.85);
-    expect(banks[0]!.cycles).toBe(12);
-    expect(banks[0]!.voltage24h).toMatchObject({ min: 12.4, max: 12.6, count: 2 });
+    expect(banks[0]?.id).toBe('house');
+    expect(banks[0]?.stateOfCharge).toBe(0.85);
+    expect(banks[0]?.cycles).toBe(12);
+    expect(banks[0]?.voltage24h).toMatchObject({ min: 12.4, max: 12.6, count: 2 });
   });
 
   it('buildPrompt produces stable system + user content', () => {

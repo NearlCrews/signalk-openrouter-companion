@@ -1,5 +1,5 @@
 import { fmtNumber } from '../core/format.js';
-import { bankPaths } from '../core/paths.js';
+import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
@@ -41,7 +41,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {
-    const tree = deps.app.getSelfPath('electrical.batteries');
+    const tree = deps.app.getSelfPath(BATTERIES_PARENT_PATH);
     if (!tree || typeof tree !== 'object') return null;
     const banksRaw = Object.entries(tree as Record<string, unknown>);
     if (banksRaw.length === 0) return null;

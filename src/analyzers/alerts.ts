@@ -1,5 +1,5 @@
 import { fmtRatio, fmtUnit } from '../core/format.js';
-import { alertNotificationPath } from '../core/paths.js';
+import { alertNotificationPath, BATTERIES_PARENT_PATH } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import { ALERTS_SUPPORTED_EVENTS, type AnalyzerTriggerCfg } from '../types.js';
@@ -11,7 +11,10 @@ import type {
   TriggerSpec,
 } from './Analyzer.js';
 
-const ENTER_SUBKINDS: ReadonlyArray<BatteryEventKind> = ['low-soc-enter', 'cell-imbalance-enter'];
+const ENTER_SUBKINDS: ReadonlySet<BatteryEventKind> = new Set([
+  'low-soc-enter',
+  'cell-imbalance-enter',
+]);
 
 // PGN 126985 (Alert Text) carries this through the NMEA 2000 emitter. The wire
 // can hold ~200 chars but Garmin chartplotters truncate alertTextDescription
@@ -61,7 +64,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {
     if (ctx.kind !== 'battery-event' || !ctx.batteryEvent || !ctx.bankId) return null;
-    const tree = deps.app.getSelfPath('electrical.batteries');
+    const tree = deps.app.getSelfPath(BATTERIES_PARENT_PATH);
     const bankNode =
       tree && typeof tree === 'object' ? (tree as Record<string, unknown>)[ctx.bankId] : undefined;
     return {
@@ -108,7 +111,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     const subkind = ctx.batteryEvent?.subkind;
     if (!subkind) return;
     const path = alertNotificationPath(subkind);
-    const state: 'alert' | 'normal' = ENTER_SUBKINDS.includes(subkind) ? 'alert' : 'normal';
+    const state: 'alert' | 'normal' = ENTER_SUBKINDS.has(subkind) ? 'alert' : 'normal';
     const message = truncateForN2K(text);
     await deps.publisher.publishOnPath(message, { analyzerId: this.id, ctx }, { path, state });
   }

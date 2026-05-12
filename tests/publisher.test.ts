@@ -38,17 +38,19 @@ describe('ReportPublisher', () => {
       },
     });
     expect(app.published).toHaveLength(1);
-    const { pluginId, delta } = app.published[0]!;
+    const first = app.published[0];
+    if (!first) throw new Error('expected one published delta');
+    const { pluginId, delta } = first;
     expect(pluginId).toBe('orc');
     const d = delta as {
       updates: {
         values: { path: string; value: { state: string; method: string[]; message: string } }[];
       }[];
     };
-    expect(d.updates[0]!.values[0]!.path).toBe('notifications.x.report');
-    expect(d.updates[0]!.values[0]!.value.state).toBe('normal');
-    expect(d.updates[0]!.values[0]!.value.method).toEqual(['visual']);
-    expect(d.updates[0]!.values[0]!.value.message).toBe('the report text');
+    expect(d.updates[0]?.values[0]?.path).toBe('notifications.x.report');
+    expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
+    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual']);
+    expect(d.updates[0]?.values[0]?.value.message).toBe('the report text');
 
     const line = (await readFile(logPath, 'utf-8')).trim();
     const entry = JSON.parse(line);
@@ -82,14 +84,14 @@ describe('ReportPublisher', () => {
       { path: 'notifications.openrouter-companion.alert.low-soc-enter', state: 'alert' },
     );
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]!.delta as {
+    const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { state: string; message: string } }[] }[];
     };
-    expect(d.updates[0]!.values[0]!.path).toBe(
+    expect(d.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.alert.low-soc-enter',
     );
-    expect(d.updates[0]!.values[0]!.value.state).toBe('alert');
-    expect(d.updates[0]!.values[0]!.value.message).toBe('soc dropped');
+    expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
+    expect(d.updates[0]?.values[0]?.value.message).toBe('soc dropped');
   });
 
   it('publishFailure emits a warn-state notification', async () => {
@@ -110,10 +112,10 @@ describe('ReportPublisher', () => {
       new Error('upstream 503'),
     );
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]!.delta as {
+    const d = app.published[0]?.delta as {
       updates: { values: { value: { state: string; message: string } }[] }[];
     };
-    expect(d.updates[0]!.values[0]!.value.state).toBe('warn');
-    expect(d.updates[0]!.values[0]!.value.message).toContain('upstream 503');
+    expect(d.updates[0]?.values[0]?.value.state).toBe('warn');
+    expect(d.updates[0]?.values[0]?.value.message).toContain('upstream 503');
   });
 });

@@ -23,6 +23,7 @@ interface AnalyzerEntry {
 
 export class TriggerRouter {
   private entries: AnalyzerEntry[];
+  private lastStatus: string | null = null;
 
   constructor(
     analyzers: Analyzer[],
@@ -34,6 +35,13 @@ export class TriggerRouter {
         ? a.publishOutput.bind(a)
         : async (text, ctx, deps) => deps.publisher.publish(text, { analyzerId: a.id, ctx }),
     }));
+  }
+
+  // Skip SK admin-UI churn when the status string hasn't changed.
+  private setStatus(msg: string): void {
+    if (msg === this.lastStatus) return;
+    this.lastStatus = msg;
+    this.deps.setStatus?.(msg);
   }
 
   async dispatch(kind: TriggerKind, ctx: TriggerCtx, extras: DispatchExtras = {}): Promise<void> {
@@ -50,13 +58,13 @@ export class TriggerRouter {
       if (input == null) return;
       if (!this.deps.budget.canSpend()) {
         this.deps.logger.debug(`${a.id}: budget exhausted, skipping`);
-        this.deps.setStatus?.('Running, budget exhausted for today');
+        this.setStatus('Running, budget exhausted for today');
         return;
       }
       const { system, user } = a.buildPrompt(input);
       const { text } = await this.deps.llm.complete({ system, user });
       await this.deps.budget.recordCall();
-      this.deps.setStatus?.('Running');
+      this.setStatus(this.deps.okStatus ?? 'Running');
       await entry.publish(text, ctx, this.deps);
     } catch (err) {
       this.deps.logger.error(`${a.id}: ${stringify(err)}`);

@@ -48,7 +48,10 @@ export interface AnalyzerDeps {
   logger: import('../core/logger.js').Logger;
   app: AppForAnalyzer;
   setStatus?: (msg: string) => void;
-  requestRestart?: () => void;
+  // The "all healthy" status string the router uses when recovering from a
+  // budget-exhausted state. index.ts populates with the analyzer-count aware
+  // banner so recovery matches the startup message.
+  okStatus?: string;
 }
 
 export interface Analyzer<I extends AnalysisInput = AnalysisInput> {

@@ -1,7 +1,13 @@
 import { WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
-import { engineNotificationsPath, enginePathPrefix } from '../core/paths.js';
-import { readNumberAt } from '../core/skNode.js';
+import {
+  BATTERIES_PARENT_PATH,
+  bankPaths,
+  engineNotificationsPath,
+  enginePathPrefix,
+  PROPULSION_PREFIX,
+} from '../core/paths.js';
+import { readNumberAt, readValueAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -43,15 +49,21 @@ export interface MaintenanceInput extends AnalysisInput {
   batteries: BatterySnapshot[];
 }
 
+// When fired by cron or PUT (not engine-stop), maintenance falls back to
+// summarizing the last 30 minutes of telemetry as the "session".
+const MAINT_FALLBACK_WINDOW_MS = 30 * 60 * 1000;
+
 export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   readonly id = 'maintenance';
   readonly title = 'Maintenance Advisor';
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly minSessionSeconds: number;
 
-  constructor(private cfg: MaintenanceCfg) {
+  constructor(cfg: MaintenanceCfg) {
     this.triggers = buildTriggers(cfg.triggers, (sub) =>
       sub === 'engine-stop' ? { kind: 'engine-stop' } : null,
     );
+    this.minSessionSeconds = cfg.minSessionSeconds;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<MaintenanceInput | null> {
@@ -60,13 +72,13 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     let endMs: number;
     if (ctx.kind === 'engine-stop') {
       const sess = ctx.engineSession;
-      if (!sess || sess.durationSec < this.cfg.minSessionSeconds) return null;
+      if (!sess || sess.durationSec < this.minSessionSeconds) return null;
       engineId = sess.engineId;
       startMs = sess.start.getTime();
       endMs = sess.end.getTime();
     } else if (ctx.kind === 'put' || ctx.kind === 'cron') {
       endMs = ctx.firedAt.getTime();
-      startMs = endMs - 30 * 60 * 1000;
+      startMs = endMs - MAINT_FALLBACK_WINDOW_MS;
       engineId = 'unknown';
     } else {
       return null;
@@ -147,7 +159,7 @@ function listWatchedPaths(deps: AnalyzerDeps, engineId: string): string[] {
       out.add(path);
       continue;
     }
-    if (path.startsWith('propulsion.')) continue;
+    if (path.startsWith(PROPULSION_PREFIX)) continue;
     if (WATCH_PREFIXES.some((prefix) => path.startsWith(prefix))) out.add(path);
   }
   return Array.from(out).sort();
@@ -160,31 +172,27 @@ function snapshotEngineNotifications(
   const tree = deps.app.getSelfPath(engineNotificationsPath(engineId));
   if (!tree || typeof tree !== 'object') return {};
   const out: Record<string, unknown> = {};
-  for (const [slot, node] of Object.entries(tree as Record<string, unknown>)) {
-    if (node && typeof node === 'object' && 'value' in (node as Record<string, unknown>)) {
-      out[slot] = (node as { value: unknown }).value;
-    }
+  for (const slot of Object.keys(tree as Record<string, unknown>)) {
+    const value = readValueAt(tree, slot);
+    if (value !== undefined) out[slot] = value;
   }
   return out;
 }
 
 function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): BatterySnapshot[] {
-  const tree = deps.app.getSelfPath('electrical.batteries');
+  const tree = deps.app.getSelfPath(BATTERIES_PARENT_PATH);
   if (!tree || typeof tree !== 'object') return [];
   const out: BatterySnapshot[] = [];
   for (const [id, node] of Object.entries(tree as Record<string, unknown>)) {
+    const paths = bankPaths(id);
     out.push({
       id,
       voltage: readNumberAt(node, 'voltage'),
       current: readNumberAt(node, 'current'),
       stateOfCharge: readNumberAt(node, 'capacity.stateOfCharge'),
       nominalCapacityJ: readNumberAt(node, 'capacity.nominal'),
-      voltageSession: deps.buffer.summarize(`electrical.batteries.${id}.voltage`, startMs, endMs),
-      socSession: deps.buffer.summarize(
-        `electrical.batteries.${id}.capacity.stateOfCharge`,
-        startMs,
-        endMs,
-      ),
+      voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
+      socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
     });
   }
   return out;

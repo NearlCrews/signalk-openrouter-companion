@@ -39,8 +39,17 @@ type Listener = (e: BatteryEvent) => void;
 export class BatteryMonitor {
   private banks = new Map<string, BankState>();
   private listeners = new Map<BatteryEventKind, Set<Listener>>();
+  private readonly lowThreshold: number;
+  private readonly exitThreshold: number;
+  private readonly imbalanceSettleMs: number;
 
-  constructor(private opts: BatteryMonitorOptions) {}
+  constructor(private opts: BatteryMonitorOptions) {
+    // Hoisted out of the per-delta hot path: opts is fixed for the monitor's
+    // lifetime so the threshold ratios and Ms conversion are constant.
+    this.lowThreshold = opts.lowSocPercent / 100;
+    this.exitThreshold = (opts.lowSocPercent + opts.socExitHysteresis) / 100;
+    this.imbalanceSettleMs = opts.imbalanceSettleSec * 1000;
+  }
 
   on(kind: BatteryEventKind, cb: Listener): () => void {
     let set = this.listeners.get(kind);
@@ -92,13 +101,10 @@ export class BatteryMonitor {
     }
     if (!Number.isFinite(effective)) return;
 
-    const lowThreshold = this.opts.lowSocPercent / 100;
-    const exitThreshold = (this.opts.lowSocPercent + this.opts.socExitHysteresis) / 100;
-
-    if (!b.socLow && effective < lowThreshold) {
+    if (!b.socLow && effective < this.lowThreshold) {
       b.socLow = true;
       this.emit({ kind: 'low-soc-enter', bankId, ts, soc: effective });
-    } else if (b.socLow && effective >= exitThreshold) {
+    } else if (b.socLow && effective >= this.exitThreshold) {
       b.socLow = false;
       this.emit({ kind: 'low-soc-exit', bankId, ts, soc: effective });
     }
@@ -128,7 +134,7 @@ export class BatteryMonitor {
     for (const b of this.banks.values()) {
       if (!b.imbalanceHigh && b.imbalanceSince !== null) {
         const elapsed = now - b.imbalanceSince;
-        if (elapsed >= this.opts.imbalanceSettleSec * 1000) {
+        if (elapsed >= this.imbalanceSettleMs) {
           const imbalance = this.computeImbalance(b);
           if (imbalance > this.opts.cellImbalanceV) {
             b.imbalanceHigh = true;

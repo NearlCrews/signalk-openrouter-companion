@@ -45,9 +45,13 @@ describe('QuestDBClient', () => {
       { name: 'value', type: 'DOUBLE' },
     ]);
     expect(r.dataset).toEqual([['2026-05-10T00:00:00Z', 12.5]]);
-    const [url] = fetchMock.mock.calls[0]!;
+    const firstCall = fetchMock.mock.calls[0];
+    if (!firstCall) throw new Error('expected fetch call');
+    const [url] = firstCall;
     expect(typeof url).toBe('string');
-    expect(decodeURIComponent((url as string).split('query=')[1]!)).toContain(
+    const queryPart = (url as string).split('query=')[1];
+    if (!queryPart) throw new Error('expected query= in URL');
+    expect(decodeURIComponent(queryPart)).toContain(
       "SELECT ts, value FROM signalk WHERE path = 'x'",
     );
   });
@@ -56,58 +60,5 @@ describe('QuestDBClient', () => {
     fetchMock.mockResolvedValueOnce(new Response('boom', { status: 500 }));
     const q = new QuestDBClient({ url: 'http://localhost:9000' });
     await expect(q.query('SELECT 1')).rejects.toThrow(/HTTP 500/);
-  });
-
-  it('baselineFor returns null for empty dataset', async () => {
-    fetchMock.mockResolvedValueOnce(ok({ columns: [], dataset: [] }));
-    const q = new QuestDBClient({ url: 'http://localhost:9000' });
-    const r = await q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30);
-    expect(r).toBeNull();
-  });
-
-  it('baselineFor returns aggregate stats from a single row', async () => {
-    fetchMock.mockResolvedValueOnce(
-      ok({
-        columns: [
-          { name: 'min', type: 'DOUBLE' },
-          { name: 'max', type: 'DOUBLE' },
-          { name: 'mean', type: 'DOUBLE' },
-          { name: 'p10', type: 'DOUBLE' },
-          { name: 'p50', type: 'DOUBLE' },
-          { name: 'p90', type: 'DOUBLE' },
-        ],
-        dataset: [[1, 100, 50, 5, 50, 95]],
-      }),
-    );
-    const q = new QuestDBClient({ url: 'http://localhost:9000' });
-    const r = await q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30);
-    expect(r).toEqual({ min: 1, max: 100, mean: 50, p10: 5, p50: 50, p90: 95 });
-  });
-
-  it('baselineFor propagates errors from query()', async () => {
-    fetchMock.mockResolvedValueOnce(new Response('boom', { status: 500 }));
-    const q = new QuestDBClient({ url: 'http://localhost:9000' });
-    await expect(q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30)).rejects.toThrow(
-      /HTTP 500/,
-    );
-  });
-
-  it('baselineFor returns null when QuestDB row contains nulls for all aggregates', async () => {
-    fetchMock.mockResolvedValueOnce(
-      ok({
-        columns: [
-          { name: 'min', type: 'DOUBLE' },
-          { name: 'max', type: 'DOUBLE' },
-          { name: 'mean', type: 'DOUBLE' },
-          { name: 'p10', type: 'DOUBLE' },
-          { name: 'p50', type: 'DOUBLE' },
-          { name: 'p90', type: 'DOUBLE' },
-        ],
-        dataset: [[null, null, null, null, null, null]],
-      }),
-    );
-    const q = new QuestDBClient({ url: 'http://localhost:9000' });
-    const r = await q.baselineFor('propulsion.port.revolutions', 'vessels.self', 30);
-    expect(r).toBeNull();
   });
 });

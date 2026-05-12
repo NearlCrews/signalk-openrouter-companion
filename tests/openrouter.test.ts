@@ -14,6 +14,18 @@ function jsonResponse(
   });
 }
 
+function makeClient(overrides: Partial<ConstructorParameters<typeof OpenRouterClient>[0]> = {}) {
+  return new OpenRouterClient({
+    apiKey: 'k',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'm',
+    requestTimeoutMs: 60_000,
+    referer: 'r',
+    title: 't',
+    ...overrides,
+  });
+}
+
 describe('OpenRouterClient', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {
@@ -32,9 +44,8 @@ describe('OpenRouterClient', () => {
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       }),
     );
-    const c = new OpenRouterClient({
+    const c = makeClient({
       apiKey: 'sk-test',
-      baseUrl: 'https://openrouter.ai/api/v1',
       model: 'anthropic/claude-haiku-4.5',
       requestTimeoutMs: 5000,
       referer: 'https://example.test',
@@ -44,7 +55,9 @@ describe('OpenRouterClient', () => {
     expect(r.text).toBe('hello world');
     expect(r.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0]!;
+    const firstCall = fetchMock.mock.calls[0];
+    if (!firstCall) throw new Error('expected fetch call');
+    const [url, init] = firstCall;
     expect(url).toBe(ENDPOINT);
     expect((init as RequestInit).method).toBe('POST');
     const headers = (init as RequestInit).headers as Record<string, string>;
@@ -72,14 +85,7 @@ describe('OpenRouterClient', () => {
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
-    const c = new OpenRouterClient({
-      apiKey: 'k',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'm',
-      requestTimeoutMs: 5000,
-      referer: 'r',
-      title: 't',
-    });
+    const c = makeClient({ requestTimeoutMs: 5000 });
     const p = c.complete({ system: 's', user: 'u' });
     await vi.advanceTimersByTimeAsync(1500);
     const r = await p;
@@ -92,14 +98,7 @@ describe('OpenRouterClient', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(401, { error: { code: 401, message: 'bad key' } }),
     );
-    const c = new OpenRouterClient({
-      apiKey: 'k',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'm',
-      requestTimeoutMs: 5000,
-      referer: 'r',
-      title: 't',
-    });
+    const c = makeClient({ requestTimeoutMs: 5000 });
     await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({
       name: 'OpenRouterError',
       status: 401,
@@ -116,14 +115,7 @@ describe('OpenRouterClient', () => {
         );
       });
     });
-    const c = new OpenRouterClient({
-      apiKey: 'k',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'm',
-      requestTimeoutMs: 60_000,
-      referer: 'r',
-      title: 't',
-    });
+    const c = makeClient();
     const ctrl = new AbortController();
     const p = c.complete({ system: 's', user: 'u', abortSignal: ctrl.signal });
     ctrl.abort();
@@ -133,14 +125,7 @@ describe('OpenRouterClient', () => {
   it('gives up after 3 retries on 503', async () => {
     vi.useFakeTimers();
     fetchMock.mockResolvedValue(jsonResponse(503, { error: { code: 503, message: 'down' } }));
-    const c = new OpenRouterClient({
-      apiKey: 'k',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'm',
-      requestTimeoutMs: 60_000,
-      referer: 'r',
-      title: 't',
-    });
+    const c = makeClient();
     const p = c.complete({ system: 's', user: 'u' });
     const assertion = expect(p).rejects.toMatchObject({ status: 503, retryable: true });
     await vi.advanceTimersByTimeAsync(10_000);
@@ -159,14 +144,7 @@ describe('OpenRouterClient', () => {
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
-    const c = new OpenRouterClient({
-      apiKey: 'k',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'm',
-      requestTimeoutMs: 60_000,
-      referer: 'r',
-      title: 't',
-    });
+    const c = makeClient();
     const p = c.complete({ system: 's', user: 'u' });
     await vi.advanceTimersByTimeAsync(10_000);
     const r = await p;
@@ -185,14 +163,7 @@ describe('OpenRouterClient', () => {
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
-    const c = new OpenRouterClient({
-      apiKey: 'k',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'm',
-      requestTimeoutMs: 60_000,
-      referer: 'r',
-      title: 't',
-    });
+    const c = makeClient();
     const p = c.complete({ system: 's', user: 'u' });
     await vi.advanceTimersByTimeAsync(10_000);
     const r = await p;

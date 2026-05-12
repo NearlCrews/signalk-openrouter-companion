@@ -79,20 +79,22 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     });
     const r = await a.collectContext(engineStopCtx(3600), makeDeps(app, buf));
     expect(r).not.toBeNull();
-    expect(r!.session).toEqual({
+    expect(r?.session).toEqual({
       engineId: 'port',
       start: '2026-05-10T09:00:00.000Z',
       end: '2026-05-10T10:00:00.000Z',
       durationSec: 3600,
     });
-    const telemetry = r!.telemetry as Record<string, { min: number; max: number; count: number }>;
+    const telemetry = r?.telemetry as Record<string, { min: number; max: number; count: number }>;
     expect(telemetry['propulsion.port.revolutions']).toMatchObject({ min: 12, max: 22, count: 3 });
-    expect(r!.engineNotifications).toEqual({
+    expect(r?.engineNotifications).toEqual({
       lowOilPressure: { state: 'normal', message: 'OK' },
       maintenanceNeeded: { state: 'alert', message: 'Service due' },
     });
-    expect(r!.batteries).toHaveLength(1);
-    const bank = r!.batteries[0]!;
+    expect(r?.batteries).toHaveLength(1);
+    if (!r) throw new Error('expected maintenance input');
+    const bank = r.batteries[0];
+    if (!bank) throw new Error('expected at least one battery');
     expect(bank).toMatchObject({
       id: 'house',
       voltage: 13.6,
