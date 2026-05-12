@@ -70,6 +70,7 @@ export default function createPlugin(app: ServerApiLike): {
   uiSchema: () => ReturnType<typeof buildUiSchema>;
   start: (settings: Partial<PluginOptions>, restart: () => void) => void;
   stop: () => Promise<void>;
+  whenReady: () => Promise<void>;
 } {
   const logger = new Logger(app);
   const unsubs: Array<() => void> = [];
@@ -77,6 +78,13 @@ export default function createPlugin(app: ServerApiLike): {
   let lifecycleController: AbortController | null = null;
   let restartFn: (() => void) | null = null;
   let scheduler: CronScheduler | null = null;
+  // Resolves once the deferred Promise.all([probe, budget]).then() block in
+  // start() has finished wiring the router. Reset on every start() so a
+  // restart hands out a fresh promise.
+  let signalReady: () => void = () => {};
+  let readyPromise: Promise<void> = new Promise<void>((resolve) => {
+    signalReady = resolve;
+  });
 
   return {
     id: PLUGIN_ID,
@@ -90,6 +98,9 @@ export default function createPlugin(app: ServerApiLike): {
     start: (rawSettings, restart) => {
       try {
         app.setPluginStatus('Starting');
+        readyPromise = new Promise<void>((resolve) => {
+          signalReady = resolve;
+        });
         const cfg = mergeWithDefaults(rawSettings);
         if (!cfg.openrouter.apiKey) {
           app.setPluginStatus('Awaiting API key configuration');
@@ -205,9 +216,8 @@ export default function createPlugin(app: ServerApiLike): {
                 }
               }
             }
-            // Marker for tests that need to know the router is wired before
-            // pushing deltas. Production reads it as a debug breadcrumb.
             logger.debug('router ready');
+            signalReady();
           })
           .catch((err) => logger.debug(`startup aborted: ${stringify(err)}`));
 
@@ -374,6 +384,8 @@ export default function createPlugin(app: ServerApiLike): {
       intervalHandles.length = 0;
       app.setPluginStatus('Stopped');
     },
+
+    whenReady: () => readyPromise,
   };
 }
 

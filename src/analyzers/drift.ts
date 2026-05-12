@@ -1,4 +1,5 @@
 import { discoverEngineIds as discoverEngineIdsFromPaths } from '../core/discovery.js';
+import { fmtNumber, fmtPct } from '../core/format.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -12,10 +13,11 @@ const MIN_BIN_SAMPLES = 30;
 // and exclude the sample from any bin. Matches the running-detect floor used
 // by the engine detector and is roughly 300 RPM.
 const RPM_RUNNING_THRESHOLD_HZ = 5.0;
-// Window (in ms) used to pair a non-RPM sample to its most recent preceding RPM
-// observation. Beyond this gap, the non-RPM sample is dropped from binning.
-const RPM_JOIN_WINDOW_MS = 5_000;
-const QUERY_ROW_LIMIT = 50_000;
+// Maximum lag (in microseconds) between an RPM sample and the ASOF-joined
+// fuel.rate or SOG sample for that joined value to count toward the per-bin
+// mean. QuestDB stores TIMESTAMP as microseconds since epoch and arithmetic
+// on two TIMESTAMP columns returns microseconds. 5 seconds = 5_000_000 us.
+const RPM_JOIN_WINDOW_US = 5_000_000;
 
 export interface DriftCfg {
   triggers: AnalyzerTriggerCfg;
@@ -67,11 +69,6 @@ export interface DriftInput extends AnalysisInput {
   generatedAt: string;
   windowDays: { thisWeek: number; baseline: number };
   engines: EngineDrift[];
-}
-
-interface Sample {
-  ts: number;
-  value: number;
 }
 
 export class DriftAnalyzer implements Analyzer<DriftInput> {
@@ -170,7 +167,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
         const d = eng.deltas[bin];
         const range = `${def.label} [${def.min}, ${def.max === Number.POSITIVE_INFINITY ? '∞' : def.max}) Hz`;
         lines.push(
-          `| ${range} | ${w.count} | ${b.count} | ${fmtNum(w.meanFuelRate)} | ${fmtNum(b.meanFuelRate)} | ${fmtPct(d.fuelRateDeltaPct)} | ${fmtNum(w.meanSog)} | ${fmtNum(b.meanSog)} | ${fmtPct(d.sogDeltaPct)} |`,
+          `| ${range} | ${w.count} | ${b.count} | ${fmtNumber(w.meanFuelRate, { digits: 5 })} | ${fmtNumber(b.meanFuelRate, { digits: 5 })} | ${fmtPct(d.fuelRateDeltaPct)} | ${fmtNumber(w.meanSog, { digits: 5 })} | ${fmtNumber(b.meanSog, { digits: 5 })} | ${fmtPct(d.sogDeltaPct)} |`,
         );
       }
       lines.push('');
@@ -188,6 +185,11 @@ function discoverEngineIds(deps: AnalyzerDeps): string[] {
   return ids;
 }
 
+// Issues one QuestDB query per (engine, window) that does the per-RPM-band
+// aggregation server-side. ASOF JOIN pairs each RPM sample with the most
+// recent preceding fuel.rate and SOG sample, matching the JS impl's
+// pairToBins semantics. The 5-second join tolerance is enforced inline so
+// stale fuel/sog readings don't drag the mean.
 async function binEngineWindow(
   questdb: NonNullable<AnalyzerDeps['questdb']>,
   context: string,
@@ -195,131 +197,82 @@ async function binEngineWindow(
   fromMs: number,
   toMs: number,
 ): Promise<Record<BinKey, BinStats> | null> {
-  const rpmPath = `propulsion.${engineId}.revolutions`;
-  const fuelPath = `propulsion.${engineId}.fuel.rate`;
-  const sogPath = 'navigation.speedOverGround';
-  const [rpm, fuel, sog] = await Promise.all([
-    fetchSamples(questdb, rpmPath, context, fromMs, toMs),
-    fetchSamples(questdb, fuelPath, context, fromMs, toMs),
-    fetchSamples(questdb, sogPath, context, fromMs, toMs),
-  ]);
-  if (rpm.length === 0) return null;
-  rpm.sort(byTs);
-  fuel.sort(byTs);
-  sog.sort(byTs);
-
-  const acc: Record<
-    BinKey,
-    { count: number; fuelSum: number; fuelN: number; sogSum: number; sogN: number }
-  > = Object.fromEntries(
-    BIN_ORDER.map((k) => [k, { count: 0, fuelSum: 0, fuelN: 0, sogSum: 0, sogN: 0 }]),
-  ) as typeof acc;
-
-  for (const r of rpm) {
-    const bin = binFor(r.value);
-    if (bin) acc[bin].count += 1;
-  }
-  pairToBins(rpm, fuel, (bin, value) => {
-    acc[bin].fuelSum += value;
-    acc[bin].fuelN += 1;
-  });
-  pairToBins(rpm, sog, (bin, value) => {
-    acc[bin].sogSum += value;
-    acc[bin].sogN += 1;
-  });
-
-  return Object.fromEntries(BIN_ORDER.map((k) => [k, finalizeBin(acc[k])])) as Record<
-    BinKey,
-    BinStats
-  >;
-}
-
-function finalizeBin(a: {
-  count: number;
-  fuelSum: number;
-  fuelN: number;
-  sogSum: number;
-  sogN: number;
-}): BinStats {
-  return {
-    count: a.count,
-    meanFuelRate: a.fuelN > 0 ? a.fuelSum / a.fuelN : null,
-    meanSog: a.sogN > 0 ? a.sogSum / a.sogN : null,
-  };
-}
-
-function pairToBins(
-  rpm: Sample[],
-  samples: Sample[],
-  emit: (bin: BinKey, value: number) => void,
-): void {
-  if (rpm.length === 0) return;
-  let i = 0;
-  for (const s of samples) {
-    while (i + 1 < rpm.length && rpm[i + 1]!.ts <= s.ts) i += 1;
-    const r = rpm[i];
-    if (!r || r.ts > s.ts) continue;
-    if (s.ts - r.ts > RPM_JOIN_WINDOW_MS) continue;
-    const bin = binFor(r.value);
-    if (!bin) continue;
-    emit(bin, s.value);
-  }
-}
-
-function binFor(rpmHz: number): BinKey | null {
-  if (!Number.isFinite(rpmHz) || rpmHz < RPM_RUNNING_THRESHOLD_HZ) return null;
-  for (const k of BIN_ORDER) {
-    const def = BIN_DEFS[k];
-    if (rpmHz >= def.min && rpmHz < def.max) return k;
-  }
-  return null;
-}
-
-async function fetchSamples(
-  questdb: NonNullable<AnalyzerDeps['questdb']>,
-  path: string,
-  context: string,
-  fromMs: number,
-  toMs: number,
-): Promise<Sample[]> {
-  const escapedPath = path.replace(/'/g, "''");
   const escapedCtx = context.replace(/'/g, "''");
+  const rpmPath = `propulsion.${engineId}.revolutions`.replace(/'/g, "''");
+  const fuelPath = `propulsion.${engineId}.fuel.rate`.replace(/'/g, "''");
+  const sogPath = 'navigation.speedOverGround';
   const fromIso = new Date(fromMs).toISOString();
   const toIso = new Date(toMs).toISOString();
   const sql = `
-    SELECT ts, value FROM signalk
-    WHERE path = '${escapedPath}'
-      AND context = '${escapedCtx}'
-      AND ts >= '${fromIso}'
-      AND ts < '${toIso}'
-    ORDER BY ts
-    LIMIT ${QUERY_ROW_LIMIT}
+    WITH r AS (
+      SELECT ts, value FROM signalk
+      WHERE path = '${rpmPath}'
+        AND context = '${escapedCtx}'
+        AND ts >= '${fromIso}'
+        AND ts < '${toIso}'
+        AND value >= ${RPM_RUNNING_THRESHOLD_HZ}
+    ),
+    f AS (
+      SELECT ts, value FROM signalk
+      WHERE path = '${fuelPath}'
+        AND context = '${escapedCtx}'
+        AND ts >= '${fromIso}'
+        AND ts < '${toIso}'
+    ),
+    s AS (
+      SELECT ts, value FROM signalk
+      WHERE path = '${sogPath}'
+        AND context = '${escapedCtx}'
+        AND ts >= '${fromIso}'
+        AND ts < '${toIso}'
+    )
+    SELECT
+      CASE
+        WHEN r.value < 15.0 THEN 'idle'
+        WHEN r.value < 30.0 THEN 'lowCruise'
+        WHEN r.value < 50.0 THEN 'highCruise'
+        ELSE 'topEnd'
+      END AS bin,
+      count() AS n,
+      avg(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
+      avg(CASE WHEN r.ts - s.ts <= ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog
+    FROM r ASOF JOIN f ASOF JOIN s
+    GROUP BY bin
   `
     .trim()
     .replace(/\s+/g, ' ');
+
   try {
-    const r = await questdb.query(sql);
-    const tsIdx = r.columns.findIndex((c) => c.name === 'ts');
-    const valIdx = r.columns.findIndex((c) => c.name === 'value');
-    if (tsIdx < 0 || valIdx < 0) return [];
-    const out: Sample[] = [];
-    for (const row of r.dataset) {
-      const tsRaw = row[tsIdx];
-      const valRaw = row[valIdx];
-      const tsMs =
-        typeof tsRaw === 'number'
-          ? tsRaw
-          : typeof tsRaw === 'string'
-            ? Date.parse(tsRaw)
-            : Number.NaN;
-      if (!Number.isFinite(tsMs)) continue;
-      if (typeof valRaw !== 'number' || !Number.isFinite(valRaw)) continue;
-      out.push({ ts: tsMs, value: valRaw });
+    const res = await questdb.query(sql);
+    const binIdx = res.columns.findIndex((c) => c.name === 'bin');
+    const nIdx = res.columns.findIndex((c) => c.name === 'n');
+    const fuelIdx = res.columns.findIndex((c) => c.name === 'mean_fuel');
+    const sogIdx = res.columns.findIndex((c) => c.name === 'mean_sog');
+    if (binIdx < 0 || nIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
+    if (res.dataset.length === 0) return null;
+    const out: Record<BinKey, BinStats> = Object.fromEntries(
+      BIN_ORDER.map((k) => [k, { count: 0, meanFuelRate: null, meanSog: null }]),
+    ) as Record<BinKey, BinStats>;
+    for (const row of res.dataset) {
+      const binRaw = row[binIdx];
+      if (typeof binRaw !== 'string' || !isBinKey(binRaw)) continue;
+      const n = row[nIdx];
+      const mf = row[fuelIdx];
+      const ms = row[sogIdx];
+      out[binRaw] = {
+        count: typeof n === 'number' && Number.isFinite(n) ? n : 0,
+        meanFuelRate: typeof mf === 'number' && Number.isFinite(mf) ? mf : null,
+        meanSog: typeof ms === 'number' && Number.isFinite(ms) ? ms : null,
+      };
     }
     return out;
   } catch {
-    return [];
+    return null;
   }
+}
+
+function isBinKey(k: string): k is BinKey {
+  return k === 'idle' || k === 'lowCruise' || k === 'highCruise' || k === 'topEnd';
 }
 
 function computeDeltas(
@@ -352,21 +305,4 @@ function totalBinCount(bins: Record<BinKey, BinStats>): number {
   let n = 0;
   for (const k of BIN_ORDER) n += bins[k].count;
   return n;
-}
-
-function byTs(a: Sample, b: Sample): number {
-  return a.ts - b.ts;
-}
-
-function fmtNum(v: number | null): string {
-  if (v == null) return 'n/a';
-  if (!Number.isFinite(v)) return 'n/a';
-  return v.toFixed(5);
-}
-
-function fmtPct(v: number | null): string {
-  if (v == null) return 'n/a';
-  if (!Number.isFinite(v)) return 'n/a';
-  const sign = v >= 0 ? '+' : '';
-  return `${sign}${v.toFixed(1)}%`;
 }

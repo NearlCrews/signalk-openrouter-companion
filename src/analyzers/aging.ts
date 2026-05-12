@@ -1,4 +1,5 @@
 import { discoverBankIds } from '../core/discovery.js';
+import { fmtNumber } from '../core/format.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -63,35 +64,33 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const selfContext = deps.app.selfContext ?? '';
     const questdb = deps.questdb;
 
-    const candidates = await Promise.all(
-      bankIds.flatMap((id) => {
-        const capPath = `electrical.batteries.${id}.capacity.actual`;
-        const cycPath = `electrical.batteries.${id}.cycles`;
-        return WINDOW_DAYS.map(async (days) => {
-          const summaries = await queryWindow(questdb, selfContext, [capPath, cycPath], days);
-          const stats = computeWindowStats(summaries.get(capPath), summaries.get(cycPath));
-          return { id, key: `${days}d` as WindowKey, stats };
-        });
-      }),
-    );
-
-    const byBank = new Map<string, Partial<Record<WindowKey, WindowStats>>>();
-    for (const c of candidates) {
-      let entry = byBank.get(c.id);
-      if (!entry) {
-        entry = {};
-        byBank.set(c.id, entry);
-      }
-      entry[c.key] = c.stats;
+    const allPaths: string[] = [];
+    const bankPaths = new Map<string, { cap: string; cyc: string }>();
+    for (const id of bankIds) {
+      const cap = `electrical.batteries.${id}.capacity.actual`;
+      const cyc = `electrical.batteries.${id}.cycles`;
+      bankPaths.set(id, { cap, cyc });
+      allPaths.push(cap, cyc);
     }
+
+    const summariesByWindow = await Promise.all(
+      WINDOW_DAYS.map(async (days) => ({
+        key: `${days}d` as WindowKey,
+        summaries: await queryWindow(questdb, selfContext, allPaths, days),
+      })),
+    );
 
     const banks: BankAging[] = [];
     for (const id of bankIds) {
-      const windows = byBank.get(id) ?? {};
-      const hasData = Object.values(windows).some(
-        (w) => w && (w.capacitySamples >= 2 || w.cyclesSamples >= 2),
-      );
-      if (hasData) banks.push({ id, windows: windows as Record<WindowKey, WindowStats> });
+      const { cap, cyc } = bankPaths.get(id)!;
+      const windows = {} as Record<WindowKey, WindowStats>;
+      let hasData = false;
+      for (const { key, summaries } of summariesByWindow) {
+        const stats = computeWindowStats(summaries.get(cap), summaries.get(cyc));
+        windows[key] = stats;
+        if (stats.capacitySamples >= 2 || stats.cyclesSamples >= 2) hasData = true;
+      }
+      if (hasData) banks.push({ id, windows });
     }
 
     if (banks.length === 0) return null;
@@ -132,14 +131,14 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
         const w = b.windows[key];
         lines.push(`- ${key} window:`);
         lines.push(`  - capacity samples: ${w.capacitySamples}`);
-        lines.push(`  - capacity start (J): ${fmt(w.capacityStart)}`);
-        lines.push(`  - capacity end (J): ${fmt(w.capacityEnd)}`);
-        lines.push(`  - capacity delta (%): ${fmt(w.capacityDeltaPct)}`);
+        lines.push(`  - capacity start (J): ${fmtNumber(w.capacityStart)}`);
+        lines.push(`  - capacity end (J): ${fmtNumber(w.capacityEnd)}`);
+        lines.push(`  - capacity delta (%): ${fmtNumber(w.capacityDeltaPct)}`);
         lines.push(`  - cycles samples: ${w.cyclesSamples}`);
-        lines.push(`  - cycles start: ${fmt(w.cyclesStart)}`);
-        lines.push(`  - cycles end: ${fmt(w.cyclesEnd)}`);
-        lines.push(`  - cycles delta: ${fmt(w.cyclesDelta)}`);
-        lines.push(`  - capacity loss per 100 cycles (%): ${fmt(w.lossPer100Cycles)}`);
+        lines.push(`  - cycles start: ${fmtNumber(w.cyclesStart)}`);
+        lines.push(`  - cycles end: ${fmtNumber(w.cyclesEnd)}`);
+        lines.push(`  - cycles delta: ${fmtNumber(w.cyclesDelta)}`);
+        lines.push(`  - capacity loss per 100 cycles (%): ${fmtNumber(w.lossPer100Cycles)}`);
       }
       lines.push('');
     }
@@ -233,13 +232,4 @@ async function queryWindow(
 
 function numOrNull(v: number | null | undefined): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
-function fmt(v: unknown): string {
-  if (v == null) return 'n/a';
-  if (typeof v === 'number') {
-    if (!Number.isFinite(v)) return 'n/a';
-    return Number.isInteger(v) ? String(v) : v.toFixed(3);
-  }
-  return String(v);
 }

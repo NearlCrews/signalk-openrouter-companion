@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { QueryResult } from '../src/core/questdb.js';
 
 export type Listener<T> = (v: T) => void;
 
@@ -164,6 +165,25 @@ export function makeMockApp(dataDir: string): MockApp {
     },
   };
   return app;
+}
+
+export interface MockQuestDB {
+  query: (sql: string) => Promise<QueryResult>;
+  calls: string[];
+}
+
+// Shared QuestDB stub for trend analyzer tests: pass a dispatch closure that
+// maps a SQL string to a QueryResult (throw to simulate a failed query).
+// Replaces the per-file stubQuestDB factories in aging.test.ts and drift.test.ts.
+export function makeQuestDBStub(dispatch: (sql: string) => QueryResult): MockQuestDB {
+  const stub: MockQuestDB = {
+    calls: [],
+    query: async (sql: string) => {
+      stub.calls.push(sql);
+      return dispatch(sql);
+    },
+  };
+  return stub;
 }
 
 export async function makeTmpDir(): Promise<string> {

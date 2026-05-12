@@ -6,19 +6,20 @@ import { AgingAnalyzer } from '../src/analyzers/aging.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
 import { ReportPublisher } from '../src/core/publisher.js';
-import type { QueryResult } from '../src/core/questdb.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  type MockApp,
+  type MockQuestDB,
+  makeMockApp,
+  makeQuestDBStub,
+  makeTmpDir,
+} from './_mocks.js';
 
 interface QuerySpec {
   path: string;
   first: number;
   last: number;
   n: number;
-}
-
-interface StubQuestDB {
-  query: (sql: string) => Promise<QueryResult>;
-  calls: string[];
 }
 
 function makeCfg() {
@@ -31,32 +32,29 @@ function makeCfg() {
   };
 }
 
-function stubQuestDB(perWindow: Partial<Record<number, QuerySpec[]>>): StubQuestDB {
-  const stub: StubQuestDB = {
-    calls: [],
-    query: async (sql: string) => {
-      stub.calls.push(sql);
-      const m = sql.match(/dateadd\('d', -(\d+),/);
-      const days = m?.[1] ? Number.parseInt(m[1], 10) : 0;
-      const rows = perWindow[days] ?? [];
-      return {
-        columns: [
-          { name: 'path', type: 'STRING' },
-          { name: 'first_val', type: 'DOUBLE' },
-          { name: 'last_val', type: 'DOUBLE' },
-          { name: 'n', type: 'LONG' },
-        ],
-        dataset: rows.map((r) => [r.path, r.first, r.last, r.n]),
-      };
-    },
-  };
-  return stub;
+// Aging issues one batched query per window with a `dateadd('d', -<days>, ...)`
+// boundary. Dispatch by parsing the days back out of the SQL.
+function stubQuestDB(perWindow: Partial<Record<number, QuerySpec[]>>): MockQuestDB {
+  return makeQuestDBStub((sql) => {
+    const m = sql.match(/dateadd\('d', -(\d+),/);
+    const days = m?.[1] ? Number.parseInt(m[1], 10) : 0;
+    const rows = perWindow[days] ?? [];
+    return {
+      columns: [
+        { name: 'path', type: 'STRING' },
+        { name: 'first_val', type: 'DOUBLE' },
+        { name: 'last_val', type: 'DOUBLE' },
+        { name: 'n', type: 'LONG' },
+      ],
+      dataset: rows.map((r) => [r.path, r.first, r.last, r.n]),
+    };
+  });
 }
 
 function makeDeps(
   app: MockApp,
   buffer: RollingBuffer,
-  questdb: StubQuestDB | null,
+  questdb: MockQuestDB | null,
   publisher?: ReportPublisher,
 ): AnalyzerDeps {
   return {
@@ -149,7 +147,7 @@ describe('AgingAnalyzer', () => {
     expect(await a.collectContext(ctx, makeDeps(app, buf, stub))).toBeNull();
   });
 
-  it('collectContext queries 30d and 90d windows per bank and computes deltas', async () => {
+  it('collectContext issues one query per window for all banks and computes deltas', async () => {
     const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
     const now = Date.now();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, now, 'bms');
@@ -202,11 +200,51 @@ describe('AgingAnalyzer', () => {
     expect(w90.capacityDeltaPct).toBeCloseTo(-5.2632, 3);
     expect(w90.lossPer100Cycles).toBeCloseTo(26.3158, 3);
 
-    // 2 queries per discovered bank × 2 windows. starter was discovered but
-    // also queried before the analyzer found no usable data.
-    expect(stub.calls.length).toBe(4);
+    // One batched query per window, regardless of how many banks were discovered.
+    expect(stub.calls.length).toBe(2);
     expect(stub.calls.some((q) => q.includes('-30,'))).toBe(true);
     expect(stub.calls.some((q) => q.includes('-90,'))).toBe(true);
+    // Each window query must include all discovered banks' paths.
+    for (const sql of stub.calls) {
+      expect(sql).toContain("'electrical.batteries.house.capacity.actual'");
+      expect(sql).toContain("'electrical.batteries.house.cycles'");
+      expect(sql).toContain("'electrical.batteries.starter.capacity.actual'");
+      expect(sql).toContain("'electrical.batteries.starter.cycles'");
+    }
+  });
+
+  it('collectContext still issues exactly 2 queries when many banks are present', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const now = Date.now();
+    const bankIds = ['house', 'starter', 'console', 'trolling'];
+    for (const id of bankIds) {
+      buf.record(`electrical.batteries.${id}.capacity.actual`, 5_400_000, now, 'bms');
+      buf.record(`electrical.batteries.${id}.cycles`, 100, now, 'bms');
+    }
+
+    const rowsFor = (firstCap: number): QuerySpec[] =>
+      bankIds.flatMap((id) => [
+        {
+          path: `electrical.batteries.${id}.capacity.actual`,
+          first: firstCap,
+          last: 5_400_000,
+          n: 60,
+        },
+        { path: `electrical.batteries.${id}.cycles`, first: 95, last: 100, n: 60 },
+      ]);
+
+    const stub = stubQuestDB({
+      30: rowsFor(5_500_000),
+      90: rowsFor(5_700_000),
+    });
+
+    const a = new AgingAnalyzer(makeCfg());
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
+    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    expect(r).not.toBeNull();
+    expect(r!.banks.map((b) => b.id).sort()).toEqual([...bankIds].sort());
+    // Total query count is exactly 2 (one per window), independent of bank count.
+    expect(stub.calls.length).toBe(2);
   });
 
   it('buildPrompt produces deterministic system + user content', () => {

@@ -1,4 +1,5 @@
 import { WATCH_PREFIXES } from '../core/discovery.js';
+import { fmtNumber } from '../core/format.js';
 import { readNumberAt } from '../core/skNode.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -123,8 +124,9 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       if (!s || s.count === 0) continue;
       const unit = unitForPath(path);
       const unitSuffix = unit ? ` ${unit}` : '';
+      const f = (v: unknown) => fmtNumber(v, { nan: 'n/a (no samples)' });
       lines.push(
-        `- ${path}: min=${fmt(s.min)} max=${fmt(s.max)} mean=${fmt(s.mean)}${unitSuffix} count=${fmt(s.count)} sources=${JSON.stringify(s.sources)}`,
+        `- ${path}: min=${f(s.min)} max=${f(s.max)} mean=${f(s.mean)}${unitSuffix} count=${f(s.count)} sources=${JSON.stringify(s.sources)}`,
       );
     }
     lines.push('');
@@ -183,12 +185,6 @@ function snapshotBatteries(deps: AnalyzerDeps): BatterySnapshot[] {
     });
   }
   return out;
-}
-
-function fmt(v: unknown): string {
-  if (v == null) return 'n/a (no samples)';
-  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(3);
-  return String(v);
 }
 
 function unitForPath(path: string): string | null {

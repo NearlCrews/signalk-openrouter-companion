@@ -1,3 +1,4 @@
+import { fmtNumber } from '../core/format.js';
 import { readNumberAt } from '../core/skNode.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -103,20 +104,20 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     lines.push('');
     for (const b of banks) {
       lines.push(`### Bank: ${b.id}`);
-      lines.push(`- voltage now: ${fmt(b.voltage)}`);
-      lines.push(`- current now: ${fmt(b.current)}`);
-      lines.push(`- state of charge: ${fmt(b.stateOfCharge)}`);
+      lines.push(`- voltage now: ${fmtNumber(b.voltage)}`);
+      lines.push(`- current now: ${fmtNumber(b.current)}`);
+      lines.push(`- state of charge: ${fmtNumber(b.stateOfCharge)}`);
       if (b.nominalCapacityJ != null)
-        lines.push(`- nominal capacity (J): ${fmt(b.nominalCapacityJ)}`);
-      if (b.cycles != null) lines.push(`- cycles: ${fmt(b.cycles)}`);
-      if (b.temperatureK != null) lines.push(`- temperature (K): ${fmt(b.temperatureK)}`);
+        lines.push(`- nominal capacity (J): ${fmtNumber(b.nominalCapacityJ)}`);
+      if (b.cycles != null) lines.push(`- cycles: ${fmtNumber(b.cycles)}`);
+      if (b.temperatureK != null) lines.push(`- temperature (K): ${fmtNumber(b.temperatureK)}`);
       if (b.voltage24h) {
         lines.push(
-          `- voltage 24h: min=${fmt(b.voltage24h.min)} max=${fmt(b.voltage24h.max)} mean=${fmt(b.voltage24h.mean)} count=${fmt(b.voltage24h.count)}`,
+          `- voltage 24h: min=${fmtNumber(b.voltage24h.min)} max=${fmtNumber(b.voltage24h.max)} mean=${fmtNumber(b.voltage24h.mean)} count=${fmtNumber(b.voltage24h.count)}`,
         );
       }
       if (b.cells && b.cells.length > 0) {
-        const cellLine = b.cells.map((c) => `${c.index}=${fmt(c.voltage)}`).join(' ');
+        const cellLine = b.cells.map((c) => `${c.index}=${fmtNumber(c.voltage)}`).join(' ');
         lines.push(`- cells: ${cellLine}`);
       }
       lines.push('');
@@ -142,10 +143,4 @@ function collectCells(node: unknown): CellSnapshot[] {
     }
   }
   return out.sort((a, b) => a.index - b.index);
-}
-
-function fmt(v: unknown): string {
-  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(3);
-  if (v == null) return 'n/a';
-  return String(v);
 }
