@@ -2,6 +2,31 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-05-12
+
+### Fixed
+
+- **Panel "React is not defined" on first install.** The panel mounted
+  in the SK admin UI failed with a React error boundary stating
+  "React is not defined" because esbuild-loader's `loader: 'jsx'`
+  defaults to the legacy classic JSX runtime, which compiles JSX to
+  `React.createElement(...)` and depends on a bare `React` identifier
+  in scope. Module Federation's singleton-shared `react` module is
+  fetched lazily, so the identifier was undefined when the JSX-compiled
+  code ran. Switching `webpack.config.cjs` esbuild-loader options to
+  `jsx: 'automatic'` (the React 19 default) emits `_jsx(...)` from
+  `react/jsx-runtime` as a normal module import that webpack handles
+  correctly through the federation share scope.
+
+### Changed
+
+- Trimmed Module Federation `shared` map to just `react` as
+  `singleton: true`, matching the minimal config used by
+  `signalk-virtual-weather-sensors`. The panel never imports
+  `react-dom` directly (host owns the root render) and
+  `react/jsx-runtime` is small and stateless, so a bundled copy
+  is fine. Drops one devDependency (`react-dom`).
+
 ## [0.3.0] - 2026-05-12
 
 Adds a custom React configuration panel that the Signal K admin UI loads

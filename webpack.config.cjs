@@ -30,7 +30,14 @@ module.exports = {
         test: /\.jsx?$/,
         exclude: /node_modules/,
         loader: 'esbuild-loader',
-        options: { loader: 'jsx', target: 'es2022' },
+        // jsx: 'automatic' uses the React 19 default runtime that imports
+        // `react/jsx-runtime` as a normal module, so the JSX-compiled output
+        // does not depend on a bare `React` identifier being in scope. The
+        // legacy `transform` (classic) runtime emits React.createElement(...)
+        // which breaks under Module Federation: the singleton-shared `react`
+        // module is fetched lazily, so `React` is undefined at the moment
+        // JSX runs and the panel fails to mount.
+        options: { loader: 'jsx', target: 'es2022', jsx: 'automatic' },
       },
     ],
   },
@@ -43,9 +50,14 @@ module.exports = {
       exposes: {
         './PluginConfigurationPanel': './src/configpanel/PluginConfigurationPanel',
       },
+      // Match the minimal share set used by signalk-virtual-weather-sensors:
+      // share only `react` as a singleton. The panel never imports
+      // `react-dom` directly (the host owns the root render), and
+      // `react/jsx-runtime` is small and stateless so a bundled copy is
+      // fine. Sharing more than necessary just bloats the federation
+      // negotiation without payoff.
       shared: {
         react: { singleton: true, requiredVersion: pkg.devDependencies.react },
-        'react-dom': { singleton: true, requiredVersion: pkg.devDependencies['react-dom'] },
       },
     }),
   ],

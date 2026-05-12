@@ -1,10 +1,17 @@
 {
   "name": "signalk-openrouter-companion",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenRouter-powered analyzers for Signal K (maintenance, health, alerts, aging, drift). Requires a paid OpenRouter API key; LLM calls are billed per token. Per-day call cap enforced.",
   "main": "dist/index.js",
   "type": "module",
-  "files": ["dist/", "public/", "assets/icons/", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": [
+    "dist/",
+    "public/",
+    "assets/icons/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "keywords": [
     "signalk-node-server-plugin",
     "signalk-plugin-configurator",
@@ -21,7 +28,9 @@
     "displayName": "OpenRouter Companion",
     "appIcon": "./assets/icons/icon-192.png"
   },
-  "engines": { "node": ">=20.18" },
+  "engines": {
+    "node": ">=20.18"
+  },
   "license": "Apache-2.0",
   "author": {
     "name": "Nearl Crews",
@@ -33,9 +42,15 @@
     "url": "git+https://github.com/NearlCrews/signalk-openrouter-companion.git"
   },
   "homepage": "https://github.com/NearlCrews/signalk-openrouter-companion#readme",
-  "bugs": { "url": "https://github.com/NearlCrews/signalk-openrouter-companion/issues" },
-  "peerDependencies": { "@signalk/server-api": ">=2.24.0 <3" },
-  "dependencies": { "croner": "^10.0.1" },
+  "bugs": {
+    "url": "https://github.com/NearlCrews/signalk-openrouter-companion/issues"
+  },
+  "peerDependencies": {
+    "@signalk/server-api": ">=2.24.0 <3"
+  },
+  "dependencies": {
+    "croner": "^10.0.1"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "@signalk/server-api": "^2.24.0",
@@ -44,7 +59,6 @@
     "esbuild": "^0.28.0",
     "esbuild-loader": "^4.3.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.0.0",
