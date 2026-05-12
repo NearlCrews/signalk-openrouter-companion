@@ -71,10 +71,6 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     };
   }
 
-  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishReport(this.id, ctx, text);
-  }
-
   buildPrompt(input: HealthInput): { system: string; user: string } {
     const system = [
       'You are an experienced marine electrical specialist reading raw battery telemetry from a Signal K server.',

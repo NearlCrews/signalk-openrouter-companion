@@ -74,7 +74,8 @@ describe('integration: engine session -> report', () => {
     expect(lastDelta.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.maintenance.report',
     );
-    // Reports use 'nominal' (informational) per SK 1.8.2; cannon does not
+    // Reports use 'nominal' (informational) per SK 1.8.2;
+    // `signalk-nmea2000-emitter-cannon` does not
     // emit a PGN 126983 alert for nominal-state notifications.
     expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('nominal');
     expect(lastDelta.updates[0]?.values[0]?.value.message).toContain('Engine session');

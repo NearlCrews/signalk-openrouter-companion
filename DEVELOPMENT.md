@@ -48,11 +48,11 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly triggers: ReadonlyArray<TriggerSpec>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
-  publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
+  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
 }
 ```
 
-`collectContext` returns `null` to mean "no report for this trigger" (e.g., engine-stop with too short a session, or a trend window without enough data). `buildPrompt` is pure: given a snapshot, it produces the prompt halves. `publishOutput` is required: each analyzer owns its own publishing path and state. State and trend analyzers call `deps.publisher.publishReport(this.id, ctx, text)` which uses the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'` (informational, no N2K alert PGN). Transition analyzers like `alerts` use `deps.publisher.publishOnPath` with a canonical per-event path (`notifications.electrical.batteries.<bankId>.<kind>`), explicit alert state, and an `alertId` from `alertIdFor(path)` so signalk-nmea2000-emitter-cannon emits a stable PGN 126983 / 126985 pair.
+`collectContext` returns `null` to mean "no report for this trigger" (e.g., engine-stop with too short a session, or a trend window without enough data). `buildPrompt` is pure: given a snapshot, it produces the prompt halves. `publishOutput` is optional: when omitted, the `TriggerRouter` publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'` (informational, no N2K alert PGN). Override only when an analyzer needs a different path or state; transition analyzers like `alerts` use `deps.publisher.publishOnPath` with a canonical per-event path (`notifications.electrical.batteries.<bankId>.<kind>`), explicit alert state, and an `alertId` from `alertIdFor(path)` so [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) emits a stable PGN 126983 / 126985 pair.
 
 ### Standardized triggers contract
 

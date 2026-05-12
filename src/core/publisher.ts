@@ -11,15 +11,12 @@ export interface SignalKNotificationValue {
   state: NotificationState;
   method: string[];
   message: string;
-  // Optional stable 16-bit alert identifier. signalk-nmea2000-emitter-cannon
-  // uses this verbatim for PGN 126983's "Alert Identifier"; supplying our own
-  // means the chartplotter sees the same alert reappear across cannon restarts
-  // instead of an apparently-new alert with a fresh auto-counter id.
+  // Stable 16-bit PGN 126983 Alert Identifier; see `alertIdFor` in paths.ts.
   alertId?: number;
 }
 
 // SK states that warrant an audible NMEA 2000 alarm on the chartplotter.
-// signalk-nmea2000-emitter-cannon maps `value.method` to PGN 126983's
+// `signalk-nmea2000-emitter-cannon` maps `value.method` to PGN 126983's
 // "Alert State": method includes 'sound' -> Active; method nonempty without
 // 'sound' -> Silenced; method empty -> Acknowledged. We want Active for any
 // non-informational state.
@@ -108,8 +105,8 @@ export class ReportPublisher {
   // Default state is 'nominal' (informational): per SK 1.8.2, 'nominal' is the
   // no-action state, while 'normal' means "recovered after an alarm". The
   // narrative-report analyzers (maintenance/health/aging/drift) are pure info
-  // dumps so cannon should NOT emit an N2K alert PGN for them; passing
-  // 'nominal' achieves that because cannon's alertTypes table has no entry
+  // dumps so `signalk-nmea2000-emitter-cannon` should NOT emit an N2K alert PGN for them; passing
+  // 'nominal' achieves that because `signalk-nmea2000-emitter-cannon`'s alertTypes table has no entry
   // for nominal and the PGN is suppressed.
   async publishReport(
     analyzerId: string,

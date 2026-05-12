@@ -60,10 +60,11 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly triggers: ReadonlyArray<TriggerSpec>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
-  // publishOutput is required: each analyzer owns its own publishing path
-  // and state. State analyzers and trend analyzers typically delegate to
-  // `deps.publisher.publishReport(this.id, ctx, text)`. Transition
-  // analyzers like `alerts` use `deps.publisher.publishOnPath` with a
-  // canonical per-event path and an explicit alert state.
-  publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
+  // Optional. When omitted, the TriggerRouter publishes via
+  // `deps.publisher.publishReport(this.id, ctx, text)` on the canonical
+  // `notifications.openrouter-companion.<id>.report` path with
+  // `state: 'nominal'`. Override only when an analyzer needs a different
+  // path or state, e.g. `alerts` uses `deps.publisher.publishOnPath` with
+  // a per-event canonical path and explicit alert state.
+  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
 }

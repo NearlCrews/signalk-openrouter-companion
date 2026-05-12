@@ -30,9 +30,9 @@ export const AGING_DEFAULT_LONG_DAYS = 90;
 export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
 
 /**
- * Signal K notification states (the full ALARM_STATE enum). The plugin's
- * `output.notificationState` config and the publisher's typed argument both
- * resolve to one of these strings.
+ * Signal K notification states (the full ALARM_STATE enum). The publisher's
+ * typed `state` argument and per-analyzer publish overrides both resolve to
+ * one of these strings.
  */
 export const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
 export type NotificationState = (typeof ALARM_STATES)[number];

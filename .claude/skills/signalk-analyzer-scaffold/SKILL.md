@@ -104,9 +104,14 @@ export class FooAnalyzer implements Analyzer<FooInput> {
     return { system, user: lines.join('\n') };
   }
 
-  // Optional: customize publish behavior. The default publishes to the global
-  // notificationPath. Use this when the analyzer needs its own subpath (e.g.
-  // see health.ts and alerts.ts).
+  // Optional: override `publishOutput` only when the analyzer needs a path or
+  // state different from the default. The default (when omitted) publishes
+  // via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical
+  // `notifications.openrouter-companion.<id>.report` path with
+  // `state: 'nominal'` (informational; no NMEA 2000 alert PGN). Override
+  // when you need an alert path or a non-default state, e.g. alerts.ts uses
+  // `deps.publisher.publishOnPath(...)` with a per-event canonical path,
+  // explicit alert state, and a stable `alertId` from `alertIdFor(path)`.
   // async publishOutput(text, ctx, deps): Promise<void> { ... }
 }
 ```

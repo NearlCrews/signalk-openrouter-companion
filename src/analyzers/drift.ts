@@ -128,10 +128,6 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     };
   }
 
-  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishReport(this.id, ctx, text);
-  }
-
   buildPrompt(input: DriftInput): { system: string; user: string } {
     const system = [
       'You are an experienced marine engine specialist comparing recent engine performance to its longer-term baseline.',

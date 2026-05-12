@@ -34,25 +34,17 @@ function isBatteryEventKind(s: string): s is BatteryEventKind {
   return (ALERTS_SUPPORTED_EVENTS as readonly string[]).includes(s);
 }
 
-// Collapse the enter/exit subkind axis into (kind, state) so the published
-// notification uses one canonical per-bank path per concern with state on it,
-// instead of two stomping paths (enter overwrites exit and vice versa).
-function alertRouting(
-  subkind: BatteryEventKind,
-): { kind: BatteryAlertKind; state: 'alert' | 'normal' } | null {
-  switch (subkind) {
-    case 'low-soc-enter':
-      return { kind: 'lowSoc', state: 'alert' };
-    case 'low-soc-exit':
-      return { kind: 'lowSoc', state: 'normal' };
-    case 'cell-imbalance-enter':
-      return { kind: 'cellImbalance', state: 'alert' };
-    case 'cell-imbalance-exit':
-      return { kind: 'cellImbalance', state: 'normal' };
-    default:
-      return null;
-  }
-}
+// Maps the enter/exit subkind to a canonical per-bank path plus state, so
+// enter and exit share one cache slot in `signalk-nmea2000-emitter-cannon`.
+const ALERT_ROUTING: Record<
+  BatteryEventKind,
+  { kind: BatteryAlertKind; state: 'alert' | 'normal' }
+> = {
+  'low-soc-enter': { kind: 'lowSoc', state: 'alert' },
+  'low-soc-exit': { kind: 'lowSoc', state: 'normal' },
+  'cell-imbalance-enter': { kind: 'cellImbalance', state: 'alert' },
+  'cell-imbalance-exit': { kind: 'cellImbalance', state: 'normal' },
+};
 
 export interface AlertCfg {
   triggers: AnalyzerTriggerCfg;
@@ -130,14 +122,13 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     const subkind = ctx.batteryEvent?.subkind;
     const bankId = ctx.bankId;
     if (!subkind || !bankId) return;
-    const routing = alertRouting(subkind);
-    if (!routing) return;
-    const path = batteryAlertPath(bankId, routing.kind);
+    const { kind, state } = ALERT_ROUTING[subkind];
+    const path = batteryAlertPath(bankId, kind);
     const message = truncateForN2K(text);
     await deps.publisher.publishOnPath(
       message,
       { analyzerId: this.id, ctx },
-      { path, state: routing.state, alertId: alertIdFor(path) },
+      { path, state, alertId: alertIdFor(path) },
     );
   }
 }

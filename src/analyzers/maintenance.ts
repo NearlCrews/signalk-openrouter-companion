@@ -106,10 +106,6 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     };
   }
 
-  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishReport(this.id, ctx, text);
-  }
-
   buildPrompt(input: MaintenanceInput): { system: string; user: string } {
     const system = [
       'You are an experienced marine engine technician reading raw telemetry from a Signal K server.',

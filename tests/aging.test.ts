@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
@@ -389,30 +388,28 @@ describe('AgingAnalyzer', () => {
     expect(out.user).toContain('-1.818');
   });
 
-  it('publishOutput publishes on notifications.openrouter-companion.aging.report', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+  it('omits publishOutput so the router uses the publishReport default on the canonical aging path', async () => {
+    const a = new AgingAnalyzer(makeCfg());
+    // Aging delegates publish-side responsibility to the router default
+    // (publisher.publishReport(this.id, ctx, text) on
+    // notifications.openrouter-companion.<id>.report with state: nominal).
+    expect(a.publishOutput).toBeUndefined();
+
+    // Sanity check that the publisher's publishReport actually emits on the
+    // expected canonical path with the expected state, so the router default
+    // really does land at notifications.openrouter-companion.aging.report.
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orc',
       logPath: join(dir, 'reports.jsonl'),
     });
-    const a = new AgingAnalyzer(makeCfg());
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    await a.publishOutput(
-      'House bank lost 1.8% capacity in 30 days.',
-      ctx,
-      makeDeps(app, buf, null, publisher),
-    );
+    await publisher.publishReport(a.id, ctx, 'House bank lost 1.8% capacity in 30 days.');
     expect(app.published).toHaveLength(1);
     const d = app.published[0]?.delta as {
       updates: { values: { path: string; value: { state: string; message: string } }[] }[];
     };
     expect(d.updates[0]?.values[0]?.path).toBe('notifications.openrouter-companion.aging.report');
-    // Reports are informational ('nominal'), not "recovered-after-alarm" ('normal').
-    // cannon's alertTypes table has no entry for nominal, so the chartplotter
-    // does not get a spurious PGN 126983 alert for the narrative report.
     expect(d.updates[0]?.values[0]?.value.state).toBe('nominal');
-    const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
-    expect(JSON.parse(line).analyzer).toBe('aging');
   });
 });

@@ -15,18 +15,18 @@ export function notificationReportPath(analyzerId: string): string {
 }
 
 // Canonical per-bank battery alert notification path. Distinct per bank so
-// signalk-nmea2000-emitter-cannon assigns each bank its own PGN 126983 entry
+// `signalk-nmea2000-emitter-cannon` assigns each bank its own PGN 126983 entry
 // instead of overwriting a single shared cache slot. Third-party bridges
 // already watching `notifications.electrical.batteries.*` pick these up.
 export function batteryAlertPath(bankId: string, kind: BatteryAlertKind): string {
   return `notifications.electrical.batteries.${bankId}.${kind}`;
 }
 
-// Stable 16-bit alert identifier derived from the SK path via FNV-1a. Cannon
-// uses this verbatim for PGN 126983's "Alert Identifier"; supplying our own
-// keeps the chartplotter's alert id stable across cannon restarts (the
-// cannon's auto-counter resets on config reload). Never returns 0 so the
-// value is always a valid 16-bit nonzero id.
+// Stable 16-bit alert identifier derived from the SK path via FNV-1a.
+// `signalk-nmea2000-emitter-cannon` uses this verbatim for PGN 126983's
+// "Alert Identifier"; supplying our own keeps the chartplotter's alert id
+// stable across `signalk-nmea2000-emitter-cannon` restarts (its
+// auto-counter resets on config reload).
 export function alertIdFor(path: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < path.length; i += 1) {

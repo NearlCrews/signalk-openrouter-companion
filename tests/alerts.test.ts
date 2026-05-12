@@ -127,7 +127,7 @@ describe('AlertAnalyzer', () => {
     };
     expect(d.updates[0]?.values[0]?.path).toBe('notifications.electrical.batteries.house.lowSoc');
     expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
-    // alert state -> method includes 'sound' so cannon emits Active PGN 126983.
+    // alert state -> method includes 'sound' so `signalk-nmea2000-emitter-cannon` emits Active PGN 126983.
     expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual', 'sound']);
     // Stable, nonzero 16-bit alertId derived from the path.
     expect(typeof d.updates[0]?.values[0]?.value.alertId).toBe('number');
@@ -156,7 +156,9 @@ describe('AlertAnalyzer', () => {
       updates: { values: { path: string; value: { message: string } }[] }[];
     };
     const sentMessage = d.updates[0]?.values[0]?.value.message;
-    expect(sentMessage.length).toBeLessThanOrEqual(200);
+    // Cap is 64 chars; the previous 200 assertion was a no-op (the wire spec
+    // ceiling, not the plugin's truncation budget).
+    expect(sentMessage.length).toBeLessThanOrEqual(64);
     expect(sentMessage.endsWith('…')).toBe(true);
     expect(sentMessage.startsWith('House bank SoC dropped to 25%.')).toBe(true);
   });
@@ -204,7 +206,7 @@ describe('AlertAnalyzer', () => {
     // Exit re-uses the same canonical per-bank path as enter, with state=normal.
     expect(d.updates[0]?.values[0]?.path).toBe('notifications.electrical.batteries.house.lowSoc');
     expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
-    // Exit is visual-only so cannon clears the cached PGN without re-pinging audible.
+    // Exit is visual-only so `signalk-nmea2000-emitter-cannon` clears the cached PGN without re-pinging audible.
     expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual']);
   });
 });

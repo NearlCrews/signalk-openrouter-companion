@@ -115,10 +115,6 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     };
   }
 
-  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishReport(this.id, ctx, text);
-  }
-
   buildPrompt(input: AgingInput): { system: string; user: string } {
     const days = input.banks[0]?.windows.map((w) => w.days) ?? Array.from(this.windowDays);
     const windowDesc = days.map((d) => `${d}-day`).join(' and ');

@@ -31,7 +31,7 @@ Each analyzer is independently enabled in the admin UI and shares the standardiz
 - **Plain-prose output**, no markdown. Designed for the Signal K data browser's single-string notification renderer.
 - **Per-day OpenRouter call cap** so a misconfigured cron loop can't burn through credit.
 - **JSONL log** of every run at `<plugin-config-data>/signalk-openrouter-companion/reports.jsonl`.
-- **NMEA 2000 alert-PGN alignment**. Alert notifications publish on canonical per-bank paths (`notifications.electrical.batteries.<bankId>.lowSoc` and `.cellImbalance`) with `state: alert`/`normal`, `method: ['visual','sound']` on enter and `['visual']` on exit, plus a stable 16-bit `alertId` (FNV-1a hash of the path). When bridged via `signalk-nmea2000-emitter-cannon` this maps cleanly to PGN 126983 (`alertType` from state, `alertState: Active` on enter from method, `alertId` stable across cannon restarts) and PGN 126985 (`alertTextDescription` capped at 64 chars to survive Garmin/Raymarine/Furuno/B&G display truncation). Reports (maintenance/health/aging/drift) use `state: nominal` so they DO NOT trip the chartplotter alarm.
+- **NMEA 2000 alert-PGN alignment**. Alert notifications publish on canonical per-bank paths (`notifications.electrical.batteries.<bankId>.lowSoc` and `.cellImbalance`) with `state: alert`/`normal`, `method: ['visual','sound']` on enter and `['visual']` on exit, plus a stable 16-bit `alertId` (FNV-1a hash of the path). When bridged via [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) this maps cleanly to PGN 126983 (`alertType` from state, `alertState: Active` on enter from method, `alertId` stable across `signalk-nmea2000-emitter-cannon` restarts) and PGN 126985 (`alertTextDescription` capped at 64 chars to survive Garmin/Raymarine/Furuno/B&G display truncation). Reports (maintenance/health/aging/drift) use `state: nominal` so they DO NOT trip the chartplotter alarm.
 - **QuestDB-backed trend analyzers** with configurable history windows. State analyzers stay independent of QuestDB.
 - **Forgiving path discovery**: engines are discovered off `propulsion.<id>.revolutions`, or off `coolantTemperature`/`runTime`/`oilPressure`/`temperature`/`alternatorVoltage`/`fuel.rate` if no RPM source is publishing. `tanks.fuel.*` is also buffered so the maintenance prompt can cross-check fuel rate against tank-level drift over the session.
 - **Restart-safe**: `plugin.whenReady()` returns once the deferred router init has wired analyzers; tests await it instead of polling.
@@ -79,7 +79,7 @@ Not yet published. Build from source above.
 
 Disabling an analyzer or QuestDB collapses its options away in the admin form. Heads-up: rjsf clears dependent field values when toggling enabled off, then restores schema defaults on re-enable. Save before toggling if you have non-default tunables.
 
-A few advanced fields are hidden from the admin form (OpenRouter base URL, request timeout, notification path, log filename, per-analyzer PUT path, per-analyzer cron timezone). They still exist in the schema and can be overridden by editing `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` directly.
+A few advanced fields are hidden from the admin form (OpenRouter base URL, request timeout, log filename, per-analyzer PUT path, per-analyzer cron timezone). They still exist in the schema and can be overridden by editing `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` directly.
 
 ### Cron presets
 
@@ -110,8 +110,8 @@ For custom patterns, edit `~/.signalk/plugin-config-data/signalk-openrouter-comp
 ## Where reports appear
 
 - **Signal K notifications** at the paths in the analyzer table above:
-  - Maintenance / health / aging / drift reports use `state: nominal`, `method: ['visual']`. SK 1.8.2 treats `nominal` as informational (no action required), so a co-installed N2K emitter like `signalk-nmea2000-emitter-cannon` does NOT translate these to PGN 126983/126985: they live in the SK data browser and the JSONL log but do not ring a chartplotter alarm.
-  - Battery alerts publish on canonical per-bank paths `notifications.electrical.batteries.<bankId>.lowSoc` and `.cellImbalance`. Enter events use `state: alert`, `method: ['visual','sound']` (cannon emits PGN 126983 with Active alert state and PGN 126985 with the headline). Exit events use `state: normal`, `method: ['visual']` (cannon clears the cached PGN). Each notification carries a stable 16-bit `alertId` derived from the path so the chartplotter sees the same alert across cannon restarts.
+  - Maintenance / health / aging / drift reports use `state: nominal`, `method: ['visual']`. SK 1.8.2 treats `nominal` as informational (no action required), so a co-installed N2K emitter like [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) does NOT translate these to PGN 126983/126985: they live in the SK data browser and the JSONL log but do not ring a chartplotter alarm.
+  - Battery alerts publish on canonical per-bank paths `notifications.electrical.batteries.<bankId>.lowSoc` and `.cellImbalance`. Enter events use `state: alert`, `method: ['visual','sound']` (`signalk-nmea2000-emitter-cannon` emits PGN 126983 with Active alert state and PGN 126985 with the headline). Exit events use `state: normal`, `method: ['visual']` (`signalk-nmea2000-emitter-cannon` clears the cached PGN). Each notification carries a stable 16-bit `alertId` derived from the path so the chartplotter sees the same alert across `signalk-nmea2000-emitter-cannon` restarts.
   - `publishFailure` (LLM call failed) uses `state: warn`, `method: ['visual','sound']` on the analyzer's report path.
 - **JSONL log** appended to `<SIGNALK_NODE_CONFIG_DIR>/plugin-config-data/signalk-openrouter-companion/reports.jsonl`, one JSON object per line. Includes the analyzer id, trigger kind, ISO timestamp, report text, and (for engine-stop) the session bounds and duration.
 
@@ -215,14 +215,14 @@ Drift sorts RPM samples into five bins, sized to cover both marine diesel and ou
 Diesels rarely cross 50 Hz so the top-end bin captures their WOT and the wot bin stays empty. Outboards run their cruise band in top-end and their WOT in the wot bin. Per-engine configurable bin edges are on the roadmap.
 
 ### Alert message truncated with `…` suffix
-This is by design: alerts cap at 64 ASCII chars (word-boundary cut) so chartplotters reading NMEA 2000 PGN 126985 (Alert Text Description) via `signalk-nmea2000-emitter-cannon` get clean, in-budget text. The wire field holds ~200 chars but real-world MFD display caps are tighter (Raymarine Axiom ~60, B&G Zeus ~70, Furuno TZTouch ~80, Garmin ~72). The full prose is still in the SK notification and `reports.jsonl`.
+This is by design: alerts cap at 64 ASCII chars (word-boundary cut) so chartplotters reading NMEA 2000 PGN 126985 (Alert Text Description) via [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) get clean, in-budget text. The wire field holds ~200 chars but real-world MFD display caps are tighter (Raymarine Axiom ~60, B&G Zeus ~70, Furuno TZTouch ~80, Garmin ~72). The full prose is still in the SK notification and `reports.jsonl`.
 
 ### Reports not appearing at all
 Run the Signal K server with `DEBUG=signalk-openrouter-companion` and tail the server log. Common causes: API key not set, QuestDB not reachable (trend analyzers only), no telemetry on the watched paths.
 
 ## Adding a custom analyzer
 
-1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, `publishOutput`. (`publishOutput` is required as of 0.2.1.)
+1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`. The default (when `publishOutput` is omitted) publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'`. Override only when you need a different path or state, like `alerts` does for per-bank alert paths.
 2. Use the shared helpers in `src/core/`: `buildTriggers(cfg)` for the standardized cron/PUT/events block, `bankPaths(id)`/`enginePaths(id)`/`notificationReportPath(id)`/`pluginPutPath(id)` for path strings, `escapeSqlLiteral` + `indexColumns` for QuestDB queries, `asFiniteNumber` / `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio` for value handling, `clampPositiveInt` for sanitized config day-counts, `readNumberAt`/`readValueAt` for SK tree walks, `publisher.publishReport(this.id, ctx, text)` for the canonical report notification.
 3. Register the analyzer in `src/index.ts` alongside the existing five and add a section to `src/schema.ts`.
 4. Add a test under `tests/`, reusing `makeAnalyzerDeps` and (for trend analyzers) `makeQuestDBStub` from `tests/_mocks.ts`.

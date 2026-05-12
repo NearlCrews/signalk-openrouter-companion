@@ -46,8 +46,8 @@ describe('ReportPublisher', () => {
     expect(d.updates[0]?.values[0]?.path).toBe(
       'notifications.openrouter-companion.maintenance.report',
     );
-    // Reports are informational ('nominal') so cannon does not emit a PGN
-    // 126983 alert; method is visual-only since nominal isn't audible.
+    // Reports are informational ('nominal') so `signalk-nmea2000-emitter-cannon`
+    // does not emit a PGN 126983 alert; method is visual-only since nominal isn't audible.
     expect(d.updates[0]?.values[0]?.value.state).toBe('nominal');
     expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual']);
     expect(d.updates[0]?.values[0]?.value.message).toBe('the report text');
@@ -89,7 +89,7 @@ describe('ReportPublisher', () => {
     };
     expect(d.updates[0]?.values[0]?.path).toBe(path);
     expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
-    // alert state -> audible so cannon emits PGN 126983 with Active alertState.
+    // alert state -> audible so `signalk-nmea2000-emitter-cannon` emits PGN 126983 with Active alertState.
     expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual', 'sound']);
     expect(d.updates[0]?.values[0]?.value.message).toBe('soc dropped');
     expect(d.updates[0]?.values[0]?.value.alertId).toBe(0xabcd);

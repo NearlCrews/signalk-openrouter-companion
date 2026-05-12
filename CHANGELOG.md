@@ -6,8 +6,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 This release aligns the plugin's notification output with the NMEA 2000
 alert PGN family (126983 / 126985) as bridged by
-`signalk-nmea2000-emitter-cannon`. The changes were derived from a
-signalk-plugin-expert audit of the cannon's actual mapping conventions.
+[`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon).
+The changes were derived from a signalk-plugin-expert audit of
+`signalk-nmea2000-emitter-cannon`'s actual mapping conventions.
 
 ### Breaking changes
 - **Alert notification paths moved**. Battery alerts now publish on
@@ -15,9 +16,10 @@ signalk-plugin-expert audit of the cannon's actual mapping conventions.
   and `.cellImbalance`) instead of the producer-namespaced shared paths
   (`notifications.openrouter-companion.alert.low-soc-enter`, etc). One path
   per (bank, kind), with `state: alert` on enter and `state: normal` on exit
-  (no more `-enter`/`-exit` subkind paths). This avoids cannon's
-  one-cache-slot-per-path collision when multiple banks alert simultaneously,
-  and lets any third-party bridge already watching
+  (no more `-enter`/`-exit` subkind paths). This avoids
+  `signalk-nmea2000-emitter-cannon`'s one-cache-slot-per-path collision when
+  multiple banks alert simultaneously, and lets any third-party bridge
+  already watching
   `notifications.electrical.batteries.*` consume the alerts.
 - **`output.notificationPath` and `output.notificationState` config fields
   removed**. They were dead knobs: every analyzer overrides per-publish via
@@ -26,30 +28,37 @@ signalk-plugin-expert audit of the cannon's actual mapping conventions.
   `signalk-openrouter-companion.json` config files that set these fields
   will silently ignore them at load (mergeWithDefaults ignores unknown
   keys).
-- **`Analyzer.publishOutput` is now required** (was optional). The
-  TriggerRouter no longer falls back to `ReportPublisher.publish()`; that
-  method has been removed alongside the cfg fields it depended on. Plugins
-  extending the `Analyzer` interface must provide a `publishOutput`
-  implementation; `deps.publisher.publishReport(this.id, ctx, text)` is
-  the canonical shorthand.
+- **`ReportPublisher.publish()` removed**. It depended on the now-removed
+  `cfg.notificationPath` / `cfg.notificationState` defaults. The
+  `TriggerRouter` no longer falls back to it: when an analyzer omits
+  `publishOutput`, the router calls
+  `deps.publisher.publishReport(analyzer.id, ctx, text)` instead, which
+  publishes on the canonical `notifications.openrouter-companion.<id>.report`
+  path with `state: 'nominal'`. `publishOutput` itself stays optional;
+  override it only when the analyzer needs a different path or state
+  (transition analyzers like `alerts` do; the four narrative analyzers
+  inherit the default).
 
 ### Changed (notification PGN alignment)
 - Reports now use `state: 'nominal'` (was `'normal'`). Per Signal K 1.8.2,
   `nominal` is the informational/no-action state; `normal` means
-  "recovered after an alarm". Cannon's `alertTypes` table has no entry for
-  `nominal`, so the chartplotter does NOT get a spurious PGN 126983 alert
-  for narrative reports (maintenance / health / aging / drift).
-- Notification `method` is now state-driven. Cannon maps the SK `method`
-  array to PGN 126983 `alertState`: includes `'sound'` -> Active; nonempty
-  without `'sound'` -> Silenced; empty -> Acknowledged. This plugin now
-  emits `['visual', 'sound']` for `alert`/`alarm`/`emergency`/`warn`
-  states (audible) and `['visual']` for `nominal`/`normal` (silent),
-  yielding the correct chartplotter UX.
+  "recovered after an alarm". `signalk-nmea2000-emitter-cannon`'s
+  `alertTypes` table has no entry for `nominal`, so the chartplotter does
+  NOT get a spurious PGN 126983 alert for narrative reports
+  (maintenance / health / aging / drift).
+- Notification `method` is now state-driven.
+  `signalk-nmea2000-emitter-cannon` maps the SK `method` array to PGN
+  126983 `alertState`: includes `'sound'` -> Active; nonempty without
+  `'sound'` -> Silenced; empty -> Acknowledged. This plugin now emits
+  `['visual', 'sound']` for `alert`/`alarm`/`emergency`/`warn` states
+  (audible) and `['visual']` for `nominal`/`normal` (silent), yielding
+  the correct chartplotter UX.
 - Notification value carries an optional `alertId` (16-bit). Battery
   alerts now set it to a stable FNV-1a hash of the SK path so the
-  chartplotter sees the same alert reappear across cannon restarts.
-  Without this, cannon's auto-counter resets on config reload and the
-  chartplotter treats post-restart alerts as new.
+  chartplotter sees the same alert reappear across
+  `signalk-nmea2000-emitter-cannon` restarts. Without this,
+  `signalk-nmea2000-emitter-cannon`'s auto-counter resets on config
+  reload and the chartplotter treats post-restart alerts as new.
 - `MAX_ALERT_MESSAGE_CHARS` tightened from 80 to 64. The wire field
   (PGN 126985 alertTextDescription) holds ~200 chars but real-world MFD
   display caps are tighter (Raymarine Axiom ~60, B&G Zeus ~70, Furuno
@@ -68,8 +77,8 @@ signalk-plugin-expert audit of the cannon's actual mapping conventions.
 - `core/paths.ts::alertIdFor(path)`: deterministic 16-bit nonzero alert
   identifier derived from the SK path via FNV-1a.
 - `core/publisher.ts::SignalKNotificationValue.alertId?: number`: optional
-  alert identifier passed through to the SK delta and consumed by cannon
-  for PGN 126983.
+  alert identifier passed through to the SK delta and consumed by
+  `signalk-nmea2000-emitter-cannon` for PGN 126983.
 
 ### Removed
 - `core/paths.ts::alertNotificationPath` and `ALERT_NOTIFICATION_PREFIX`
