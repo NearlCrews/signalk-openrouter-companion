@@ -33,6 +33,7 @@ Each analyzer is independently enabled in the admin UI and shares the standardiz
 - **JSONL log** of every run at `<plugin-config-data>/signalk-openrouter-companion/reports.jsonl`.
 - **NMEA 2000 Alert Text compatibility**: alert messages truncate to 80 chars (word-boundary cut) so the headline sentence survives the per-chartplotter display cap when bridged via `signalk-nmea2000-emitter-cannon` (PGN 126985 alertTextDescription).
 - **QuestDB-backed trend analyzers** with configurable history windows. State analyzers stay independent of QuestDB.
+- **Forgiving path discovery**: engines are discovered off `propulsion.<id>.revolutions`, or off `coolantTemperature`/`runTime`/`oilPressure`/`temperature`/`alternatorVoltage`/`fuel.rate` if no RPM source is publishing. `tanks.fuel.*` is also buffered so the maintenance prompt can cross-check fuel rate against tank-level drift over the session.
 - **Restart-safe**: `plugin.whenReady()` returns once the deferred router init has wired analyzers; tests await it instead of polling.
 
 ## Installation
@@ -197,8 +198,18 @@ The `aging` and `drift` analyzers require QuestDB. On start, the plugin probes t
 ### Aging or drift returns "no data"
 Aging needs at least two samples on `electrical.batteries.<id>.capacity.actual` and `electrical.batteries.<id>.cycles` in the configured window. Drift needs at least 30 samples per RPM bin (in both the past week and the baseline window) to compute a delta. On a vessel newly outfitted with QuestDB, give it the full window before expecting trend output.
 
-### Drift bins are diesel-tuned
-Drift sorts RPM samples into four bins: idle (5-15 Hz, ~300-900 RPM), low cruise (15-30 Hz, ~900-1800 RPM), high cruise (30-50 Hz, ~1800-3000 RPM), top end (50+ Hz, 3000+ RPM). That maps cleanly to a marine diesel. Outboard owners will see most of their cruise and WOT (4000-6500 RPM, ~67-108 Hz) collapsed into the top-end bin, so band-level signal in that range is coarse. Per-engine configurable bin edges are on the roadmap.
+### Drift RPM bins
+Drift sorts RPM samples into five bins, sized to cover both marine diesel and outboard ranges:
+
+| Bin | Hz | ~RPM |
+| --- | --- | --- |
+| idle | 5-15 | 300-900 |
+| low cruise | 15-30 | 900-1800 |
+| high cruise | 30-50 | 1800-3000 |
+| top end | 50-75 | 3000-4500 |
+| wot | 75+ | 4500+ |
+
+Diesels rarely cross 50 Hz so the top-end bin captures their WOT and the wot bin stays empty. Outboards run their cruise band in top-end and their WOT in the wot bin. Per-engine configurable bin edges are on the roadmap.
 
 ### Alert message truncated with `…` suffix
 This is by design: alerts cap at 200 ASCII chars (word-boundary cut) so chartplotters reading NMEA 2000 PGN 126985 (Alert Text) via `signalk-nmea2000-emitter-cannon` get clean, in-budget text. The full message is still in `reports.jsonl`.

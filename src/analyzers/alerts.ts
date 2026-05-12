@@ -29,7 +29,7 @@ function truncateForN2K(message: string): string {
 }
 
 function isBatteryEventKind(s: string): s is BatteryEventKind {
-  return (ALERTS_SUPPORTED_EVENTS as ReadonlyArray<string>).includes(s);
+  return (ALERTS_SUPPORTED_EVENTS as readonly string[]).includes(s);
 }
 
 export interface AlertCfg {

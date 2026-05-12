@@ -31,7 +31,7 @@ function makeDeps(app: MockApp, buffer: RollingBuffer, questdb: MockQuestDB | nu
 // {bin, n, mean_fuel, mean_sog}. Test stubs return pre-binned rows in that
 // exact shape rather than raw timeseries.
 interface BinRow {
-  bin: 'idle' | 'lowCruise' | 'highCruise' | 'topEnd';
+  bin: 'idle' | 'lowCruise' | 'highCruise' | 'topEnd' | 'wot';
   n: number;
   mean_fuel: number | null;
   mean_sog: number | null;
@@ -240,18 +240,21 @@ describe('DriftAnalyzer', () => {
               lowCruise: { count: 80, meanFuelRate: 0.00012, meanSog: 2.5 },
               highCruise: { count: 120, meanFuelRate: 0.00031, meanSog: 4.6 },
               topEnd: { count: 5, meanFuelRate: 0.00044, meanSog: 5.4 },
+              wot: { count: 0, meanFuelRate: null, meanSog: null },
             },
             baseline: {
               idle: { count: 200, meanFuelRate: 0.00005, meanSog: 0.0 },
               lowCruise: { count: 300, meanFuelRate: 0.00012, meanSog: 2.5 },
               highCruise: { count: 400, meanFuelRate: 0.00028, meanSog: 4.6 },
               topEnd: { count: 20, meanFuelRate: 0.00043, meanSog: 5.5 },
+              wot: { count: 0, meanFuelRate: null, meanSog: null },
             },
             deltas: {
               idle: { fuelRateDeltaPct: 0, sogDeltaPct: 0 },
               lowCruise: { fuelRateDeltaPct: 0, sogDeltaPct: 0 },
               highCruise: { fuelRateDeltaPct: 10.7, sogDeltaPct: 0 },
               topEnd: { fuelRateDeltaPct: null, sogDeltaPct: null },
+              wot: { fuelRateDeltaPct: null, sogDeltaPct: null },
             },
           },
         ],

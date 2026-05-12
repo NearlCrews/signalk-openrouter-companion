@@ -28,7 +28,7 @@ export interface DriftCfg {
   baselineDays: number;
 }
 
-type BinKey = 'idle' | 'lowCruise' | 'highCruise' | 'topEnd';
+type BinKey = 'idle' | 'lowCruise' | 'highCruise' | 'topEnd' | 'wot';
 
 interface BinDef {
   label: string;
@@ -36,20 +36,22 @@ interface BinDef {
   max: number;
 }
 
-const BIN_ORDER: ReadonlyArray<BinKey> = ['idle', 'lowCruise', 'highCruise', 'topEnd'];
+const BIN_ORDER: ReadonlyArray<BinKey> = ['idle', 'lowCruise', 'highCruise', 'topEnd', 'wot'];
 
-// Hz bin edges sized for a typical marine diesel or gas engine. propulsion.*.revolutions
-// is documented in SK v1.8.2 as Hz (rev/s), and the N2K bridge passes the wire value
-// through unchanged. Approximate RPM ranges per bin:
-//   idle:        ~300-900 RPM
-//   low cruise:  ~900-1800 RPM
-//   high cruise: ~1800-3000 RPM
-//   top end:     ~3000+ RPM
+// Hz bin edges. propulsion.*.revolutions is documented in SK v1.8.2 as Hz
+// (rev/s), and the N2K bridge passes the wire value through unchanged.
+// Approximate RPM ranges per bin (1 Hz = 60 RPM):
+//   idle:        ~300-900 RPM   (diesel idle, outboard troll)
+//   low cruise:  ~900-1800 RPM  (diesel cruise low)
+//   high cruise: ~1800-3000 RPM (diesel cruise high)
+//   top end:     ~3000-4500 RPM (diesel WOT, outboard cruise)
+//   wot:         ~4500+ RPM     (outboard WOT; always empty for diesels)
 const BIN_DEFS: Record<BinKey, BinDef> = {
   idle: { label: 'idle', min: RPM_RUNNING_THRESHOLD_HZ, max: 15.0 },
   lowCruise: { label: 'low cruise', min: 15.0, max: 30.0 },
   highCruise: { label: 'high cruise', min: 30.0, max: 50.0 },
-  topEnd: { label: 'top end', min: 50.0, max: Number.POSITIVE_INFINITY },
+  topEnd: { label: 'top end', min: 50.0, max: 75.0 },
+  wot: { label: 'wot', min: 75.0, max: Number.POSITIVE_INFINITY },
 };
 
 export interface BinStats {
@@ -217,7 +219,8 @@ async function binEngineWindow(
         WHEN r.value < 15.0 THEN 'idle'
         WHEN r.value < 30.0 THEN 'lowCruise'
         WHEN r.value < 50.0 THEN 'highCruise'
-        ELSE 'topEnd'
+        WHEN r.value < 75.0 THEN 'topEnd'
+        ELSE 'wot'
       END AS bin,
       count() AS n,
       avg(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
@@ -259,7 +262,7 @@ async function binEngineWindow(
 }
 
 function isBinKey(k: string): k is BinKey {
-  return k === 'idle' || k === 'lowCruise' || k === 'highCruise' || k === 'topEnd';
+  return (BIN_ORDER as ReadonlyArray<string>).includes(k);
 }
 
 function computeDeltas(

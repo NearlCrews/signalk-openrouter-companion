@@ -412,6 +412,10 @@ export default function createPlugin(app: ServerApiLike): {
       app.setPluginStatus('Stopped');
     },
 
+    // whenReady is not part of the SK Plugin interface. It exists so tests
+    // (and any in-process consumer that wants to coordinate with the plugin
+    // lifecycle) can await the deferred router init that happens after start()
+    // returns synchronously. The SK server itself never calls it.
     whenReady: () => readyPromise,
   };
 }

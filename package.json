@@ -1,7 +1,7 @@
 {
   "name": "signalk-openrouter-companion",
   "version": "0.2.0",
-  "description": "Beta: OpenRouter-powered analyzers for Signal K (maintenance, health, alerts, aging, drift). Requires a paid OpenRouter API key; LLM calls are billed per token. Per-day call cap enforced.",
+  "description": "OpenRouter-powered analyzers for Signal K (maintenance, health, alerts, aging, drift). Requires a paid OpenRouter API key; LLM calls are billed per token. Per-day call cap enforced.",
   "main": "dist/index.js",
   "type": "module",
   "files": ["dist/", "assets/icons/", "README.md", "LICENSE", "CHANGELOG.md"],
@@ -17,7 +17,7 @@
   ],
   "signalk-plugin-enabled-by-default": false,
   "signalk": {
-    "displayName": "OpenRouter Companion (beta)",
+    "displayName": "OpenRouter Companion",
     "appIcon": "./assets/icons/icon-192.png"
   },
   "engines": { "node": ">=20.18" },
