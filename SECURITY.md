@@ -8,8 +8,8 @@ Only the latest release line is supported with security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.x   | Yes (current)      |
-| < 0.2   | No                 |
+| 0.3.x   | Yes (current)      |
+| < 0.3   | No                 |
 
 ## Reporting a vulnerability
 

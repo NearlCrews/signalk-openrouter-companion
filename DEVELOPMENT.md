@@ -10,17 +10,22 @@ This repo is **one npm package**. New monitoring domains land as `Analyzer` modu
 
 ```
 src/
-├── index.ts                  Plugin entry: lifecycle, subscriptions, PUT registration
-├── schema.ts                 rjsf JSON Schema for the admin UI
+├── index.ts                  Plugin entry: lifecycle, subscriptions, PUT + REST registration
+├── schema.ts                 rjsf JSON Schema (storage shape; fallback admin UI)
 ├── types.ts                  Plugin options + DEFAULT_OPTIONS + mergeWithDefaults
 ├── analyzers/
 │   ├── Analyzer.ts           Shared interface, TriggerSpec union, AnalyzerDeps
+│   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
 │   ├── maintenance.ts        State: engine-session narrative
 │   ├── health.ts             State: daily battery snapshot
 │   ├── alerts.ts             Transition: threshold crossings
 │   ├── aging.ts              Trend: capacity loss per bank from QuestDB
 │   └── drift.ts              Trend: fuel-economy drift per RPM bin from QuestDB
+├── configpanel/
+│   ├── index.js              Module Federation entry stub (Webpack emits remoteEntry around this)
+│   └── PluginConfigurationPanel.jsx  React 19 panel exposed as `./PluginConfigurationPanel`
 └── core/
+    ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime; DEFAULT_SYSTEM_PROMPTS
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
     ├── engineDetector.ts     Per-engine RPM state machine for session detection
@@ -35,7 +40,7 @@ src/
     ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
     ├── triggers.ts           buildTriggers(cfg, eventMapper?) shared by all analyzers
     ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
-    ├── cfg.ts                clampPositiveInt for sanitized day-counts
+    ├── cfg.ts                clampPositiveInt + resolveSystemPrompt
     └── logger.ts             Wraps app.debug / app.error / stringify
 ```
 
@@ -83,18 +88,20 @@ Trend analyzers own QuestDB queries; state analyzers don't, so a daily health re
 ## Build
 
 ```bash
-npm run build          # clean + tsc -d + esbuild bundle
+npm run build          # clean + tsc -d + esbuild bundle + webpack panel
 npm run build:types    # tsc --emitDeclarationOnly --declaration --outDir dist
-npm run build:bundle   # node esbuild.config.mjs
-npm run clean          # rm -rf dist
+npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
+npm run build:panel    # webpack --config webpack.config.cjs (admin UI panel)
+npm run clean          # rm -rf dist public
 ```
 
-Output:
+Outputs:
 
-- `dist/index.js` (single ESM bundle, ~120 KB)
+- `dist/index.js` (single ESM backend bundle, ~131 KB)
 - `dist/*.d.ts` (TypeScript declarations)
+- `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~18 KB total)
 
-esbuild externalizes `@signalk/server-api` and `croner`; everything else is bundled. The Signal K server provides `@signalk/server-api` at runtime (`peerDependency`).
+esbuild externalizes `@signalk/server-api` and `croner`; everything else in the backend is bundled. The panel bundle shares `react` / `react-dom` 19 as Module Federation `singleton: true` so it reuses the SK admin UI's React runtime. The panel is built with `experiments.outputModule: true` and `library: { type: 'module' }` because this package's `"type": "module"` makes SK admin inject `<script type="module">`; legacy `library: 'var'` doesn't work under that loader.
 
 ## Tests
 
@@ -104,10 +111,11 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-127 tests across 18 files cover:
+155 tests across 19 files cover:
 
-- Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt`.
+- Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
+- `tests/api.test.ts` covers all seven REST endpoints: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), questdb test (URL override/probe).
 - `tests/integration.test.ts` exercises the plugin end-to-end with a mocked SK server and `vi.stubGlobal('fetch')` for OpenRouter.
 
 The shared test mocks live in `tests/_mocks.ts`:
@@ -115,6 +123,7 @@ The shared test mocks live in `tests/_mocks.ts`:
 - `makeMockApp(dir)`: builds a `MockApp` implementing the subset of `ServerApiLike` the plugin touches.
 - `makeAnalyzerDeps(app, buffer, opts?)`: canonical factory for `AnalyzerDeps`. Pass `{ questdb }` and `{ publisher }` only when the test needs them.
 - `makeQuestDBStub(dispatch)`: injects a typed stub matching the `QuestDBClient.query` surface. Trend-analyzer tests use it instead of stubbing global `fetch`, which is process-wide and races with parallel test workers.
+- `makePluginRuntime(opts?)`: builds a `PluginRuntime` literal with sane defaults from `DEFAULT_OPTIONS`. Use this for any new test that registers REST routes; never hand-roll the cfg/llm/budget/etc. boilerplate.
 
 ## Lint and type-check
 
@@ -145,7 +154,9 @@ npm run build
 sudo systemctl restart signalk.service
 ```
 
-After each code change, `npm run build && sudo systemctl restart signalk.service` rebuilds and reloads. `tsx watch` (`npm run dev`) works for tighter iteration but doesn't produce the `dist/` bundle the SK server actually loads, so save it for unit-level testing.
+After each code change, `npm run build && sudo systemctl restart signalk.service` rebuilds and reloads. `tsx watch` (`npm run dev`) works for tighter iteration but doesn't produce the `dist/` bundle the SK server actually loads, so save it for unit-level testing. Note: `dist/index.js` MUST finish writing before SK restarts, otherwise SK loads the old code and any new `registerWithRouter` routes return 404.
+
+For panel-only iteration: `npm run build:panel && sudo systemctl restart signalk.service` (panel changes do not require the backend to rebuild). After the restart, hard-refresh the admin tab so the browser drops the cached `remoteEntry.js`.
 
 To inspect the served plugin schema:
 
@@ -175,33 +186,41 @@ Step by step:
 
 1. Decide whether it is **state**, **transition**, or **trend**. State/trend use the shared `publishReport` shorthand (defaults to `state: nominal`, `method: ['visual']`, no N2K alert PGN). Transition wants a custom path like `alerts` uses for `notifications.electrical.batteries.<bankId>.<kind>` with `state: alert`/`normal` and an `alertId` from `alertIdFor(path)`.
 
-2. Create `src/analyzers/<name>.ts` implementing `Analyzer<I>`:
+2. Add the new id and title to `src/analyzers/ids.ts`. Append to `ANALYZER_IDS` (which auto-extends the `AnalyzerId` union) and add the title to `ANALYZER_TITLES`. This is the single source of truth; api.ts and the panel both read it.
+
+3. Create `src/analyzers/<name>.ts` implementing `Analyzer<I>`:
 
    ```typescript
+   import { resolveSystemPrompt } from '../core/cfg.js';
+   import { ANALYZER_TITLES } from './ids.js';
+
+   export const MYNAME_DEFAULT_SYSTEM_PROMPT = '...';
+
    export class MyAnalyzer implements Analyzer<MyInput> {
      readonly id = 'myname';
-     readonly title = 'My Analyzer';
+     readonly title = ANALYZER_TITLES.myname;
      readonly triggers: ReadonlyArray<TriggerSpec>;
+     private readonly systemPrompt: string;
      constructor(cfg: MyCfg) {
        this.triggers = buildTriggers(cfg.triggers);
+       this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, MYNAME_DEFAULT_SYSTEM_PROMPT);
      }
      async collectContext(ctx, deps) { /* ... return MyInput | null */ }
-     buildPrompt(input) { return { system, user }; }
-     async publishOutput(text, ctx, deps) {
-       await deps.publisher.publishReport(this.id, ctx, text);
-     }
+     buildPrompt(input) { return { system: this.systemPrompt, user: ... }; }
    }
    ```
 
-3. Add the config block to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS`. Use `pluginPutPath('myname')` for the default PUT path.
+4. Register the default prompt in `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS` so `GET /api/analyzers/:id/prompt` can serve it.
 
-4. Add the schema section in `src/schema.ts` (a per-analyzer `type: 'object'` with `enabled` and a nested `triggers` block). The schema also drives the admin UI.
+5. Add the config block (including `customSystemPrompt?: string`) to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS`. Use `pluginPutPath('myname')` for the default PUT path.
 
-5. Wire the analyzer in `src/index.ts`: instantiate it inside the `cfg.analyzers.myname.enabled` branch and push onto the `analyzers` array.
+6. Add the schema section in `src/schema.ts` (a per-analyzer `type: 'object'` with `enabled` and a nested `triggers` block). The schema is the storage shape and drives the rjsf fallback admin UI.
 
-6. Add tests under `tests/myname.test.ts` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`.
+7. Wire the analyzer in `src/index.ts`: instantiate it inside the `cfg.analyzers.myname.enabled` branch and push onto the `analyzers` array, passing `customSystemPrompt: cfg.analyzers.myname.customSystemPrompt`.
 
-7. Document the analyzer in `README.md` (the Analyzers table and Defaults table) and `CHANGELOG.md`.
+8. Add tests under `tests/myname.test.ts` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`. If your test needs a `PluginRuntime` literal, use `makePluginRuntime`.
+
+9. Document the analyzer in `README.md` (the Analyzers table and Defaults table) and `CHANGELOG.md`.
 
 ## CI
 
@@ -218,9 +237,10 @@ Both run on push and pull_request to `main`.
 - Node 22+ (specified in `package.json#engines`)
 - `@signalk/server-api` 2.24+ (peer dep)
 - `croner` 10 (only runtime dep)
-- esbuild 0.28 (build)
+- esbuild 0.28 (backend bundle)
+- Webpack 5 + esbuild-loader + React 19 (admin panel bundle, Module Federation)
 - Biome 2.4 (lint + format)
-- Vitest 4.1 (tests)
+- Vitest 4 (tests)
 
 ## License
 

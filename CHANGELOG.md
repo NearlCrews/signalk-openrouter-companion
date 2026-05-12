@@ -2,6 +2,128 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-05-12
+
+Adds a custom React configuration panel that the Signal K admin UI loads
+in place of the rjsf-rendered schema, plus a REST control plane the
+panel uses for live status, manual triggering, last-report viewing, and
+per-analyzer system-prompt overrides. The rjsf schema stays in place as
+the storage shape and as a fallback if the panel ever fails to load.
+
+### Added (custom config panel)
+
+- New `signalk-plugin-configurator` keyword in `package.json` triggers
+  the SK admin to discover and dynamically import a React component
+  exposed via Webpack Module Federation. The plugin ships
+  `public/remoteEntry.js` (built from `src/configpanel/`); SK serves it
+  at `/<package>/remoteEntry.js` and renders the exposed
+  `./PluginConfigurationPanel` with `{ configuration, save }` props.
+- Live status grid: API key configured + model, calls today / cap,
+  QuestDB reachable, analyzer enabled count. Polled every 5 s with a
+  deep-equality guard that skips re-renders when nothing changed.
+- Per-analyzer rows (one per id from `src/analyzers/ids.ts`):
+  - Enable toggle (writes through to `cfg.analyzers.<id>.enabled`).
+  - Fire now button (POST to `/api/analyzers/:id/fire`).
+  - View reports drawer (GET `/api/analyzers/:id/reports?limit=10`,
+    newest first, full report text inline).
+  - Edit prompt drawer with a textarea preloaded from
+    GET `/api/analyzers/:id/prompt`. Reset to default clears the
+    override.
+- OpenRouter section: API key (password input), model field with
+  native `<datalist>` autocomplete populated from
+  GET `/api/openrouter/models` (lazy-loaded, 1-hour in-process cache),
+  max calls per day.
+- QuestDB section: enabled toggle, URL field when enabled, "Test
+  connection" button (POST `/api/questdb/test`) that probes the URL
+  in the edit buffer BEFORE saving.
+- Sticky save bar at the bottom; disabled when nothing changed
+  (O(1) `dirty` flag, not a per-keystroke `JSON.stringify`).
+- All panel fetches send `credentials: 'same-origin'` to match the SK
+  admin's own convention; works regardless of reverse-proxy setup.
+
+### Added (REST API under `/plugins/signalk-openrouter-companion/api`)
+
+The plugin now exposes a small read+action HTTP surface via the SK
+`registerWithRouter` lifecycle hook:
+
+| Verb | Path | Purpose |
+| ---- | ---- | ------- |
+| GET  | `/api/status` | Live snapshot for the panel polling loop |
+| POST | `/api/openrouter/test` | One-token round-trip ping using saved API key |
+| GET  | `/api/openrouter/models` | Proxy to OpenRouter `/api/v1/models` (1 h cache) |
+| POST | `/api/questdb/test` | Probe an arbitrary or saved QuestDB URL |
+| POST | `/api/analyzers/:id/fire` | Synthesize a put-kind ctx and dispatch via `TriggerRouter` |
+| GET  | `/api/analyzers/:id/reports?limit=N` | Tail JSONL log filtered by analyzer (default 10, max 100) |
+| GET  | `/api/analyzers/:id/prompt` | Returns `{ default, current }` for the panel's prompt editor |
+
+All routes are mounted by SK under the standard plugin REST prefix and
+inherit SK admin authentication; no separate auth wiring is needed.
+
+### Added (per-analyzer prompt overrides)
+
+- `customSystemPrompt?: string` added to every `*Cfg` and the
+  `PluginOptions.analyzers.<id>` shape. When set (non-whitespace),
+  it replaces the analyzer's built-in default system prompt
+  verbatim.
+- Each analyzer exports a `<NAME>_DEFAULT_SYSTEM_PROMPT` constant. The
+  drift and aging defaults are now generic about window length: the
+  configured window-day numbers travel through the user prompt's
+  data block instead, so a custom override doesn't lose meaning.
+- New `core/cfg.ts::resolveSystemPrompt(custom, fallback)` helper
+  centralises the trim/fallback dance. Each analyzer constructor
+  shrinks from a three-line `if (custom?.trim()) ... else ...`
+  pattern to one call.
+- The default ALERTS prompt now interpolates `MAX_ALERT_MESSAGE_CHARS`
+  at module load instead of hardcoding `64`, so bumping the constant
+  updates the prompt automatically.
+
+### Added (analyzer registry)
+
+- New `src/analyzers/ids.ts` is the single source of truth for analyzer
+  ids and their human-readable titles. Exports `ANALYZER_IDS` (const
+  tuple), `AnalyzerId` (string-literal union), `ANALYZER_TITLES`
+  (record), and `isAnalyzerId(s)` (type guard).
+- Each analyzer reads `readonly title = ANALYZER_TITLES.<id>` instead
+  of repeating a hardcoded string. Fixes a real bug where
+  `api.ts::ANALYZER_META` titles had drifted from the analyzer
+  classes' own `.title` strings, causing the `/api/status` response
+  to disagree with what each analyzer self-identified as.
+
+### Changed
+
+- `PluginRuntime.cfg` (the snapshot the REST routes read) now uses
+  `Pick<PluginOptions, 'openrouter' | 'questdb' | 'analyzers'>`
+  instead of a hand-written stripped duplicate. Adding a new
+  analyzer config field no longer requires edits in three places.
+- Build output now includes `public/` (Webpack Module Federation
+  bundle, ~18 kB total) alongside `dist/` (esbuild backend bundle,
+  131 kB). Both are produced by `npm run build`; `npm run build:panel`
+  runs only the Webpack step.
+- `npm run clean` now also removes `public/`.
+
+### Internal
+
+- Webpack 5 + esbuild-loader added as devDependencies (panel-only
+  toolchain; backend still bundles with esbuild). React 19 declared
+  as `singleton: true` Module Federation shared dep so the panel
+  reuses the SK admin's React runtime.
+- `experiments.outputModule: true` in `webpack.config.cjs`: the panel
+  emits an ESM-format federation container with `export { ... as get,
+  ... as init }`. Required because this package's
+  `"type": "module"` makes SK admin inject `<script type="module">`,
+  under which the legacy `library: 'var'` form leaves the container
+  variable in module scope (never on `window`) and breaks the loader.
+- Six near-identical `PluginRuntime` literals in `tests/api.test.ts`
+  collapse into a single `makePluginRuntime(opts)` helper exported
+  from `tests/_mocks.ts`.
+- Six parallel per-id state maps in the panel (fireState,
+  reportsByAnalyzer, reportsLoading, reportsOpen, promptOpen,
+  promptState) consolidate into one `analyzerUi` map.
+
+### Test count
+
+127 -> 155 tests across 19 test files. dist 122.6 kB -> 130.9 kB.
+
 ## [0.2.1] - 2026-05-12
 
 This release aligns the plugin's notification output with the NMEA 2000

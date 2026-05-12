@@ -26,8 +26,11 @@ Each analyzer is independently enabled in the admin UI and shares the standardiz
 
 ## Features
 
+- **Custom React admin panel** (Module Federation, React 19) replaces the rjsf form for this plugin in the Signal K admin UI. Live status grid, per-analyzer Fire-now / View-reports / Edit-prompt buttons, OpenRouter API key + model autocomplete, QuestDB connection test before saving. The rjsf schema stays as the storage shape and is what the panel reads/writes via `save({...config})`. See [Custom config panel](#custom-config-panel) below.
 - **Five analyzer modules** sharing one extension point (`src/analyzers/Analyzer.ts`). Adding a sixth (voyage logger, alarm translator, anomaly watcher) is a single file under `src/analyzers/`.
 - **Standardized triggers contract** per analyzer: `{ cron, put, events }`. Same shape across all five; the events enum is per-analyzer.
+- **Per-analyzer system-prompt overrides**. Each analyzer has a default system prompt and an optional `customSystemPrompt` field; if you have domain knowledge the default doesn't capture (vessel quirks, BMS-specific behavior, fleet-wide reporting style), edit the prompt inline in the panel and save. Reset clears the override.
+- **REST control plane** under `/plugins/signalk-openrouter-companion/api/*` (registered via SK's `registerWithRouter`): live status, manual fire, recent reports tail, OpenRouter ping, model list proxy, QuestDB probe. See [REST API](#rest-api) below.
 - **Plain-prose output**, no markdown. Designed for the Signal K data browser's single-string notification renderer.
 - **Per-day OpenRouter call cap** so a misconfigured cron loop can't burn through credit.
 - **JSONL log** of every run at `<plugin-config-data>/signalk-openrouter-companion/reports.jsonl`.
@@ -71,15 +74,15 @@ Not yet published. Build from source above.
 | **Engine-off / Engine-on RPM thresholds (Hz)** | 1.0 Hz = 60 RPM | 1.0 / 5.0 | sane Hz values |
 | **Low SoC threshold (alerts)** | Percent; SoC must rise above `threshold + hysteresis` to clear | 30% | 0 to 100 |
 | **Low SoC exit hysteresis (alerts)** | Added to the low threshold to debounce exits | 5% | 0 to 50 |
-| **Cell imbalance threshold (alerts)** | Volts | 0.1 V | sane V values |
+| **Cell imbalance threshold (alerts)** | Volts (LFP-tuned default) | 0.05 V | sane V values |
 | **Cell imbalance settle (alerts)** | How long imbalance must persist before firing | 60 s | 0 to 3600 |
 | **Aging short window (days)** | Near-term aging trend window | 30 | 7 to 365 |
 | **Aging long window (days)** | Longer-term aging trend window, used for the projection-to-replace estimate | 90 | 7 to 1095 |
 | **Drift baseline window (days)** | Trailing baseline length for drift; the past-7-day recent window is fixed | 30 | 14 to 365 |
 
-Disabling an analyzer or QuestDB collapses its options away in the admin form. Heads-up: rjsf clears dependent field values when toggling enabled off, then restores schema defaults on re-enable. Save before toggling if you have non-default tunables.
+The custom panel exposes the most-used fields (API key, model, max calls, QuestDB toggle/URL, per-analyzer enable + prompt) and writes the full config back via `save({...config})`. Anything else in the schema (per-analyzer numeric tuning like RPM thresholds, settle times, hysteresis, window days, extra watched paths) lands in the saved JSON config file under `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` and can be edited there directly. The rjsf schema is also kept as a fallback so the legacy admin form renders if the panel ever fails to load.
 
-A few advanced fields are hidden from the admin form (OpenRouter base URL, request timeout, log filename, per-analyzer PUT path, per-analyzer cron timezone). They still exist in the schema and can be overridden by editing `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` directly.
+A few advanced fields are hidden from the admin form by design (OpenRouter base URL, request timeout, log filename, per-analyzer PUT path, per-analyzer cron timezone). They still exist in the schema and can be overridden by editing the JSON config file.
 
 ### Cron presets
 
@@ -106,6 +109,61 @@ For custom patterns, edit `~/.signalk/plugin-config-data/signalk-openrouter-comp
 | aging       | `0 8 1 * *`   | `plugins.openrouter-companion.aging.run`                     | (none)                                                                         |
 | drift       | `0 8 * * 0`   | `plugins.openrouter-companion.drift.run`                     | (none)                                                                         |
 | alerts      | off           | off (default path `plugins.openrouter-companion.alerts.run`) | `low-soc-enter`, `low-soc-exit`, `cell-imbalance-enter`, `cell-imbalance-exit` |
+
+## Custom config panel
+
+The plugin ships a Webpack Module Federation bundle that the Signal K admin UI auto-loads in place of the rjsf form (the `signalk-plugin-configurator` keyword in `package.json` opts in). The panel is a single React 19 component at `src/configpanel/PluginConfigurationPanel.jsx` built to `public/remoteEntry.js` (~18 kB total). React itself is shared as a singleton with the SK admin runtime, so no second copy is loaded.
+
+What it shows:
+
+- **Live status grid** (top of the page, polled every 5 s):
+  - OpenRouter API key configured + current model
+  - Calls today / per-day cap
+  - QuestDB reachable (or Disabled / Probing)
+  - Analyzer enabled count
+  - "Test API key" button does a one-token round-trip to OpenRouter using the saved key
+- **OpenRouter section**: API key (password input), model field with native `<datalist>` autocomplete populated from `https://openrouter.ai/api/v1/models` (proxied + cached for 1 h), max calls per day.
+- **QuestDB section**: enabled toggle, URL field when enabled, "Test connection" button that probes the URL in the edit buffer BEFORE saving.
+- **Per-analyzer rows**: enable checkbox, **Fire now** (manual trigger), **View reports** (drawer with the last 10 entries from `reports.jsonl`, full text), **Edit prompt** (drawer with a multi-line textarea preloaded from the analyzer's default prompt; Reset clears any custom override).
+- **Sticky save bar** at the bottom; greyed out when nothing has changed.
+
+The panel never bypasses the schema. Every Save call hands the full edited config back to the SK admin which persists it to `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` and restarts the plugin. If the panel ever fails to load (e.g., older SK admin without Module Federation support), the rjsf fallback at the same URL still works.
+
+## REST API
+
+Mounted by the plugin via SK's `registerWithRouter` lifecycle hook under `/plugins/signalk-openrouter-companion/api/*`. All routes inherit SK admin authentication; no separate keys.
+
+| Verb | Path | Returns |
+| ---- | ---- | ------- |
+| GET  | `/api/status` | `{ openrouter: { apiKeySet, model, callsToday, maxCallsPerDay }, questdb: { enabled, reachable: true \| false \| null }, analyzers: [{ id, title, enabled }] }` |
+| POST | `/api/openrouter/test` | One-token ping with saved key. `{ ok, model, totalTokens, text }` on success, `{ ok: false, status, error }` on failure |
+| GET  | `/api/openrouter/models` | Proxy to OpenRouter `/api/v1/models`, cached for 1 h in process |
+| POST | `/api/questdb/test` | Probes URL from request body, falling back to saved config URL. `{ ok, url }` |
+| POST | `/api/analyzers/:id/fire` | Synthesizes a put-kind ctx and dispatches via the live `TriggerRouter`. `{ ok, analyzer }` |
+| GET  | `/api/analyzers/:id/reports?limit=N` | Tail JSONL log filtered by analyzer id. Newest first. Default 10, max 100 |
+| GET  | `/api/analyzers/:id/prompt` | `{ analyzer, default, current }` for the panel's prompt editor |
+
+Examples:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/signalk/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$SK_USER\",\"password\":\"$SK_PASS\"}" | jq -r .token)
+
+# Live status
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/plugins/signalk-openrouter-companion/api/status | jq .
+
+# Manual fire
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/plugins/signalk-openrouter-companion/api/analyzers/health/fire | jq .
+
+# Last 5 reports
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:3000/plugins/signalk-openrouter-companion/api/analyzers/maintenance/reports?limit=5' | jq .
+```
+
+Manual fire is also available via the standardised SK PUT trigger paths (`plugins.openrouter-companion.<analyzer>.run`); the REST `fire` endpoint is a panel-UX convenience that skips the SK delta machinery.
 
 ## Where reports appear
 
@@ -222,10 +280,12 @@ Run the Signal K server with `DEBUG=signalk-openrouter-companion` and tail the s
 
 ## Adding a custom analyzer
 
-1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`. The default (when `publishOutput` is omitted) publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'`. Override only when you need a different path or state, like `alerts` does for per-bank alert paths.
-2. Use the shared helpers in `src/core/`: `buildTriggers(cfg)` for the standardized cron/PUT/events block, `bankPaths(id)`/`enginePaths(id)`/`notificationReportPath(id)`/`pluginPutPath(id)` for path strings, `escapeSqlLiteral` + `indexColumns` for QuestDB queries, `asFiniteNumber` / `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio` for value handling, `clampPositiveInt` for sanitized config day-counts, `readNumberAt`/`readValueAt` for SK tree walks, `publisher.publishReport(this.id, ctx, text)` for the canonical report notification.
-3. Register the analyzer in `src/index.ts` alongside the existing five and add a section to `src/schema.ts`.
-4. Add a test under `tests/`, reusing `makeAnalyzerDeps` and (for trend analyzers) `makeQuestDBStub` from `tests/_mocks.ts`.
+1. Add the new id and title to `src/analyzers/ids.ts` (`ANALYZER_IDS` tuple and `ANALYZER_TITLES` record). This is the single source of truth for both: api.ts reads it for the status payload, and the analyzer class reads its own title from there.
+2. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id`, `title` (from `ANALYZER_TITLES`), `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`. The default (when `publishOutput` is omitted) publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'`. Override only when you need a different path or state, like `alerts` does for per-bank alert paths.
+3. Use the shared helpers in `src/core/`: `buildTriggers(cfg)` for the standardized cron/PUT/events block, `bankPaths(id)`/`enginePaths(id)`/`notificationReportPath(id)`/`pluginPutPath(id)` for path strings, `escapeSqlLiteral` + `indexColumns` for QuestDB queries, `asFiniteNumber` / `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio` for value handling, `clampPositiveInt` and `resolveSystemPrompt(cfg.customSystemPrompt, DEFAULT)` for sanitized config, `readNumberAt`/`readValueAt` for SK tree walks, `publisher.publishReport(this.id, ctx, text)` for the canonical report notification.
+4. Export a `<NAME>_DEFAULT_SYSTEM_PROMPT` constant from the analyzer module and register it in `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS` so `/api/analyzers/:id/prompt` can serve it.
+5. Add the config block to `src/types.ts` (including `customSystemPrompt?: string`), register the analyzer in `src/index.ts` alongside the existing five, and add a section to `src/schema.ts` (drives the rjsf fallback form).
+6. Add a test under `tests/`, reusing `makeAnalyzerDeps`, `makeQuestDBStub`, and `makePluginRuntime` from `tests/_mocks.ts`.
 
 See the existing five (`maintenance`, `health`, `alerts`, `aging`, `drift`) for worked examples that cover state, transition, and trend shapes.
 
@@ -248,8 +308,10 @@ npm run prepublishOnly # Type-check + lint + test + build (run before any push)
 - TypeScript 6 (strict, ESM, ES2022 target)
 - Node 22+
 - `@signalk/server-api` 2.24+ (`peerDependency`; the SK server provides it at runtime)
-- `croner` 10 for cron scheduling
-- esbuild for bundling, Biome for lint and format, Vitest for tests (127 tests across 18 files)
+- `croner` 10 for cron scheduling (only runtime dep)
+- esbuild for the backend bundle (`dist/index.js`)
+- Webpack 5 + esbuild-loader + React 19 (singleton-shared with SK admin) for the panel bundle (`public/`, Module Federation)
+- Biome for lint and format, Vitest for tests (155 tests across 19 files)
 
 ### Local Signal K server
 

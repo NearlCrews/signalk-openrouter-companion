@@ -30,13 +30,15 @@ Confirm these with the user before generating files.
 
 ## Steps
 
-1. Re-read the three existing analyzers and their tests to lift any helper patterns relevant to the new domain (buffer summaries, `getSelfPath` snapshots, QuestDB baselines).
-2. Create `src/analyzers/<name>.ts` from the template below.
-3. Create `tests/<name>.test.ts` from the test scaffold below.
-4. Patch `src/types.ts`: add the `*_SUPPORTED_EVENTS` constant, the config block under `PluginOptions.analyzers`, the `DEFAULT_OPTIONS.analyzers.<name>` entry, and the `mergeWithDefaults` wiring.
-5. Patch `src/schema.ts`: import the new constant, add the `analyzers.properties.<name>` schema entry using `enabledGate` + `triggerSchema`, and add the matching `analyzers.<name>` entry in `buildUiSchemaInner`.
-6. Patch `src/index.ts`: import the new analyzer class, push it onto the `analyzers` array when enabled, and register any non-cron/non-put event source (e.g. a new emitter alongside `EngineDetector` or `BatteryMonitor`).
-7. Run the verification commands at the bottom of this file.
+1. Re-read the existing analyzers and their tests to lift any helper patterns relevant to the new domain (buffer summaries, `getSelfPath` snapshots, QuestDB baselines).
+2. Patch `src/analyzers/ids.ts`: append the new id to `ANALYZER_IDS` and the title to `ANALYZER_TITLES`. This is the single source of truth; api.ts and the panel both read it.
+3. Create `src/analyzers/<name>.ts` from the template below. Export a `<NAME>_DEFAULT_SYSTEM_PROMPT` constant; use `resolveSystemPrompt(cfg.customSystemPrompt, DEFAULT)` in the constructor.
+4. Patch `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS`: add an entry mapping the new id to the default constant so `GET /api/analyzers/:id/prompt` can serve it.
+5. Create `tests/<name>.test.ts` from the test scaffold below.
+6. Patch `src/types.ts`: add the `*_SUPPORTED_EVENTS` constant, the config block under `PluginOptions.analyzers` (including `customSystemPrompt?: string`), the `DEFAULT_OPTIONS.analyzers.<name>` entry, and the `mergeWithDefaults` wiring.
+7. Patch `src/schema.ts`: import the new constant, add the `analyzers.properties.<name>` schema entry using `enabledGate` + `triggerSchema`, and add the matching `analyzers.<name>` entry in `buildUiSchemaInner`.
+8. Patch `src/index.ts`: import the new analyzer class, push it onto the `analyzers` array when enabled (passing `customSystemPrompt: cfg.analyzers.<name>.customSystemPrompt`), and register any non-cron/non-put event source (e.g. a new emitter alongside `EngineDetector` or `BatteryMonitor`).
+9. Run the verification commands at the bottom of this file.
 
 Keep `src/index.ts` thin: the analyzer's constructor builds `this.triggers` from config. The lifecycle just hands declared triggers to the scheduler / put-handler / domain emitter. Don't add domain-specific dispatch logic to `index.ts` beyond what the existing engine and battery sections already do.
 
@@ -45,6 +47,8 @@ Keep `src/index.ts` thin: the analyzer's constructor builds `this.triggers` from
 Path: `src/analyzers/<name>.ts`. Copy verbatim and replace `Foo` / `foo` / `FOO`:
 
 ```ts
+import { resolveSystemPrompt } from '../core/cfg.js';
+import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type {
   AnalysisInput,
@@ -53,11 +57,20 @@ import type {
   TriggerCtx,
   TriggerSpec,
 } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
 
 export interface FooCfg {
   triggers: AnalyzerTriggerCfg;
+  customSystemPrompt?: string;
   // additional analyzer-specific tunables go here
 }
+
+export const FOO_DEFAULT_SYSTEM_PROMPT = [
+  'You are a marine specialist reading Signal K telemetry.',
+  'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s).',
+  'Stick to facts present in the data. If a cause is unclear from the fields, say so.',
+  'Stay under 350 words.',
+].join(' ');
 
 export interface FooInput extends AnalysisInput {
   generatedAt: string;
@@ -66,42 +79,28 @@ export interface FooInput extends AnalysisInput {
 
 export class FooAnalyzer implements Analyzer<FooInput> {
   readonly id = 'foo';
-  readonly title = 'Foo Analyzer';
+  readonly title = ANALYZER_TITLES.foo;
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly systemPrompt: string;
 
-  constructor(private cfg: FooCfg) {
-    const triggers: TriggerSpec[] = [];
-    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
-      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
-    }
-    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
-      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
-    }
-    // If this analyzer subscribes to domain events, push them here.
-    // Read cfg.triggers.events and translate each string into a TriggerSpec.
-    this.triggers = triggers;
+  constructor(cfg: FooCfg) {
+    this.triggers = buildTriggers(cfg.triggers);
+    this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, FOO_DEFAULT_SYSTEM_PROMPT);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<FooInput | null> {
     // Gather data from deps.buffer (summarize windows), deps.app.getSelfPath (snapshots),
-    // and optionally deps.questdb.baselineFor for 30-day baselines. Return null to skip.
-    const _ = ctx; // discard unused for now
+    // and optionally deps.questdb.query for QuestDB-backed trends. Return null to skip.
+    const _ = ctx;
     const _deps = deps;
     return null;
   }
 
   buildPrompt(input: FooInput): { system: string; user: string } {
-    const system = [
-      'You are a marine specialist reading Signal K telemetry.',
-      'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s).',
-      'Stick to facts present in the data. If a cause is unclear from the fields, say so.',
-      'Stay under 350 words.',
-    ].join(' ');
-
     const lines: string[] = [];
     lines.push(`## Generated ${input.generatedAt}`);
     // serialize each field of `input` into deterministic lines
-    return { system, user: lines.join('\n') };
+    return { system: this.systemPrompt, user: lines.join('\n') };
   }
 
   // Optional: override `publishOutput` only when the analyzer needs a path or
@@ -209,6 +208,7 @@ Add to `PluginOptions.analyzers`:
 foo: {
   enabled: boolean;
   triggers: AnalyzerTriggerCfg;
+  customSystemPrompt?: string;
   // analyzer-specific tunables here, matching FooCfg
 };
 ```
@@ -286,6 +286,32 @@ foo: {
 
 If the analyzer adds event subkinds, also extend `EVENT_TITLES` so the admin UI renders human-readable labels for each checkbox.
 
+## `src/analyzers/ids.ts` patch
+
+Add the new id and title (single source of truth used by api.ts and the panel):
+
+```ts
+export const ANALYZER_IDS = ['maintenance', 'health', 'aging', 'drift', 'alerts', 'foo'] as const;
+
+export const ANALYZER_TITLES: Record<AnalyzerId, string> = {
+  // ...existing...
+  foo: 'Foo Analyzer',
+};
+```
+
+## `src/core/api.ts` patch
+
+Register the default prompt so `GET /api/analyzers/:id/prompt` can serve it:
+
+```ts
+import { FOO_DEFAULT_SYSTEM_PROMPT } from '../analyzers/foo.js';
+
+export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
+  // ...existing...
+  foo: FOO_DEFAULT_SYSTEM_PROMPT,
+};
+```
+
 ## `src/index.ts` patch
 
 Import and register:
@@ -295,7 +321,12 @@ import { FooAnalyzer } from './analyzers/foo.js';
 
 // inside start(), alongside the existing analyzers.push(...) block:
 if (cfg.analyzers.foo.enabled) {
-  analyzers.push(new FooAnalyzer({ triggers: cfg.analyzers.foo.triggers }));
+  analyzers.push(
+    new FooAnalyzer({
+      triggers: cfg.analyzers.foo.triggers,
+      customSystemPrompt: cfg.analyzers.foo.customSystemPrompt,
+    }),
+  );
 }
 
 // and alongside the existing registerAnalyzerPut(...) calls:
