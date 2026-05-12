@@ -6,6 +6,7 @@ import { AlertAnalyzer } from './analyzers/alerts.js';
 import { DriftAnalyzer } from './analyzers/drift.js';
 import { HealthAnalyzer } from './analyzers/health.js';
 import { MaintenanceAnalyzer } from './analyzers/maintenance.js';
+import { type PluginRuntime, type RouterLike, registerApiRoutes } from './core/api.js';
 import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
 import { BudgetTracker } from './core/budget.js';
 import { RollingBuffer } from './core/buffer.js';
@@ -64,6 +65,7 @@ export default function createPlugin(app: ServerApiLike): {
   uiSchema: () => ReturnType<typeof buildUiSchema>;
   start: (settings: Partial<PluginOptions>, restart: () => void) => void;
   stop: () => Promise<void>;
+  registerWithRouter: (router: RouterLike) => void;
   whenReady: () => Promise<void>;
 } {
   const logger = new Logger(app);
@@ -71,6 +73,10 @@ export default function createPlugin(app: ServerApiLike): {
   const intervalHandles: NodeJS.Timeout[] = [];
   let lifecycleController: AbortController | null = null;
   let scheduler: CronScheduler | null = null;
+  // Snapshot of live runtime objects exposed via registerWithRouter routes.
+  // Populated in the start() then-handler once async init resolves; cleared
+  // in stop(). Routes return 503 while null.
+  let runtime: PluginRuntime | null = null;
   // Reset on every start() so a restart hands out a fresh promise.
   let signalReady: () => void = () => {};
   let readyPromise: Promise<void> = new Promise<void>((resolve) => {
@@ -209,6 +215,21 @@ export default function createPlugin(app: ServerApiLike): {
               setStatus: (m) => app.setPluginStatus(m),
               okStatus: runningStatus(analyzers.length),
             });
+            runtime = {
+              cfg: {
+                openrouter: {
+                  model: cfg.openrouter.model,
+                  maxCallsPerDay: cfg.openrouter.maxCallsPerDay,
+                },
+                questdb: { enabled: cfg.questdb.enabled },
+              },
+              llm,
+              budget,
+              questdbLive,
+              questdbProbed: true,
+              analyzers,
+              apiKeySet: true,
+            };
             for (const a of analyzers) {
               for (const t of a.triggers) {
                 if (t.kind === 'cron' && scheduler) {
@@ -408,7 +429,12 @@ export default function createPlugin(app: ServerApiLike): {
       }
       for (const h of intervalHandles) clearInterval(h);
       intervalHandles.length = 0;
+      runtime = null;
       app.setPluginStatus('Stopped');
+    },
+
+    registerWithRouter: (router: RouterLike) => {
+      registerApiRoutes(router, () => runtime);
     },
 
     // whenReady is not part of the SK Plugin interface. It exists so tests
