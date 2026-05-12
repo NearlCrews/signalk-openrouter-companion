@@ -1,0 +1,81 @@
+name: Feature Request
+description: Suggest a new feature or analyzer
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. If you're proposing a new monitoring domain, please consider whether it fits as a new `Analyzer` module under `src/analyzers/` rather than a structural change to the plugin core.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What use case or gap does this feature address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would this feature work? Reference the analyzer or core module it would touch.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature category
+      options:
+        - New analyzer (state)
+        - New analyzer (transition / event-driven)
+        - New analyzer (trend / QuestDB-backed)
+        - Existing analyzer enhancement
+        - Plugin core (lifecycle, schema, triggers)
+        - OpenRouter integration (model, prompt, retry)
+        - QuestDB integration
+        - Configuration / admin UI
+        - Performance
+        - Documentation
+        - Developer experience
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility / impact
+      description: Would this change existing analyzer outputs? Notification paths? Config defaults? Will it affect users on a slow vessel network or low-end hardware?
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Would you contribute?
+      options:
+        - label: I would like to implement this myself
+        - label: I can help test on a real vessel
+        - label: I can help with documentation
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have checked existing issues and discussions for duplicates
+          required: true
+        - label: I have considered whether this fits as an Analyzer module
+          required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context

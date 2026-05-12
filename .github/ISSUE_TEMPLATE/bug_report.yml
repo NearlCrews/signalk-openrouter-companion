@@ -1,0 +1,154 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug", "triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please redact your OpenRouter API key and any vessel-identifying information before sharing logs or config.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What went wrong, in one or two sentences.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: analyzer
+    attributes:
+      label: Affected analyzer
+      description: Which analyzer is misbehaving? Pick "Plugin core" for lifecycle, schema, or trigger issues that aren't specific to one analyzer.
+      options:
+        - maintenance
+        - health
+        - alerts
+        - aging
+        - drift
+        - Plugin core (lifecycle / schema / triggers)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Install plugin version X.Y.Z
+        2. Configure with [enabled analyzers]
+        3. Fire trigger via [PUT / cron / event]
+        4. Observe [behavior]
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log output
+      description: Run with DEBUG=signalk-openrouter-companion and paste the relevant lines. Redact API keys.
+      render: shell
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Report text (if applicable)
+      description: If the bug is in the LLM-generated prose, paste the report content (or the `reports.jsonl` entry).
+      render: text
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: signalk-version
+    attributes:
+      label: Signal K server version
+      placeholder: "2.x"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Run `node --version`
+      placeholder: "v22.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Raspberry Pi OS
+        - Linux (Ubuntu/Debian)
+        - Linux (other)
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: OpenRouter model
+      description: Model slug from your config (e.g., `anthropic/claude-haiku-4.5`)
+
+  - type: dropdown
+    id: questdb
+    attributes:
+      label: QuestDB co-installed?
+      description: Required for the trend analyzers (aging, drift). State analyzers ignore it.
+      options:
+        - Yes, reachable at the configured URL
+        - Yes, but unreachable from the plugin
+        - No
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Plugin configuration
+      description: Contents of `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` with API keys redacted.
+      render: json
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have checked existing issues for duplicates
+          required: true
+        - label: I have redacted my OpenRouter API key
+          required: true
+        - label: I have redacted any vessel-identifying information (boat name, MMSI, location)
+          required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
