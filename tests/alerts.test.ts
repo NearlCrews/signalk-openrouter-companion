@@ -7,6 +7,7 @@ import { RollingBuffer } from '../src/core/buffer.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
   cleanupTmpDir,
+  firstNotificationValue,
   type MockApp,
   makeAnalyzerDeps,
   makeMockApp,
@@ -117,20 +118,13 @@ describe('AlertAnalyzer', () => {
     };
     await a.publishOutput?.('SoC is at 25%, check house bank.', ctx, makeDeps(app, buf, publisher));
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]?.delta as {
-      updates: {
-        values: {
-          path: string;
-          value: { state: string; method: string[]; alertId?: number };
-        }[];
-      }[];
-    };
-    expect(d.updates[0]?.values[0]?.path).toBe('notifications.electrical.batteries.house.lowSoc');
-    expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
+    const v = firstNotificationValue(app.published[0]?.delta);
+    expect(v.path).toBe('notifications.electrical.batteries.house.lowSoc');
+    expect(v.state).toBe('alert');
     // alert state -> method includes 'sound' so `signalk-nmea2000-emitter-cannon` emits Active PGN 126983.
-    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual', 'sound']);
+    expect(v.method).toEqual(['visual', 'sound']);
     // Stable, nonzero 16-bit alertId derived from the path.
-    expect(typeof d.updates[0]?.values[0]?.value.alertId).toBe('number');
+    expect(typeof v.alertId).toBe('number');
     const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
     expect(JSON.parse(line).analyzer).toBe('alerts');
   });
@@ -152,15 +146,12 @@ describe('AlertAnalyzer', () => {
     const longText = `House bank SoC dropped to 25%. ${'Voltage trending down across all cells with no detectable charging source connected. '.repeat(10)}`;
     expect(longText.length).toBeGreaterThan(220);
     await a.publishOutput?.(longText, ctx, makeDeps(app, buf, publisher));
-    const d = app.published[0]?.delta as {
-      updates: { values: { path: string; value: { message: string } }[] }[];
-    };
-    const sentMessage = d.updates[0]?.values[0]?.value.message;
+    const sent = firstNotificationValue(app.published[0]?.delta).message;
     // Cap is 64 chars; the previous 200 assertion was a no-op (the wire spec
     // ceiling, not the plugin's truncation budget).
-    expect(sentMessage.length).toBeLessThanOrEqual(64);
-    expect(sentMessage.endsWith('…')).toBe(true);
-    expect(sentMessage.startsWith('House bank SoC dropped to 25%.')).toBe(true);
+    expect(sent.length).toBeLessThanOrEqual(64);
+    expect(sent.endsWith('…')).toBe(true);
+    expect(sent.startsWith('House bank SoC dropped to 25%.')).toBe(true);
   });
 
   it('publishOutput leaves short messages unchanged', async () => {
@@ -179,10 +170,7 @@ describe('AlertAnalyzer', () => {
     };
     const short = 'House bank SoC dropped to 25%, check charging source.';
     await a.publishOutput?.(short, ctx, makeDeps(app, buf, publisher));
-    const d = app.published[0]?.delta as {
-      updates: { values: { path: string; value: { message: string } }[] }[];
-    };
-    expect(d.updates[0]?.values[0]?.value.message).toBe(short);
+    expect(firstNotificationValue(app.published[0]?.delta).message).toBe(short);
   });
 
   it('publishOutput sends a normal-state notification on exit events', async () => {
@@ -200,13 +188,11 @@ describe('AlertAnalyzer', () => {
       batteryEvent: { subkind: 'low-soc-exit', soc: 0.4 },
     };
     await a.publishOutput?.('SoC recovered to 40%.', ctx, makeDeps(app, buf, publisher));
-    const d = app.published[0]?.delta as {
-      updates: { values: { path: string; value: { state: string; method: string[] } }[] }[];
-    };
+    const v = firstNotificationValue(app.published[0]?.delta);
     // Exit re-uses the same canonical per-bank path as enter, with state=normal.
-    expect(d.updates[0]?.values[0]?.path).toBe('notifications.electrical.batteries.house.lowSoc');
-    expect(d.updates[0]?.values[0]?.value.state).toBe('normal');
+    expect(v.path).toBe('notifications.electrical.batteries.house.lowSoc');
+    expect(v.state).toBe('normal');
     // Exit is visual-only so `signalk-nmea2000-emitter-cannon` clears the cached PGN without re-pinging audible.
-    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual']);
+    expect(v.method).toEqual(['visual']);
   });
 });

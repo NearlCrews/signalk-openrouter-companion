@@ -6,6 +6,7 @@ import { RollingBuffer } from '../src/core/buffer.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
   cleanupTmpDir,
+  firstNotificationValue,
   type MockApp,
   type MockQuestDB,
   makeAnalyzerDeps,
@@ -406,10 +407,8 @@ describe('AgingAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
     await publisher.publishReport(a.id, ctx, 'House bank lost 1.8% capacity in 30 days.');
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]?.delta as {
-      updates: { values: { path: string; value: { state: string; message: string } }[] }[];
-    };
-    expect(d.updates[0]?.values[0]?.path).toBe('notifications.openrouter-companion.aging.report');
-    expect(d.updates[0]?.values[0]?.value.state).toBe('nominal');
+    const v = firstNotificationValue(app.published[0]?.delta);
+    expect(v.path).toBe('notifications.openrouter-companion.aging.report');
+    expect(v.state).toBe('nominal');
   });
 });

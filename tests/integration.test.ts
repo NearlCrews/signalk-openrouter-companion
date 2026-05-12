@@ -2,7 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import createPlugin from '../src/index.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  firstNotificationValue,
+  type MockApp,
+  makeMockApp,
+  makeTmpDir,
+} from './_mocks.js';
 
 function lastLine(jsonl: string): string {
   const line = jsonl.trim().split('\n').at(-1);
@@ -68,17 +74,13 @@ describe('integration: engine session -> report', () => {
 
     await vi.waitFor(() => expect(app.published.length).toBeGreaterThan(0), { timeout: 2000 });
 
-    const lastDelta = app.published.at(-1)?.delta as {
-      updates: { values: { path: string; value: { message: string; state: string } }[] }[];
-    };
-    expect(lastDelta.updates[0]?.values[0]?.path).toBe(
-      'notifications.openrouter-companion.maintenance.report',
-    );
+    const v = firstNotificationValue(app.published.at(-1)?.delta);
+    expect(v.path).toBe('notifications.openrouter-companion.maintenance.report');
     // Reports use 'nominal' (informational) per SK 1.8.2;
-    // `signalk-nmea2000-emitter-cannon` does not
-    // emit a PGN 126983 alert for nominal-state notifications.
-    expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('nominal');
-    expect(lastDelta.updates[0]?.values[0]?.value.message).toContain('Engine session');
+    // `signalk-nmea2000-emitter-cannon` does not emit a PGN 126983 alert for
+    // nominal-state notifications.
+    expect(v.state).toBe('nominal');
+    expect(v.message).toContain('Engine session');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
     const entry = JSON.parse(lastLine(logRaw));
@@ -129,11 +131,9 @@ describe('integration: engine session -> report', () => {
 
     await vi.waitFor(() => expect(app.published.length).toBeGreaterThan(0), { timeout: 30_000 });
 
-    const lastDelta = app.published.at(-1)?.delta as {
-      updates: { values: { path: string; value: { message: string; state: string } }[] }[];
-    };
-    expect(lastDelta.updates[0]?.values[0]?.value.state).toBe('warn');
-    expect(lastDelta.updates[0]?.values[0]?.value.message).toContain('report unavailable');
+    const v = firstNotificationValue(app.published.at(-1)?.delta);
+    expect(v.state).toBe('warn');
+    expect(v.message).toContain('report unavailable');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
     const entry = JSON.parse(lastLine(logRaw));
@@ -182,30 +182,18 @@ describe('integration: engine session -> report', () => {
     bus.push({ value: 0.5, timestamp: new Date().toISOString(), $source: 'bms' });
     bus.push({ value: 0.25, timestamp: new Date().toISOString(), $source: 'bms' });
 
+    const isHouseLowSocAlert = (delta: unknown) =>
+      firstNotificationValue(delta).path === 'notifications.electrical.batteries.house.lowSoc';
+
     await vi.waitFor(
-      () => {
-        const alert = app.published.find((p) => {
-          const d = p.delta as { updates: { values: { path: string }[] }[] };
-          return (
-            d.updates[0]?.values[0]?.path === 'notifications.electrical.batteries.house.lowSoc'
-          );
-        });
-        expect(alert).toBeDefined();
-      },
+      () => expect(app.published.find((p) => isHouseLowSocAlert(p.delta))).toBeDefined(),
       { timeout: 2000 },
     );
 
-    const alertDelta = app.published.find((p) => {
-      const d = p.delta as { updates: { values: { path: string }[] }[] };
-      return d.updates[0]?.values[0]?.path === 'notifications.electrical.batteries.house.lowSoc';
-    });
-    const value = (
-      alertDelta?.delta as {
-        updates: { values: { value: { state: string; message: string } }[] }[];
-      }
-    ).updates[0]?.values[0]?.value;
-    expect(value.state).toBe('alert');
-    expect(value.message).toContain('25%');
+    const alertDelta = app.published.find((p) => isHouseLowSocAlert(p.delta));
+    const v = firstNotificationValue(alertDelta?.delta);
+    expect(v.state).toBe('alert');
+    expect(v.message).toContain('25%');
 
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
     const entry = JSON.parse(lastLine(logRaw));

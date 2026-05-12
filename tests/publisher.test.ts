@@ -3,23 +3,31 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { batteryAlertPath } from '../src/core/paths.js';
 import { ReportPublisher } from '../src/core/publisher.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  firstNotificationValue,
+  type MockApp,
+  makeMockApp,
+  makeTmpDir,
+} from './_mocks.js';
 
 describe('ReportPublisher', () => {
   let dir: string;
   let app: MockApp;
+  let logPath: string;
+  let publisher: ReportPublisher;
   beforeEach(async () => {
     dir = await makeTmpDir();
     app = makeMockApp(dir);
+    logPath = join(dir, 'reports.jsonl');
+    publisher = new ReportPublisher({ app, pluginId: 'orc', logPath });
   });
   afterEach(async () => {
     await cleanupTmpDir(dir);
   });
 
   it('publishReport emits a nominal-state notification on the canonical report path', async () => {
-    const logPath = join(dir, 'reports.jsonl');
-    const p = new ReportPublisher({ app, pluginId: 'orc', logPath });
-    await p.publishReport(
+    await publisher.publishReport(
       'maintenance',
       {
         kind: 'engine-stop',
@@ -36,21 +44,14 @@ describe('ReportPublisher', () => {
     expect(app.published).toHaveLength(1);
     const first = app.published[0];
     if (!first) throw new Error('expected one published delta');
-    const { pluginId, delta } = first;
-    expect(pluginId).toBe('orc');
-    const d = delta as {
-      updates: {
-        values: { path: string; value: { state: string; method: string[]; message: string } }[];
-      }[];
-    };
-    expect(d.updates[0]?.values[0]?.path).toBe(
-      'notifications.openrouter-companion.maintenance.report',
-    );
+    expect(first.pluginId).toBe('orc');
+    const v = firstNotificationValue(first.delta);
+    expect(v.path).toBe('notifications.openrouter-companion.maintenance.report');
     // Reports are informational ('nominal') so `signalk-nmea2000-emitter-cannon`
     // does not emit a PGN 126983 alert; method is visual-only since nominal isn't audible.
-    expect(d.updates[0]?.values[0]?.value.state).toBe('nominal');
-    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual']);
-    expect(d.updates[0]?.values[0]?.value.message).toBe('the report text');
+    expect(v.state).toBe('nominal');
+    expect(v.method).toEqual(['visual']);
+    expect(v.message).toBe('the report text');
 
     const line = (await readFile(logPath, 'utf-8')).trim();
     const entry = JSON.parse(line);
@@ -62,10 +63,8 @@ describe('ReportPublisher', () => {
   });
 
   it('publishOnPath emits on the override path with the override state and audible method for alerts', async () => {
-    const logPath = join(dir, 'reports.jsonl');
-    const p = new ReportPublisher({ app, pluginId: 'orc', logPath });
     const path = batteryAlertPath('house', 'lowSoc');
-    await p.publishOnPath(
+    await publisher.publishOnPath(
       'soc dropped',
       {
         analyzerId: 'alerts',
@@ -79,26 +78,17 @@ describe('ReportPublisher', () => {
       { path, state: 'alert', alertId: 0xabcd },
     );
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]?.delta as {
-      updates: {
-        values: {
-          path: string;
-          value: { state: string; method: string[]; message: string; alertId?: number };
-        }[];
-      }[];
-    };
-    expect(d.updates[0]?.values[0]?.path).toBe(path);
-    expect(d.updates[0]?.values[0]?.value.state).toBe('alert');
+    const v = firstNotificationValue(app.published[0]?.delta);
+    expect(v.path).toBe(path);
+    expect(v.state).toBe('alert');
     // alert state -> audible so `signalk-nmea2000-emitter-cannon` emits PGN 126983 with Active alertState.
-    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual', 'sound']);
-    expect(d.updates[0]?.values[0]?.value.message).toBe('soc dropped');
-    expect(d.updates[0]?.values[0]?.value.alertId).toBe(0xabcd);
+    expect(v.method).toEqual(['visual', 'sound']);
+    expect(v.message).toBe('soc dropped');
+    expect(v.alertId).toBe(0xabcd);
   });
 
   it('publishFailure emits a warn-state notification on the analyzer report path', async () => {
-    const logPath = join(dir, 'reports.jsonl');
-    const p = new ReportPublisher({ app, pluginId: 'orc', logPath });
-    await p.publishFailure(
+    await publisher.publishFailure(
       'maintenance',
       {
         kind: 'engine-stop',
@@ -107,17 +97,11 @@ describe('ReportPublisher', () => {
       new Error('upstream 503'),
     );
     expect(app.published).toHaveLength(1);
-    const d = app.published[0]?.delta as {
-      updates: {
-        values: { path: string; value: { state: string; message: string; method: string[] } }[];
-      }[];
-    };
-    expect(d.updates[0]?.values[0]?.path).toBe(
-      'notifications.openrouter-companion.maintenance.report',
-    );
-    expect(d.updates[0]?.values[0]?.value.state).toBe('warn');
+    const v = firstNotificationValue(app.published[0]?.delta);
+    expect(v.path).toBe('notifications.openrouter-companion.maintenance.report');
+    expect(v.state).toBe('warn');
     // warn state is audible so the chartplotter user actually notices the LLM failed.
-    expect(d.updates[0]?.values[0]?.value.method).toEqual(['visual', 'sound']);
-    expect(d.updates[0]?.values[0]?.value.message).toContain('upstream 503');
+    expect(v.method).toEqual(['visual', 'sound']);
+    expect(v.message).toContain('upstream 503');
   });
 });

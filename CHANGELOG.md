@@ -63,9 +63,6 @@ The changes were derived from a signalk-plugin-expert audit of
   (PGN 126985 alertTextDescription) holds ~200 chars but real-world MFD
   display caps are tighter (Raymarine Axiom ~60, B&G Zeus ~70, Furuno
   TZTouch ~80, Garmin ~72); 64 keeps the headline visible everywhere.
-- `MaintenanceAnalyzer` now defines `publishOutput` (was relying on the
-  removed router fallback to `publish()`). Mirrors the other state and
-  trend analyzers.
 - Failure notifications (`publishFailure`) now publish on the analyzer's
   canonical report path (e.g., `notifications.openrouter-companion.maintenance.report`)
   with `state: 'warn'` and audible method, so a chartplotter user actually

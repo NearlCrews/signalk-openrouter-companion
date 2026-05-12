@@ -5,7 +5,7 @@ import { vi } from 'vitest';
 import type { AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
-import type { ReportPublisher } from '../src/core/publisher.js';
+import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
 
 export type Listener<T> = (v: T) => void;
@@ -173,6 +173,19 @@ export function makeAnalyzerDeps(
     llm: {} as never,
     logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
   };
+}
+
+// Pull the first SK notification value out of a published delta. Throws on
+// empty deltas so a test that expected a publication never silently passes.
+export function firstNotificationValue(
+  delta: unknown,
+): SignalKNotificationValue & { path: string } {
+  const d = delta as {
+    updates?: { values?: { path: string; value: SignalKNotificationValue }[] }[];
+  };
+  const entry = d.updates?.[0]?.values?.[0];
+  if (!entry) throw new Error('expected at least one notification value in delta');
+  return { ...entry.value, path: entry.path };
 }
 
 export async function makeTmpDir(): Promise<string> {
