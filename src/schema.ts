@@ -410,6 +410,24 @@ function buildSchemaInner(): PluginSchema {
                   defaults: DEFAULT_OPTIONS.analyzers.aging.triggers,
                   supportedEvents: AGING_SUPPORTED_EVENTS,
                 }),
+                shortWindowDays: {
+                  type: 'integer',
+                  title: 'Short window (days)',
+                  description:
+                    'How far back to look for the near-term aging window. Default 30. The shorter window catches recent acceleration in capacity loss.',
+                  default: DEFAULT_OPTIONS.analyzers.aging.shortWindowDays,
+                  minimum: 7,
+                  maximum: 365,
+                },
+                longWindowDays: {
+                  type: 'integer',
+                  title: 'Long window (days)',
+                  description:
+                    'How far back to look for the longer-term aging window. Default 90. The longer window provides a more stable baseline for the projection to 80 percent of nominal capacity.',
+                  default: DEFAULT_OPTIONS.analyzers.aging.longWindowDays,
+                  minimum: 7,
+                  maximum: 1095,
+                },
               },
             }),
           },
@@ -417,7 +435,7 @@ function buildSchemaInner(): PluginSchema {
             type: 'object',
             title: 'Engine Performance Drift',
             description:
-              'Weekly fuel-economy and per-RPM drift for engines vs the trailing 30-day baseline.',
+              'Weekly fuel-economy and per-RPM drift for engines vs a configurable trailing baseline.',
             properties: {
               enabled: {
                 type: 'boolean',
@@ -431,6 +449,15 @@ function buildSchemaInner(): PluginSchema {
                   defaults: DEFAULT_OPTIONS.analyzers.drift.triggers,
                   supportedEvents: DRIFT_SUPPORTED_EVENTS,
                 }),
+                baselineDays: {
+                  type: 'integer',
+                  title: 'Baseline window (days)',
+                  description:
+                    'How many days of QuestDB history to use as the baseline for the past-week vs baseline comparison. Default 30. The baseline ends where the past week begins (no overlap).',
+                  default: DEFAULT_OPTIONS.analyzers.drift.baselineDays,
+                  minimum: 14,
+                  maximum: 365,
+                },
               },
             }),
           },
@@ -575,11 +602,11 @@ function buildUiSchemaInner(): PluginUiSchema {
         triggers: triggerUiSchema({ supportedEvents: HEALTH_SUPPORTED_EVENTS }),
       },
       aging: {
-        'ui:order': ['enabled', 'triggers'],
+        'ui:order': ['enabled', 'triggers', 'shortWindowDays', 'longWindowDays'],
         triggers: triggerUiSchema({ supportedEvents: AGING_SUPPORTED_EVENTS }),
       },
       drift: {
-        'ui:order': ['enabled', 'triggers'],
+        'ui:order': ['enabled', 'triggers', 'baselineDays'],
         triggers: triggerUiSchema({ supportedEvents: DRIFT_SUPPORTED_EVENTS }),
       },
       alerts: {

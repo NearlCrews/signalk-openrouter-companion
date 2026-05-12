@@ -58,10 +58,13 @@ export interface PluginOptions {
     aging: {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
+      shortWindowDays: number;
+      longWindowDays: number;
     };
     drift: {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
+      baselineDays: number;
     };
     alerts: {
       enabled: boolean;
@@ -118,6 +121,8 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true, path: 'plugins.openrouter-companion.aging.run' },
         events: [],
       },
+      shortWindowDays: 30,
+      longWindowDays: 90,
     },
     drift: {
       enabled: true,
@@ -126,6 +131,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true, path: 'plugins.openrouter-companion.drift.run' },
         events: [],
       },
+      baselineDays: 30,
     },
     alerts: {
       enabled: true,

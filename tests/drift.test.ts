@@ -12,13 +12,14 @@ import {
   makeTmpDir,
 } from './_mocks.js';
 
-function makeCfg() {
+function makeCfg(overrides: Partial<{ baselineDays: number }> = {}) {
   return {
     triggers: {
       cron: { enabled: true, pattern: '0 8 * * 0', timezone: '' },
       put: { enabled: true, path: 'plugins.openrouter-companion.drift.run' },
       events: [] as string[],
     },
+    baselineDays: overrides.baselineDays ?? 30,
   };
 }
 
@@ -190,9 +191,42 @@ describe('DriftAnalyzer', () => {
       expect(eng.deltas.lowCruise.fuelRateDeltaPct).toBeNull();
       expect(eng.deltas.lowCruise.sogDeltaPct).toBeNull();
     });
+
+    it('uses configured baselineDays to size the baseline window', async () => {
+      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      buf.record('propulsion.port.revolutions', 4, Date.now() - 1000, 'n2k');
+
+      const firedAt = new Date('2026-05-10T08:00:00Z');
+      const firedMs = firedAt.getTime();
+      const thisWeekFromIso = new Date(firedMs - 7 * 86_400_000).toISOString();
+      // baselineDays=14 means the baseline runs from -21d to -7d.
+      const baselineFromIso = new Date(firedMs - (7 + 14) * 86_400_000).toISOString();
+
+      const rows: BinRow[] = [{ bin: 'idle', n: 50, mean_fuel: 0.00005, mean_sog: 0 }];
+      const stub = makeQuestDBStub(() => binResult(rows));
+
+      const a = new DriftAnalyzer(makeCfg({ baselineDays: 14 }));
+      const ctx: TriggerCtx = { kind: 'cron', firedAt };
+      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+      expect(r).not.toBeNull();
+      expect((r as DriftInput).windowDays).toEqual({ thisWeek: 7, baseline: 14 });
+      // One query references each window's lower bound exactly.
+      expect(stub.calls.some((sql) => sql.includes(`ts >= '${thisWeekFromIso}'`))).toBe(true);
+      expect(stub.calls.some((sql) => sql.includes(`ts >= '${baselineFromIso}'`))).toBe(true);
+    });
   });
 
   describe('buildPrompt', () => {
+    it('reflects the configured baseline length in the system prompt', () => {
+      const a = new DriftAnalyzer(makeCfg({ baselineDays: 14 }));
+      const out = a.buildPrompt({
+        generatedAt: '2026-05-10T08:00:00.000Z',
+        windowDays: { thisWeek: 7, baseline: 14 },
+        engines: [],
+      });
+      expect(out.system).toContain('trailing 14-day baseline');
+    });
+
     it('produces deterministic system + user content from a representative input', () => {
       const a = new DriftAnalyzer(makeCfg());
       const out = a.buildPrompt({

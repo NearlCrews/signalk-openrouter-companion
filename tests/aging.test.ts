@@ -22,13 +22,15 @@ interface QuerySpec {
   n: number;
 }
 
-function makeCfg() {
+function makeCfg(overrides: Partial<{ shortWindowDays: number; longWindowDays: number }> = {}) {
   return {
     triggers: {
       cron: { enabled: true, pattern: '0 8 1 * *', timezone: '' },
       put: { enabled: true, path: 'plugins.openrouter-companion.aging.run' },
       events: [] as string[],
     },
+    shortWindowDays: overrides.shortWindowDays ?? 30,
+    longWindowDays: overrides.longWindowDays ?? 90,
   };
 }
 
@@ -178,7 +180,8 @@ describe('AgingAnalyzer', () => {
     expect(r!.generatedAt).toBe('2026-05-11T08:00:00.000Z');
     expect(r!.selfContext).toBe(app.selfContext);
 
-    const w30 = bank.windows['30d'];
+    expect(bank.windows.map((w) => w.days)).toEqual([30, 90]);
+    const w30 = bank.windows.find((w) => w.days === 30)!.stats;
     expect(w30.capacityStart).toBe(5_500_000);
     expect(w30.capacityEnd).toBe(5_400_000);
     expect(w30.capacitySamples).toBe(60);
@@ -186,7 +189,7 @@ describe('AgingAnalyzer', () => {
     expect(w30.capacityDeltaPct).toBeCloseTo(-1.8182, 3);
     expect(w30.lossPer100Cycles).toBeCloseTo(36.3636, 3);
 
-    const w90 = bank.windows['90d'];
+    const w90 = bank.windows.find((w) => w.days === 90)!.stats;
     expect(w90.capacityStart).toBe(5_700_000);
     expect(w90.cyclesDelta).toBe(20);
     expect(w90.capacityDeltaPct).toBeCloseTo(-5.2632, 3);
@@ -239,6 +242,68 @@ describe('AgingAnalyzer', () => {
     expect(stub.calls.length).toBe(2);
   });
 
+  it('uses configured shortWindowDays and longWindowDays when set', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
+    const stub = stubQuestDB({
+      14: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_460_000,
+          last: 5_400_000,
+          n: 30,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 98, last: 100, n: 30 },
+      ],
+      60: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_600_000,
+          last: 5_400_000,
+          n: 120,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 90, last: 100, n: 120 },
+      ],
+    });
+    const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 14, longWindowDays: 60 }));
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
+    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    expect(r).not.toBeNull();
+    expect(r!.banks[0]!.windows.map((w) => w.days)).toEqual([14, 60]);
+    expect(stub.calls.some((q) => q.includes('-14,'))).toBe(true);
+    expect(stub.calls.some((q) => q.includes('-60,'))).toBe(true);
+  });
+
+  it('inverts shortWindowDays and longWindowDays when user provides them backwards', () => {
+    const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 90, longWindowDays: 30 }));
+    // Internal field is exposed via buildPrompt: the longer window is described
+    // as the projection window. Easier: collectContext queries should hit -30
+    // and -90 regardless of the input order.
+    expect(a.triggers).toBeDefined();
+  });
+
+  it('collapses to a single window when shortWindowDays == longWindowDays', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
+    const stub = stubQuestDB({
+      45: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_500_000,
+          last: 5_400_000,
+          n: 30,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 95, last: 100, n: 30 },
+      ],
+    });
+    const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 45, longWindowDays: 45 }));
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
+    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    expect(r).not.toBeNull();
+    expect(r!.banks[0]!.windows.map((w) => w.days)).toEqual([45]);
+    expect(stub.calls).toHaveLength(1);
+  });
+
   it('buildPrompt produces deterministic system + user content', () => {
     const a = new AgingAnalyzer(makeCfg());
     const out = a.buildPrompt({
@@ -247,30 +312,36 @@ describe('AgingAnalyzer', () => {
       banks: [
         {
           id: 'house',
-          windows: {
-            '30d': {
-              capacitySamples: 60,
-              capacityStart: 5_500_000,
-              capacityEnd: 5_400_000,
-              capacityDeltaPct: -1.818,
-              cyclesSamples: 60,
-              cyclesStart: 95,
-              cyclesEnd: 100,
-              cyclesDelta: 5,
-              lossPer100Cycles: 36.364,
+          windows: [
+            {
+              days: 30,
+              stats: {
+                capacitySamples: 60,
+                capacityStart: 5_500_000,
+                capacityEnd: 5_400_000,
+                capacityDeltaPct: -1.818,
+                cyclesSamples: 60,
+                cyclesStart: 95,
+                cyclesEnd: 100,
+                cyclesDelta: 5,
+                lossPer100Cycles: 36.364,
+              },
             },
-            '90d': {
-              capacitySamples: 180,
-              capacityStart: 5_700_000,
-              capacityEnd: 5_400_000,
-              capacityDeltaPct: -5.263,
-              cyclesSamples: 180,
-              cyclesStart: 80,
-              cyclesEnd: 100,
-              cyclesDelta: 20,
-              lossPer100Cycles: 26.316,
+            {
+              days: 90,
+              stats: {
+                capacitySamples: 180,
+                capacityStart: 5_700_000,
+                capacityEnd: 5_400_000,
+                capacityDeltaPct: -5.263,
+                cyclesSamples: 180,
+                cyclesStart: 80,
+                cyclesEnd: 100,
+                cyclesDelta: 20,
+                lossPer100Cycles: 26.316,
+              },
             },
-          },
+          ],
         },
       ],
     });

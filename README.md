@@ -48,6 +48,8 @@ Optional:
 - **Engine-off and Engine-on RPM thresholds (in Hz: 1.0 Hz = 60 RPM)**: leave at defaults unless your engine idles unusually low or high.
 - **Low state-of-charge threshold (alerts)**: default 30%. SoC must rise above `threshold + hysteresis` (default +5%) to clear.
 - **Cell imbalance threshold (alerts)**: default 0.1 V. Must persist past the settle window (default 60 s) before an event fires.
+- **Aging windows (short/long)**: how far back to look for the two aging trend windows. Defaults 30 and 90 days. Useful to extend on a slowly-cycling lithium pack, or shorten if your QuestDB retention is tight.
+- **Drift baseline window**: how many days of history the drift analyzer uses as the trailing baseline. Default 30. The "past week" recent window is fixed at 7 days; the baseline ends where the recent window begins (no overlap).
 
 Disabling an analyzer or QuestDB collapses its options away in the admin form. Heads up: rjsf treats a re-enable as a fresh form, so toggling back on restores the schema defaults rather than whatever values you had entered. Save before toggling if you want to keep a tweaked configuration.
 

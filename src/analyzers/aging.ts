@@ -8,11 +8,9 @@ import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } f
 
 export interface AgingCfg {
   triggers: AnalyzerTriggerCfg;
+  shortWindowDays: number;
+  longWindowDays: number;
 }
-
-const WINDOW_DAYS = [30, 90] as const;
-type WindowDays = (typeof WINDOW_DAYS)[number];
-type WindowKey = `${WindowDays}d`;
 
 interface PathSummary {
   first: number;
@@ -32,9 +30,14 @@ interface WindowStats {
   lossPer100Cycles: number | null;
 }
 
+interface WindowEntry {
+  days: number;
+  stats: WindowStats;
+}
+
 interface BankAging {
   id: string;
-  windows: Record<WindowKey, WindowStats>;
+  windows: WindowEntry[];
 }
 
 export interface AgingInput extends AnalysisInput {
@@ -43,13 +46,25 @@ export interface AgingInput extends AnalysisInput {
   banks: BankAging[];
 }
 
+// Sanitize a configured day-count: must be a finite integer >= 1.
+function sanitizeDays(v: number, fallback: number): number {
+  return Number.isFinite(v) && v >= 1 ? Math.trunc(v) : fallback;
+}
+
 export class AgingAnalyzer implements Analyzer<AgingInput> {
   readonly id = 'aging';
   readonly title = 'Battery Aging Tracker';
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly windowDays: readonly number[];
 
-  constructor(cfg: AgingCfg) {
+  constructor(private cfg: AgingCfg) {
     this.triggers = buildTriggers(cfg.triggers);
+    const short = sanitizeDays(cfg.shortWindowDays, 30);
+    const long = sanitizeDays(cfg.longWindowDays, 90);
+    // Order matters for the prompt (short first, long second). If a user
+    // accidentally inverts them, swap. Collapse short == long to one window.
+    const [a, b] = short <= long ? [short, long] : [long, short];
+    this.windowDays = a === b ? [a] : [a, b];
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {
@@ -69,8 +84,8 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     }
 
     const summariesByWindow = await Promise.all(
-      WINDOW_DAYS.map(async (days) => ({
-        key: `${days}d` as WindowKey,
+      this.windowDays.map(async (days) => ({
+        days,
         summaries: await queryWindow(questdb, selfContext, allPaths, days),
       })),
     );
@@ -80,11 +95,11 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
       const paths = pathsByBank.get(id);
       if (!paths) continue;
       const { cap, cyc } = paths;
-      const windows = {} as Record<WindowKey, WindowStats>;
+      const windows: WindowEntry[] = [];
       let hasData = false;
-      for (const { key, summaries } of summariesByWindow) {
+      for (const { days, summaries } of summariesByWindow) {
         const stats = computeWindowStats(summaries.get(cap), summaries.get(cyc));
-        windows[key] = stats;
+        windows.push({ days, stats });
         if (stats.capacitySamples >= 2 || stats.cyclesSamples >= 2) hasData = true;
       }
       if (hasData) banks.push({ id, windows });
@@ -103,13 +118,15 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   }
 
   buildPrompt(input: AgingInput): { system: string; user: string } {
+    const windowDesc = this.windowDays.map((d) => `${d}-day`).join(' and ');
+    const longestWindow = this.windowDays.at(-1) ?? 90;
     const system = [
       'You are a marine LiFePO4 battery specialist reviewing capacity degradation trends from a Signal K vessel.',
       'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
       'Focus only on the aging trend. Do not restate the snapshot for today; the daily health analyzer covers that.',
-      'For each bank, comment on the 30-day and 90-day capacity trajectory and the loss per 100 cycles when cycles increased over the window.',
+      `For each bank, comment on the ${windowDesc} capacity trajectory and the loss per 100 cycles when cycles increased over the window.`,
       'Rank banks by capacity loss per 100 cycles, worst first. Flag any bank degrading 3 to 4 times the median rate as an outlier worth investigating.',
-      'When the 90-day window has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient.',
+      `When the longest window (${longestWindow} days) has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient.`,
       'Stay with the numbers in the data. If a bank is degrading within normal LiFePO4 expectations, say so plainly.',
       'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which bank is aging fastest, or "all banks within normal range"), then mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
     ].join(' ');
@@ -119,10 +136,8 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     lines.push('');
     for (const b of input.banks) {
       lines.push(`### Bank: ${b.id}`);
-      for (const days of WINDOW_DAYS) {
-        const key = `${days}d` as WindowKey;
-        const w = b.windows[key];
-        lines.push(`- ${key} window:`);
+      for (const { days, stats: w } of b.windows) {
+        lines.push(`- ${days}d window:`);
         lines.push(`  - capacity samples: ${w.capacitySamples}`);
         lines.push(`  - capacity start (J): ${fmtNumber(w.capacityStart)}`);
         lines.push(`  - capacity end (J): ${fmtNumber(w.capacityEnd)}`);

@@ -5,8 +5,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 ## [Unreleased]
 
 ### Added
-- Battery aging tracker: `AgingAnalyzer` produces a monthly trend report per battery bank, computing capacity-loss-per-100-cycles over rolling 30/90-day windows from QuestDB and ranking banks by degradation rate. Default trigger: cron `0 8 1 * *` (1st of month, 8am) plus on-demand PUT to `plugins.openrouter-companion.aging.run`. Publishes on `notifications.openrouter-companion.aging.report`.
-- Engine performance drift: `DriftAnalyzer` produces a weekly trend report comparing the past week's per-RPM-bin fuel rate and SOG against the trailing 30-day baseline (from QuestDB), to surface gradual changes (fouled prop, dirty hull, fuel-quality drift, alternator load creep). Default trigger: cron `0 8 * * 0` (Sunday, 8am) plus on-demand PUT to `plugins.openrouter-companion.drift.run`. Publishes on `notifications.openrouter-companion.drift.report`.
+- Battery aging tracker: `AgingAnalyzer` produces a monthly trend report per battery bank, computing capacity-loss-per-100-cycles over two rolling windows (default 30 and 90 days) from QuestDB and ranking banks by degradation rate. Default trigger: cron `0 8 1 * *` (1st of month, 8am) plus on-demand PUT to `plugins.openrouter-companion.aging.run`. Publishes on `notifications.openrouter-companion.aging.report`.
+- Engine performance drift: `DriftAnalyzer` produces a weekly trend report comparing the past week's per-RPM-bin fuel rate and SOG against a configurable trailing baseline (default 30 days, from QuestDB), to surface gradual changes (fouled prop, dirty hull, fuel-quality drift, alternator load creep). Default trigger: cron `0 8 * * 0` (Sunday, 8am) plus on-demand PUT to `plugins.openrouter-companion.drift.run`. Publishes on `notifications.openrouter-companion.drift.report`.
+- Configurable history lookback for trend analyzers. Aging exposes `shortWindowDays` (default 30) and `longWindowDays` (default 90); drift exposes `baselineDays` (default 30). Adjustable in the admin UI within sensible bounds (aging short: 7-365 days, aging long: 7-1095 days, drift: 14-365 days).
 
 ### Changed
 - `MaintenanceAnalyzer` no longer fetches 30-day baselines from QuestDB or includes them in its prompt. Per-session reports now describe just that session, with battery aging and engine drift moved to dedicated trend analyzers.
@@ -14,6 +15,7 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ### Internal
 - `tests/drift.test.ts` injects a typed stub matching the QuestDBClient `query` surface instead of stubbing global `fetch`. The global-fetch approach was process-wide and clashed with parallel test workers, producing intermittent flakes.
+- Simplify pass over the codebase: shared `core/triggers.ts` (`buildTriggers`), `core/paths.ts` (notification and PUT path helpers), extended `core/format.ts` (`fmtUnit`, `fmtRatio`), `core/questdb.ts` (`escapeSqlLiteral`), and `core/publisher.ts` (`publishReport` shorthand). Tests share `makeAnalyzerDeps` via `_mocks.ts`. `RollingBuffer.evict` count-eviction is now amortized.
 
 ## [0.2.0] - 2026-05-11
 

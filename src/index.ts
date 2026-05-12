@@ -163,10 +163,21 @@ export default function createPlugin(app: ServerApiLike): {
           analyzers.push(new HealthAnalyzer({ triggers: cfg.analyzers.health.triggers }));
         }
         if (cfg.analyzers.aging.enabled) {
-          analyzers.push(new AgingAnalyzer({ triggers: cfg.analyzers.aging.triggers }));
+          analyzers.push(
+            new AgingAnalyzer({
+              triggers: cfg.analyzers.aging.triggers,
+              shortWindowDays: cfg.analyzers.aging.shortWindowDays,
+              longWindowDays: cfg.analyzers.aging.longWindowDays,
+            }),
+          );
         }
         if (cfg.analyzers.drift.enabled) {
-          analyzers.push(new DriftAnalyzer({ triggers: cfg.analyzers.drift.triggers }));
+          analyzers.push(
+            new DriftAnalyzer({
+              triggers: cfg.analyzers.drift.triggers,
+              baselineDays: cfg.analyzers.drift.baselineDays,
+            }),
+          );
         }
         if (cfg.analyzers.alerts.enabled) {
           analyzers.push(new AlertAnalyzer({ triggers: cfg.analyzers.alerts.triggers }));

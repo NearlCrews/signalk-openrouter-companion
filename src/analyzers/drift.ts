@@ -8,7 +8,7 @@ import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } f
 
 const DAY_MS = 86_400_000;
 const PAST_WEEK_DAYS = 7;
-const BASELINE_DAYS = 30;
+const DEFAULT_BASELINE_DAYS = 30;
 // A bin must have at least this many RPM samples in both windows before its
 // delta is meaningful. Reported as null otherwise.
 const MIN_BIN_SAMPLES = 30;
@@ -24,6 +24,7 @@ const RPM_JOIN_WINDOW_US = 5_000_000;
 
 export interface DriftCfg {
   triggers: AnalyzerTriggerCfg;
+  baselineDays: number;
 }
 
 type BinKey = 'idle' | 'lowCruise' | 'highCruise' | 'topEnd';
@@ -78,9 +79,14 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   readonly id = 'drift';
   readonly title = 'Engine Performance Drift';
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly baselineDays: number;
 
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(cfg.triggers);
+    this.baselineDays =
+      Number.isFinite(cfg.baselineDays) && cfg.baselineDays >= 1
+        ? Math.trunc(cfg.baselineDays)
+        : DEFAULT_BASELINE_DAYS;
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
@@ -94,7 +100,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     const weekStart = firedMs - PAST_WEEK_DAYS * DAY_MS;
     const weekEnd = firedMs;
     const baselineEnd = weekStart;
-    const baselineStart = baselineEnd - BASELINE_DAYS * DAY_MS;
+    const baselineStart = baselineEnd - this.baselineDays * DAY_MS;
 
     const engines: EngineDrift[] = [];
     for (const engineId of engineIds) {
@@ -119,7 +125,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 
     return {
       generatedAt: new Date(firedMs).toISOString(),
-      windowDays: { thisWeek: PAST_WEEK_DAYS, baseline: BASELINE_DAYS },
+      windowDays: { thisWeek: PAST_WEEK_DAYS, baseline: this.baselineDays },
       engines,
     };
   }
@@ -132,7 +138,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     const system = [
       'You are an experienced marine engine specialist comparing recent engine performance to its longer-term baseline.',
       'Units: propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for this path: do not convert to rad/s). fuel.rate is in m^3/s. navigation.speedOverGround is in m/s.',
-      'The data shows mean fuel rate and mean speed-over-ground per RPM band for the past week vs the trailing 30-day baseline, with percent delta per metric. Band edges are in Hz; 1 Hz = 60 RPM.',
+      `The data shows mean fuel rate and mean speed-over-ground per RPM band for the past ${input.windowDays.thisWeek} days vs the trailing ${input.windowDays.baseline}-day baseline, with percent delta per metric. Band edges are in Hz; 1 Hz = 60 RPM.`,
       'A positive fuel-rate delta means burning more fuel per second in that band than baseline. A negative SOG delta means going slower in that band than baseline.',
       "Do not restate per-session details. That is the maintenance analyzer's job. Focus only on this-week vs baseline drift.",
       'Identify (1) which band moved most, (2) what the drift suggests: fouled prop, dirty hull, fuel quality, alternator load creep, or a transducer or sensor issue, (3) whether the magnitude warrants action this season or just monitoring.',
