@@ -1,21 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { MaintenanceAnalyzer } from '../src/analyzers/maintenance.js';
 import { RollingBuffer } from '../src/core/buffer.js';
-import { Logger } from '../src/core/logger.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
-
-function makeDeps(app: MockApp, buffer: RollingBuffer): AnalyzerDeps {
-  return {
-    app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
-    buffer,
-    questdb: null,
-    publisher: {} as never,
-    budget: {} as never,
-    llm: {} as never,
-    logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
-  };
-}
+import {
+  cleanupTmpDir,
+  type MockApp,
+  makeAnalyzerDeps as makeDeps,
+  makeMockApp,
+  makeTmpDir,
+} from './_mocks.js';
 
 function engineStopCtx(durationSec: number, engineId = 'port'): TriggerCtx {
   const end = new Date('2026-05-10T10:00:00Z');

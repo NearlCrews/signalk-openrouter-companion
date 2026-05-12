@@ -1,15 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { AgingAnalyzer } from '../src/analyzers/aging.js';
 import { RollingBuffer } from '../src/core/buffer.js';
-import { Logger } from '../src/core/logger.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
   cleanupTmpDir,
   type MockApp,
   type MockQuestDB,
+  makeAnalyzerDeps,
   makeMockApp,
   makeQuestDBStub,
   makeTmpDir,
@@ -56,16 +56,8 @@ function makeDeps(
   buffer: RollingBuffer,
   questdb: MockQuestDB | null,
   publisher?: ReportPublisher,
-): AnalyzerDeps {
-  return {
-    app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
-    buffer,
-    questdb: questdb as unknown as AnalyzerDeps['questdb'],
-    publisher: (publisher ?? ({} as never)) as never,
-    budget: {} as never,
-    llm: {} as never,
-    logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
-  };
+) {
+  return makeAnalyzerDeps(app, buffer, { questdb, publisher });
 }
 
 describe('AgingAnalyzer', () => {

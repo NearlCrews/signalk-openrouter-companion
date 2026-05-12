@@ -86,11 +86,12 @@ export class EngineDetector {
     s.lastDeltaTs = ts;
     s.recentBySource.set(source, { hz, ts });
     const cutoff = ts - this.opts.sourceWindowMs;
-    for (const [src, r] of s.recentBySource) {
-      if (r.ts < cutoff) s.recentBySource.delete(src);
-    }
     let effectiveHz = Number.NEGATIVE_INFINITY;
-    for (const r of s.recentBySource.values()) {
+    for (const [src, r] of s.recentBySource) {
+      if (r.ts < cutoff) {
+        s.recentBySource.delete(src);
+        continue;
+      }
       if (r.hz > effectiveHz) effectiveHz = r.hz;
     }
 

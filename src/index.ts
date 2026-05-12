@@ -42,14 +42,6 @@ interface ServerApiLike {
     getSelfBus(path: string): { onValue(cb: (v: unknown) => void): () => void };
     getAvailablePaths(): string[];
   };
-  subscriptionmanager: {
-    subscribe(
-      msg: unknown,
-      unsubs: Array<() => void>,
-      errCb: (err: unknown) => void,
-      deltaCb: (delta: unknown) => void,
-    ): void;
-  };
   handleMessage(pluginId: string, delta: unknown): void;
   registerPutHandler(context: string, path: string, handler: unknown, source?: string): void;
   setPluginStatus(msg: string): void;
@@ -78,9 +70,7 @@ export default function createPlugin(app: ServerApiLike): {
   let lifecycleController: AbortController | null = null;
   let restartFn: (() => void) | null = null;
   let scheduler: CronScheduler | null = null;
-  // Resolves once the deferred Promise.all([probe, budget]).then() block in
-  // start() has finished wiring the router. Reset on every start() so a
-  // restart hands out a fresh promise.
+  // Reset on every start() so a restart hands out a fresh promise.
   let signalReady: () => void = () => {};
   let readyPromise: Promise<void> = new Promise<void>((resolve) => {
     signalReady = resolve;
@@ -90,7 +80,7 @@ export default function createPlugin(app: ServerApiLike): {
     id: PLUGIN_ID,
     name: PLUGIN_NAME,
     description:
-      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, and threshold alerts.',
+      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, threshold alerts, battery aging, and engine drift.',
     enabledByDefault: false,
     schema: () => buildSchema(),
     uiSchema: () => buildUiSchema(),
@@ -148,7 +138,7 @@ export default function createPlugin(app: ServerApiLike): {
           : null;
         const probePromise: Promise<QuestDBClient | null> = questdbCandidate
           ? questdbCandidate.probe(lifecycleController.signal).then((ok) => {
-              if (!ok) logger.debug('QuestDB unreachable; baselines disabled for this run');
+              if (!ok) logger.debug('QuestDB unreachable; trend analyzers will skip this run');
               return ok ? questdbCandidate : null;
             })
           : Promise.resolve(null);
@@ -284,6 +274,11 @@ export default function createPlugin(app: ServerApiLike): {
         };
 
         const subscribeWatchedPath = (path: string): void => {
+          const socMatch = path.match(SOC_PATH_RE);
+          const cellMatch = !socMatch ? path.match(CELL_VOLT_PATH_RE) : null;
+          const socBank = socMatch?.[1] ?? null;
+          const cellBank = cellMatch?.[1] ?? null;
+          const cellIdx = cellMatch?.[2] ? Number.parseInt(cellMatch[2], 10) : null;
           const bus = app.streambundle.getSelfBus(path);
           const unsub = bus.onValue((delta) => {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
@@ -291,14 +286,10 @@ export default function createPlugin(app: ServerApiLike): {
             const src = d.$source ?? 'unknown';
             buffer.record(path, d.value, ts, src);
             if (typeof d.value !== 'number') return;
-            const socMatch = path.match(SOC_PATH_RE);
-            if (socMatch) {
-              monitor.observeSoc(socMatch[1]!, src, d.value, ts);
-              return;
-            }
-            const cellMatch = path.match(CELL_VOLT_PATH_RE);
-            if (cellMatch) {
-              monitor.observeCellV(cellMatch[1]!, Number.parseInt(cellMatch[2]!, 10), d.value, ts);
+            if (socBank) {
+              monitor.observeSoc(socBank, src, d.value, ts);
+            } else if (cellBank && cellIdx != null) {
+              monitor.observeCellV(cellBank, cellIdx, d.value, ts);
             }
           });
           if (unsub) unsubs.push(unsub);
@@ -314,11 +305,9 @@ export default function createPlugin(app: ServerApiLike): {
           subscribeWatchedPath(path);
         }
 
-        registerAnalyzerPut(app, cfg.analyzers.maintenance, () => router, PLUGIN_ID);
-        registerAnalyzerPut(app, cfg.analyzers.health, () => router, PLUGIN_ID);
-        registerAnalyzerPut(app, cfg.analyzers.aging, () => router, PLUGIN_ID);
-        registerAnalyzerPut(app, cfg.analyzers.drift, () => router, PLUGIN_ID);
-        registerAnalyzerPut(app, cfg.analyzers.alerts, () => router, PLUGIN_ID);
+        for (const section of Object.values(cfg.analyzers)) {
+          registerAnalyzerPut(app, section, () => router, PLUGIN_ID);
+        }
 
         intervalHandles.push(
           setInterval(() => detector.tickWatchdog(Date.now()), WATCHDOG_TICK_MS),

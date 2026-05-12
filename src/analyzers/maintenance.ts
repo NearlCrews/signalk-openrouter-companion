@@ -1,6 +1,7 @@
 import { WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
 import { readNumberAt } from '../core/skNode.js';
+import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -45,17 +46,9 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   readonly triggers: ReadonlyArray<TriggerSpec>;
 
   constructor(private cfg: MaintenanceCfg) {
-    const triggers: TriggerSpec[] = [];
-    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
-      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
-    }
-    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
-      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
-    }
-    if (cfg.triggers.events.includes('engine-stop')) {
-      triggers.push({ kind: 'engine-stop' });
-    }
-    this.triggers = triggers;
+    this.triggers = buildTriggers(cfg.triggers, (sub) =>
+      sub === 'engine-stop' ? { kind: 'engine-stop' } : null,
+    );
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<MaintenanceInput | null> {
@@ -109,7 +102,8 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the session headline (engine, duration, what happened), then weave in alarm state and battery state if there is anything worth noting.',
     ].join(' ');
 
-    const { session, telemetry, engineNotifications: alarms, batteries } = input;
+    const { session, telemetry, engineNotifications, batteries } = input;
+    const f = (v: unknown) => fmtNumber(v, { nan: 'n/a (no samples)' });
 
     const lines: string[] = [];
     lines.push('## Session');
@@ -124,14 +118,13 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       if (!s || s.count === 0) continue;
       const unit = unitForPath(path);
       const unitSuffix = unit ? ` ${unit}` : '';
-      const f = (v: unknown) => fmtNumber(v, { nan: 'n/a (no samples)' });
       lines.push(
         `- ${path}: min=${f(s.min)} max=${f(s.max)} mean=${f(s.mean)}${unitSuffix} count=${f(s.count)} sources=${JSON.stringify(s.sources)}`,
       );
     }
     lines.push('');
     lines.push('## Engine notification slots');
-    for (const [slot, value] of Object.entries(alarms)) {
+    for (const [slot, value] of Object.entries(engineNotifications)) {
       lines.push(`- ${slot}: ${JSON.stringify(value)}`);
     }
     lines.push('');
@@ -187,16 +180,25 @@ function snapshotBatteries(deps: AnalyzerDeps): BatterySnapshot[] {
   return out;
 }
 
+const UNIT_BY_SUFFIX: ReadonlyArray<readonly [suffix: string, unit: string]> = [
+  ['.revolutions', 'Hz'],
+  ['.voltage', 'V'],
+  ['.current', 'A'],
+  ['.temperature', 'K'],
+  ['Temperature', 'K'],
+  ['.stateOfCharge', 'ratio'],
+  ['capacity.nominal', 'J'],
+  ['capacity.remaining', 'J'],
+  ['.runTime', 's'],
+  ['.fuel.rate', 'm3/s'],
+  ['.fuel.level', 'ratio'],
+  ['.fuel.used', 'ratio'],
+  ['.oilPressure', 'Pa'],
+];
+
 function unitForPath(path: string): string | null {
-  if (path.endsWith('.revolutions')) return 'Hz';
-  if (path.endsWith('.voltage')) return 'V';
-  if (path.endsWith('.current')) return 'A';
-  if (path.endsWith('.temperature') || path.endsWith('Temperature')) return 'K';
-  if (path.endsWith('.stateOfCharge')) return 'ratio';
-  if (path.endsWith('capacity.nominal') || path.endsWith('capacity.remaining')) return 'J';
-  if (path.endsWith('.runTime')) return 's';
-  if (path.endsWith('.fuel.rate')) return 'm3/s';
-  if (path.endsWith('.fuel.level') || path.endsWith('.fuel.used')) return 'ratio';
-  if (path.endsWith('.oilPressure')) return 'Pa';
+  for (const [suffix, unit] of UNIT_BY_SUFFIX) {
+    if (path.endsWith(suffix)) return unit;
+  }
   return null;
 }

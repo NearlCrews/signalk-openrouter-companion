@@ -82,12 +82,14 @@ export class BatteryMonitor {
     b.recentSoc.set(source, { soc, ts });
 
     const cutoff = ts - this.opts.sourceWindowMs;
-    for (const [src, r] of b.recentSoc) {
-      if (r.ts < cutoff) b.recentSoc.delete(src);
-    }
-
     let effective = Number.NEGATIVE_INFINITY;
-    for (const r of b.recentSoc.values()) if (r.soc > effective) effective = r.soc;
+    for (const [src, r] of b.recentSoc) {
+      if (r.ts < cutoff) {
+        b.recentSoc.delete(src);
+        continue;
+      }
+      if (r.soc > effective) effective = r.soc;
+    }
     if (!Number.isFinite(effective)) return;
 
     const lowThreshold = this.opts.lowSocPercent / 100;

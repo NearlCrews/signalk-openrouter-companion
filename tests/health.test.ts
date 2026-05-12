@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { HealthAnalyzer } from '../src/analyzers/health.js';
 import { RollingBuffer } from '../src/core/buffer.js';
-import { Logger } from '../src/core/logger.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  type MockApp,
+  makeAnalyzerDeps as makeDeps,
+  makeMockApp,
+  makeTmpDir,
+} from './_mocks.js';
 
 function makeCfg() {
   return {
@@ -12,18 +17,6 @@ function makeCfg() {
       put: { enabled: true, path: 'plugins.openrouter-companion.health.run' },
       events: [],
     },
-  };
-}
-
-function makeDeps(app: MockApp, buffer: RollingBuffer): AnalyzerDeps {
-  return {
-    app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
-    buffer,
-    questdb: null,
-    publisher: {} as never,
-    budget: {} as never,
-    llm: {} as never,
-    logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
   };
 }
 

@@ -1,6 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { vi } from 'vitest';
+import type { AnalyzerDeps } from '../src/analyzers/Analyzer.js';
+import type { RollingBuffer } from '../src/core/buffer.js';
+import { Logger } from '../src/core/logger.js';
+import type { ReportPublisher } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
 
 export type Listener<T> = (v: T) => void;
@@ -36,17 +41,9 @@ export interface RegisteredPut {
   source?: string;
 }
 
-export interface RegisteredSubscription {
-  msg: unknown;
-  errCb: (err: unknown) => void;
-  deltaCb: (delta: unknown) => void;
-}
-
 export interface MockApp {
   published: PublishedDelta[];
   registeredPuts: RegisteredPut[];
-  registeredSubscriptions: RegisteredSubscription[];
-  pushSubscriptionDelta(pathFilter: string, delta: unknown): void;
   statusMessages: string[];
   errorMessages: string[];
   debugMessages: unknown[];
@@ -59,14 +56,6 @@ export interface MockApp {
   streambundle: {
     getSelfBus(path: string): MockBus<unknown>;
     getAvailablePaths(): string[];
-  };
-  subscriptionmanager: {
-    subscribe(
-      msg: unknown,
-      unsubs: Array<() => void>,
-      errCb: (err: unknown) => void,
-      deltaCb: (delta: unknown) => void,
-    ): void;
   };
   handleMessage(pluginId: string, delta: unknown): void;
   registerPutHandler(
@@ -89,16 +78,6 @@ export function makeMockApp(dataDir: string): MockApp {
   const app: MockApp = {
     published: [],
     registeredPuts: [],
-    registeredSubscriptions: [],
-    pushSubscriptionDelta(pathFilter, delta) {
-      for (const sub of app.registeredSubscriptions) {
-        const msg = sub.msg as { subscribe?: Array<{ path?: string }> } | undefined;
-        const subs = msg?.subscribe ?? [];
-        if (subs.length === 0 || subs.some((s) => s.path === pathFilter || s.path === '*')) {
-          sub.deltaCb(delta);
-        }
-      }
-    },
     statusMessages: [],
     errorMessages: [],
     debugMessages: [],
@@ -119,18 +98,6 @@ export function makeMockApp(dataDir: string): MockApp {
       },
       getAvailablePaths() {
         return app.availablePaths.slice();
-      },
-    },
-    subscriptionmanager: {
-      subscribe(msg, unsubs, errCb, deltaCb) {
-        const entry: RegisteredSubscription = { msg, errCb, deltaCb };
-        app.registeredSubscriptions.push(entry);
-        const removeReg = () => {
-          const i = app.registeredSubscriptions.indexOf(entry);
-          if (i >= 0) app.registeredSubscriptions.splice(i, 1);
-        };
-        unsubs.push(removeReg);
-        app.unsubscribes.push(removeReg);
       },
     },
     handleMessage(pluginId, delta) {
@@ -184,6 +151,25 @@ export function makeQuestDBStub(dispatch: (sql: string) => QueryResult): MockQue
     },
   };
   return stub;
+}
+
+// Canonical AnalyzerDeps factory used by every analyzer test. Pass only what
+// the test cares about; everything else gets a no-op stub or an `as never` so
+// the analyzer code path under test has the deps it touches and nothing more.
+export function makeAnalyzerDeps(
+  app: MockApp,
+  buffer: RollingBuffer,
+  opts: { questdb?: MockQuestDB | null; publisher?: ReportPublisher } = {},
+): AnalyzerDeps {
+  return {
+    app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
+    buffer,
+    questdb: (opts.questdb ?? null) as unknown as AnalyzerDeps['questdb'],
+    publisher: (opts.publisher ?? ({} as never)) as never,
+    budget: {} as never,
+    llm: {} as never,
+    logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
+  };
 }
 
 export async function makeTmpDir(): Promise<string> {

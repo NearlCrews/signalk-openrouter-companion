@@ -37,11 +37,3 @@ export function discoverWatchedPaths(paths: string[], extras: string[]): string[
   for (const e of extras) out.add(e);
   return Array.from(out).sort();
 }
-
-export function discoverBatteryWatchedPaths(paths: string[]): string[] {
-  const out = new Set<string>();
-  for (const p of paths) {
-    if (p.startsWith('electrical.batteries.')) out.add(p);
-  }
-  return Array.from(out).sort();
-}

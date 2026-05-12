@@ -2,6 +2,7 @@ import { appendFile } from 'node:fs/promises';
 import type { TriggerCtx } from '../analyzers/Analyzer.js';
 import type { NotificationState } from '../types.js';
 import { stringify } from './logger.js';
+import { notificationReportPath } from './paths.js';
 
 export type { NotificationState };
 
@@ -81,6 +82,19 @@ export class ReportPublisher {
       this.makeDelta(text, override.state, now, meta, override.path),
     );
     await this.appendLog(this.buildEntry(text, meta, now));
+  }
+
+  async publishReport(
+    analyzerId: string,
+    ctx: TriggerCtx,
+    text: string,
+    state: NotificationState = 'normal',
+  ): Promise<void> {
+    await this.publishOnPath(
+      text,
+      { analyzerId, ctx },
+      { path: notificationReportPath(analyzerId), state },
+    );
   }
 
   private makeDelta(

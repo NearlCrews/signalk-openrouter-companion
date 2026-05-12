@@ -1,9 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { DriftAnalyzer, type DriftInput } from '../src/analyzers/drift.js';
 import { RollingBuffer } from '../src/core/buffer.js';
-import { Logger } from '../src/core/logger.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeQuestDBStub, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  type MockApp,
+  type MockQuestDB,
+  makeAnalyzerDeps,
+  makeMockApp,
+  makeQuestDBStub,
+  makeTmpDir,
+} from './_mocks.js';
 
 function makeCfg() {
   return {
@@ -15,20 +22,8 @@ function makeCfg() {
   };
 }
 
-function makeDeps(
-  app: MockApp,
-  buffer: RollingBuffer,
-  questdb: AnalyzerDeps['questdb'] = null,
-): AnalyzerDeps {
-  return {
-    app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
-    buffer,
-    questdb,
-    publisher: {} as never,
-    budget: {} as never,
-    llm: {} as never,
-    logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
-  };
+function makeDeps(app: MockApp, buffer: RollingBuffer, questdb: MockQuestDB | null = null) {
+  return makeAnalyzerDeps(app, buffer, { questdb });
 }
 
 // drift.ts pushes per-bin aggregation into QuestDB and reads back rows of
@@ -110,10 +105,7 @@ describe('DriftAnalyzer', () => {
       const stub = makeQuestDBStub(() => binResult([]));
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-10T08:00:00Z') };
-      const r = await a.collectContext(
-        ctx,
-        makeDeps(app, buf, stub as unknown as AnalyzerDeps['questdb']),
-      );
+      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
       expect(r).toBeNull();
     });
   });
@@ -147,10 +139,7 @@ describe('DriftAnalyzer', () => {
 
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt };
-      const r = await a.collectContext(
-        ctx,
-        makeDeps(app, buf, stub as unknown as AnalyzerDeps['questdb']),
-      );
+      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
       expect(r).not.toBeNull();
       const input = r as DriftInput;
       expect(input.windowDays).toEqual({ thisWeek: 7, baseline: 30 });
@@ -193,10 +182,7 @@ describe('DriftAnalyzer', () => {
 
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt };
-      const r = await a.collectContext(
-        ctx,
-        makeDeps(app, buf, stub as unknown as AnalyzerDeps['questdb']),
-      );
+      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
       expect(r).not.toBeNull();
       const input = r as DriftInput;
       const eng = input.engines[0]!;

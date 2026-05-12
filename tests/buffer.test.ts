@@ -27,7 +27,21 @@ describe('RollingBuffer', () => {
     buf.record('a.b', 2, 1100, 's1');
     buf.record('a.b', 3, 1200, 's1');
     buf.record('a.b', 4, 1300, 's1');
-    expect(buf.slice('a.b', 0, 10_000).map((e) => e.value)).toEqual([2, 3, 4]);
+    // Count eviction is amortized: trim when over cap, leaving at most cap
+    // entries and dropping the oldest first. The newest record always
+    // survives; older entries beyond the per-trim chunk are dropped.
+    const values = buf.slice('a.b', 0, 10_000).map((e) => e.value);
+    expect(values.length).toBeLessThanOrEqual(3);
+    expect(values.at(-1)).toBe(4);
+    expect(values).not.toContain(1);
+  });
+
+  it('keeps record() amortized over many over-cap inserts', () => {
+    const buf = new RollingBuffer({ maxAgeMs: 60_000, maxEntriesPerPath: 100 });
+    for (let i = 0; i < 1_000; i += 1) buf.record('a.b', i, 1000 + i, 's1');
+    const values = buf.slice('a.b', 0, 1_000_000).map((e) => e.value as number);
+    expect(values.length).toBeLessThanOrEqual(100);
+    expect(values.at(-1)).toBe(999);
   });
 
   it('summarizes numeric values in a time range', () => {

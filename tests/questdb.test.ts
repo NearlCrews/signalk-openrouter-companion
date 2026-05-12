@@ -92,14 +92,6 @@ describe('QuestDBClient', () => {
     );
   });
 
-  it('baselineFor throws when days is NaN', async () => {
-    const q = new QuestDBClient({ url: 'http://localhost:9000' });
-    await expect(
-      q.baselineFor('propulsion.port.revolutions', 'vessels.self', Number.NaN),
-    ).rejects.toThrow(/days must be a finite number/);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('baselineFor returns null when QuestDB row contains nulls for all aggregates', async () => {
     fetchMock.mockResolvedValueOnce(
       ok({

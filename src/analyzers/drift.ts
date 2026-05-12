@@ -1,5 +1,8 @@
-import { discoverEngineIds as discoverEngineIdsFromPaths } from '../core/discovery.js';
+import { discoverEngineIds } from '../core/discovery.js';
 import { fmtNumber, fmtPct } from '../core/format.js';
+import { enginePaths, SOG_PATH } from '../core/paths.js';
+import { escapeSqlLiteral } from '../core/questdb.js';
+import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -77,20 +80,13 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   readonly triggers: ReadonlyArray<TriggerSpec>;
 
   constructor(cfg: DriftCfg) {
-    const triggers: TriggerSpec[] = [];
-    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
-      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
-    }
-    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
-      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
-    }
-    this.triggers = triggers;
+    this.triggers = buildTriggers(cfg.triggers);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
     const { questdb, app } = deps;
     if (!questdb) return null;
-    const engineIds = discoverEngineIds(deps);
+    const engineIds = discoverEngineIds(Array.from(deps.buffer.pathKeys()));
     if (engineIds.length === 0) return null;
 
     const context = app.selfContext ?? 'vessels.self';
@@ -129,11 +125,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishOnPath(
-      text,
-      { analyzerId: this.id, ctx },
-      { path: 'notifications.openrouter-companion.drift.report', state: 'normal' },
-    );
+    await deps.publisher.publishReport(this.id, ctx, text);
   }
 
   buildPrompt(input: DriftInput): { system: string; user: string } {
@@ -176,20 +168,10 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 }
 
-function discoverEngineIds(deps: AnalyzerDeps): string[] {
-  const ids = discoverEngineIdsFromPaths(Array.from(deps.buffer.pathKeys()));
-  // Fallback for the common single-engine vessel. The cron may fire after the
-  // buffer has aged out (>26h since last engine use), in which case QuestDB
-  // still holds the history but the buffer has nothing to discover from.
-  if (ids.length === 0) return ['port'];
-  return ids;
-}
-
 // Issues one QuestDB query per (engine, window) that does the per-RPM-band
 // aggregation server-side. ASOF JOIN pairs each RPM sample with the most
-// recent preceding fuel.rate and SOG sample, matching the JS impl's
-// pairToBins semantics. The 5-second join tolerance is enforced inline so
-// stale fuel/sog readings don't drag the mean.
+// recent preceding fuel.rate and SOG sample. The 5-second join tolerance
+// keeps stale fuel/sog readings from dragging the mean.
 async function binEngineWindow(
   questdb: NonNullable<AnalyzerDeps['questdb']>,
   context: string,
@@ -197,10 +179,11 @@ async function binEngineWindow(
   fromMs: number,
   toMs: number,
 ): Promise<Record<BinKey, BinStats> | null> {
-  const escapedCtx = context.replace(/'/g, "''");
-  const rpmPath = `propulsion.${engineId}.revolutions`.replace(/'/g, "''");
-  const fuelPath = `propulsion.${engineId}.fuel.rate`.replace(/'/g, "''");
-  const sogPath = 'navigation.speedOverGround';
+  const escapedCtx = escapeSqlLiteral(context);
+  const { rpm, fuelRate } = enginePaths(engineId);
+  const rpmPath = escapeSqlLiteral(rpm);
+  const fuelPath = escapeSqlLiteral(fuelRate);
+  const sogPath = SOG_PATH;
   const fromIso = new Date(fromMs).toISOString();
   const toIso = new Date(toMs).toISOString();
   const sql = `

@@ -1,5 +1,8 @@
+import { fmtRatio, fmtUnit } from '../core/format.js';
+import { NOTIFICATION_PATH_PREFIX } from '../core/paths.js';
 import { readNumberAt } from '../core/skNode.js';
-import type { AnalyzerTriggerCfg } from '../types.js';
+import { buildTriggers } from '../core/triggers.js';
+import { ALERTS_SUPPORTED_EVENTS, type AnalyzerTriggerCfg } from '../types.js';
 import type {
   Analyzer,
   AnalyzerDeps,
@@ -24,15 +27,8 @@ function truncateForN2K(message: string): string {
   return `${cut.trimEnd()}…`;
 }
 
-const ALL_SUBKINDS: ReadonlyArray<BatteryEventKind> = [
-  'low-soc-enter',
-  'low-soc-exit',
-  'cell-imbalance-enter',
-  'cell-imbalance-exit',
-];
-
 function isBatteryEventKind(s: string): s is BatteryEventKind {
-  return ALL_SUBKINDS.includes(s as BatteryEventKind);
+  return (ALERTS_SUPPORTED_EVENTS as ReadonlyArray<string>).includes(s);
 }
 
 export interface AlertCfg {
@@ -49,7 +45,6 @@ export interface AlertInput {
     stateOfCharge: number | null;
     cycles: number | null;
   };
-  [key: string]: unknown;
 }
 
 export class AlertAnalyzer implements Analyzer<AlertInput> {
@@ -57,20 +52,10 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   readonly title = 'Battery Alerts';
   readonly triggers: ReadonlyArray<TriggerSpec>;
 
-  constructor(private cfg: AlertCfg) {
-    const triggers: TriggerSpec[] = [];
-    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
-      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
-    }
-    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
-      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
-    }
-    for (const sub of cfg.triggers.events) {
-      if (isBatteryEventKind(sub)) {
-        triggers.push({ kind: 'battery-event', subkind: sub });
-      }
-    }
-    this.triggers = triggers;
+  constructor(cfg: AlertCfg) {
+    this.triggers = buildTriggers(cfg.triggers, (sub) =>
+      isBatteryEventKind(sub) ? { kind: 'battery-event', subkind: sub } : null,
+    );
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {
@@ -101,16 +86,14 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
       'Write a short notification (under 150 words): lead with the bank id and what crossed (e.g., "House bank SoC dropped to 38%"), then the current state, then the most likely cause if obvious from the data.',
       'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
       'Stick to facts present in the data. Do not speculate beyond the numbers. If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing.',
-      'Format as one paragraph of plain English.',
+      'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (under 150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers.',
     ].join(' ');
 
     const lines = [`Event: ${input.subkind}`, `Bank: ${input.bankId}`];
     const ed = input.eventData;
-    if (typeof ed.soc === 'number') {
-      lines.push(`Triggering SoC: ${ed.soc.toFixed(3)} (${(ed.soc * 100).toFixed(0)}%)`);
-    }
+    if (typeof ed.soc === 'number') lines.push(`Triggering SoC: ${fmtRatio(ed.soc)}`);
     if (typeof ed.imbalanceV === 'number') {
-      lines.push(`Triggering cell imbalance: ${ed.imbalanceV.toFixed(3)} V`);
+      lines.push(`Triggering cell imbalance: ${fmtUnit(ed.imbalanceV, 'V')}`);
     }
     const snap = input.snapshot;
     lines.push(`Voltage now: ${fmtUnit(snap.voltage, 'V')}`);
@@ -123,19 +106,9 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
     const subkind = ctx.batteryEvent?.subkind;
     if (!subkind) return;
-    const path = `notifications.openrouter-companion.alert.${subkind}`;
+    const path = `${NOTIFICATION_PATH_PREFIX}alert.${subkind}`;
     const state: 'alert' | 'normal' = ENTER_SUBKINDS.includes(subkind) ? 'alert' : 'normal';
     const message = truncateForN2K(text);
     await deps.publisher.publishOnPath(message, { analyzerId: this.id, ctx }, { path, state });
   }
-}
-
-function fmtUnit(v: number | null | undefined, unit: string): string {
-  if (v == null) return 'n/a';
-  return `${v.toFixed(3)} ${unit}`;
-}
-
-function fmtRatio(v: number | null | undefined): string {
-  if (v == null) return 'n/a';
-  return `${v.toFixed(3)} (${(v * 100).toFixed(0)}%)`;
 }

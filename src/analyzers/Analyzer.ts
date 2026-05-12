@@ -32,7 +32,7 @@ export interface TriggerCtx {
   batteryEvent?: { subkind: BatteryEventKind; soc?: number; imbalanceV?: number };
 }
 
-export type AnalysisInput = Record<string, unknown>;
+export type AnalysisInput = object;
 
 export interface AppForAnalyzer {
   getSelfPath(path: string): unknown;

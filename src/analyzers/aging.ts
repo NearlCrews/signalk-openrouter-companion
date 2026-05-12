@@ -1,5 +1,8 @@
 import { discoverBankIds } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
+import { bankPaths } from '../core/paths.js';
+import { escapeSqlLiteral } from '../core/questdb.js';
+import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -45,15 +48,8 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   readonly title = 'Battery Aging Tracker';
   readonly triggers: ReadonlyArray<TriggerSpec>;
 
-  constructor(private cfg: AgingCfg) {
-    const triggers: TriggerSpec[] = [];
-    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
-      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
-    }
-    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
-      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
-    }
-    this.triggers = triggers;
+  constructor(cfg: AgingCfg) {
+    this.triggers = buildTriggers(cfg.triggers);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {
@@ -65,11 +61,10 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const questdb = deps.questdb;
 
     const allPaths: string[] = [];
-    const bankPaths = new Map<string, { cap: string; cyc: string }>();
+    const pathsByBank = new Map<string, { cap: string; cyc: string }>();
     for (const id of bankIds) {
-      const cap = `electrical.batteries.${id}.capacity.actual`;
-      const cyc = `electrical.batteries.${id}.cycles`;
-      bankPaths.set(id, { cap, cyc });
+      const { capacityActual: cap, cycles: cyc } = bankPaths(id);
+      pathsByBank.set(id, { cap, cyc });
       allPaths.push(cap, cyc);
     }
 
@@ -82,7 +77,9 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
 
     const banks: BankAging[] = [];
     for (const id of bankIds) {
-      const { cap, cyc } = bankPaths.get(id)!;
+      const paths = pathsByBank.get(id);
+      if (!paths) continue;
+      const { cap, cyc } = paths;
       const windows = {} as Record<WindowKey, WindowStats>;
       let hasData = false;
       for (const { key, summaries } of summariesByWindow) {
@@ -102,11 +99,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   }
 
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishOnPath(
-      text,
-      { analyzerId: this.id, ctx },
-      { path: 'notifications.openrouter-companion.aging.report', state: 'normal' },
-    );
+    await deps.publisher.publishReport(this.id, ctx, text);
   }
 
   buildPrompt(input: AgingInput): { system: string; user: string } {
@@ -191,8 +184,8 @@ async function queryWindow(
   paths: string[],
   days: number,
 ): Promise<Map<string, PathSummary>> {
-  const escapedCtx = context.replace(/'/g, "''");
-  const escapedPaths = paths.map((p) => `'${p.replace(/'/g, "''")}'`).join(', ');
+  const escapedCtx = escapeSqlLiteral(context);
+  const escapedPaths = paths.map((p) => `'${escapeSqlLiteral(p)}'`).join(', ');
   const sql = `
     SELECT path, first(value) AS first_val, last(value) AS last_val, count() AS n
     FROM signalk

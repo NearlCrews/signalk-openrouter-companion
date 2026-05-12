@@ -1,5 +1,6 @@
 import { fmtNumber } from '../core/format.js';
 import { readNumberAt } from '../core/skNode.js';
+import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 
@@ -27,7 +28,6 @@ interface BankSnapshot {
 export interface HealthInput {
   generatedAt: string;
   banks: BankSnapshot[];
-  [key: string]: unknown;
 }
 
 export class HealthAnalyzer implements Analyzer<HealthInput> {
@@ -35,15 +35,8 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   readonly title = 'Battery Health Advisor';
   readonly triggers: ReadonlyArray<TriggerSpec>;
 
-  constructor(private cfg: HealthCfg) {
-    const triggers: TriggerSpec[] = [];
-    if (cfg.triggers.cron.enabled && cfg.triggers.cron.pattern) {
-      triggers.push({ kind: 'cron', pattern: cfg.triggers.cron.pattern });
-    }
-    if (cfg.triggers.put.enabled && cfg.triggers.put.path) {
-      triggers.push({ kind: 'put', path: cfg.triggers.put.path });
-    }
-    this.triggers = triggers;
+  constructor(cfg: HealthCfg) {
+    this.triggers = buildTriggers(cfg.triggers);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {
@@ -78,11 +71,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   }
 
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    await deps.publisher.publishOnPath(
-      text,
-      { analyzerId: this.id, ctx },
-      { path: 'notifications.openrouter-companion.health.report', state: 'normal' },
-    );
+    await deps.publisher.publishReport(this.id, ctx, text);
   }
 
   buildPrompt(input: HealthInput): { system: string; user: string } {
@@ -126,21 +115,18 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   }
 }
 
+const CELL_KEY_RE = /^cell(\d+)$/;
+
 function collectCells(node: unknown): CellSnapshot[] {
   if (!node || typeof node !== 'object') return [];
   const out: CellSnapshot[] = [];
   for (const [key, val] of Object.entries(node as Record<string, unknown>)) {
-    const cm = key.match(/^cell(\d+)$/);
-    if (!cm) continue;
-    if (val && typeof val === 'object') {
-      const vNode = (val as Record<string, unknown>).voltage;
-      if (vNode && typeof vNode === 'object' && 'value' in (vNode as Record<string, unknown>)) {
-        const v = (vNode as { value: unknown }).value;
-        if (typeof v === 'number') {
-          out.push({ index: Number.parseInt(cm[1]!, 10), voltage: v });
-        }
-      }
-    }
+    const cm = key.match(CELL_KEY_RE);
+    const indexStr = cm?.[1];
+    if (!indexStr) continue;
+    const v = readNumberAt(val, 'voltage');
+    if (v == null) continue;
+    out.push({ index: Number.parseInt(indexStr, 10), voltage: v });
   }
   return out.sort((a, b) => a.index - b.index);
 }

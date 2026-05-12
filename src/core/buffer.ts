@@ -65,7 +65,6 @@ export class RollingBuffer {
 
   private evict(arr: BufferEntry[], now: number): void {
     const cutoff = now - this.opts.maxAgeMs;
-    // Age eviction: find first non-stale index in one pass, splice once.
     let firstFresh = 0;
     while (firstFresh < arr.length) {
       const e = arr[firstFresh];
@@ -73,9 +72,11 @@ export class RollingBuffer {
       firstFresh += 1;
     }
     if (firstFresh > 0) arr.splice(0, firstFresh);
-    // Count eviction: drop oldest excess in one shot.
-    if (arr.length > this.opts.maxEntriesPerPath) {
-      arr.splice(0, arr.length - this.opts.maxEntriesPerPath);
+    // Amortize the O(n) splice cost at saturation: when over cap, trim down by
+    // 10% of cap so the next ~10% of records skip count eviction entirely.
+    const cap = this.opts.maxEntriesPerPath;
+    if (arr.length > cap) {
+      arr.splice(0, arr.length - cap + Math.ceil(cap / 10));
     }
   }
 }
