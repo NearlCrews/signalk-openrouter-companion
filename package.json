@@ -52,12 +52,15 @@
     "clean": "rm -rf dist",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
+    "test:run": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "type-check": "tsc --noEmit",
     "lint": "biome check src/ tests/",
     "lint:fix": "biome check --write src/ tests/",
     "format": "biome format --write src/ tests/",
+    "security-audit": "npm audit --audit-level=moderate",
+    "validate": "npm run type-check && npm run lint && npm run test:run",
     "prepack": "npm run build",
     "prepublishOnly": "npm run type-check && npm run lint && npm run test && npm run build"
   }
