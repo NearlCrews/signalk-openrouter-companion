@@ -5,11 +5,12 @@ Project memory for Claude Code. Read at the start of every session.
 ## Architecture (Critical)
 
 - This repo is **ONE npm package**. Each type of monitoring is a separate `Analyzer` module inside `src/analyzers/`. Never create a sibling repo or a separate npm package per domain. (On 2026-05-10 a session mistakenly created `signalk-openrouter-batteries-companion` and had to consolidate. Don't repeat that.)
-- The `Analyzer` interface in `src/analyzers/Analyzer.ts` is the extension point. New analyzers implement: `id` (must also be added to `src/analyzers/ids.ts`), `title` (read from `ANALYZER_TITLES`), `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`. When `publishOutput` is omitted the TriggerRouter publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical report path with `state: nominal` (no N2K alert PGN). Transition analyzers (alerts) override with `deps.publisher.publishOnPath` for a per-event path and explicit alert state.
-- `src/analyzers/ids.ts` is the **single source of truth** for analyzer ids and titles (`ANALYZER_IDS`, `AnalyzerId`, `ANALYZER_TITLES`, `isAnalyzerId`). Kept separate from each analyzer module to avoid the circular import that a registry-with-prompts would create. Don't duplicate this list anywhere; api.ts iterates `ANALYZER_IDS` for the status payload, the panel reads order from `/api/status`, and analyzer classes set `readonly title = ANALYZER_TITLES.<id>`.
+- The `Analyzer` interface in `src/analyzers/Analyzer.ts` is the extension point. New analyzers implement: `id: AnalyzerId` (must also be added to `src/analyzers/ids.ts`), `title` (read from `ANALYZER_TITLES`), `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`. When `publishOutput` is omitted the TriggerRouter publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical report path with `state: nominal` (no N2K alert PGN). Transition analyzers (alerts) override with `deps.publisher.publishOnPath` for a per-event path and explicit alert state.
+- `src/analyzers/ids.ts` is the **single source of truth** for analyzer ids and titles (`ANALYZER_IDS`, `AnalyzerId`, `ANALYZER_TITLES`, `isAnalyzerId`). Kept separate from each analyzer module to avoid the circular import that a registry-with-prompts would create. Don't duplicate this list anywhere; api.ts iterates `ANALYZER_IDS` for the status payload, index.ts iterates `ANALYZER_IDS` plus `ANALYZER_FACTORIES` to instantiate enabled analyzers, the panel reads order from `/api/status`, and analyzer classes set `readonly title = ANALYZER_TITLES.<id>`.
+- `src/analyzers/registry.ts::ANALYZER_FACTORIES` maps each `AnalyzerId` to its constructor closure. Adding a new analyzer means one entry there (plus the id in `ids.ts`) instead of editing a hand-rolled if-block in `index.ts`.
 - Standardized triggers block per analyzer: `{ cron: { enabled, pattern, timezone }, put: { enabled, path }, events: string[] }`. Same shape for every analyzer; the events array's enum is per-analyzer.
 - Per-analyzer system prompts are overridable via `customSystemPrompt?: string` on each `*Cfg`. Constructor calls `resolveSystemPrompt(cfg.customSystemPrompt, <NAME>_DEFAULT_SYSTEM_PROMPT)`. The default is exported from each analyzer file so `core/api.ts::DEFAULT_SYSTEM_PROMPTS` can serve it via `GET /api/analyzers/:id/prompt`.
-- Shared infra in `src/core/`: `logger`, `buffer`, `budget`, `engineDetector`, `batteryMonitor`, `cronScheduler`, `triggerRouter`, `openrouter`, `questdb`, `publisher`, `discovery`, `skNode`, `format`, `paths`, `triggers`, `cfg` (incl. `clampPositiveInt` and `resolveSystemPrompt`), `api` (REST routes + PluginRuntime).
+- Shared infra in `src/core/`: `logger`, `buffer`, `budget`, `engineDetector`, `batteryMonitor`, `cronScheduler`, `triggerRouter`, `openrouter`, `questdb`, `publisher`, `discovery`, `skNode` (incl. `asTreeMap` + `readBankSnapshot`), `emitter` (TypedEmitter base for batteryMonitor/engineDetector), `format`, `paths`, `triggers` (incl. `buildTriggers` and `manualPutCtx`), `cfg` (incl. `clampPositiveInt` and `resolveSystemPrompt`), `api` (REST routes + PluginRuntime).
 - Five analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
   - `maintenance` (state): per-engine-session narrative, fires on engine-stop. No QuestDB.
   - `health` (state): daily snapshot of every battery bank, fires on cron. No QuestDB.
@@ -20,12 +21,12 @@ Project memory for Claude Code. Read at the start of every session.
 
 ## Conventions
 
-- TypeScript 6, ESM, Node 22+. esbuild bundles backend to `dist/index.js`; webpack + esbuild-loader bundles the React panel to `public/remoteEntry.js`. vitest for tests. biome for lint and format.
+- TypeScript 6, ESM, Node 20.18+ (engines floor; CI tests on Node 20 and 22). esbuild bundles backend to `dist/index.js`; webpack + esbuild-loader bundles the React panel to `public/remoteEntry.js`. vitest for tests. biome for lint and format.
 - No em dashes anywhere in code, commits, or docs. Use colons, commas, or split sentences.
 - Tests live in `tests/`. Share the `_mocks.ts` harness; don't re-mock fundamentals. Use `makePluginRuntime(opts)` for any new test that builds a `PluginRuntime` literal; don't hand-roll the cfg/llm/budget/etc. boilerplate.
 - Notification paths: `notifications.openrouter-companion.<analyzer>.<...>`.
 - PUT paths: `plugins.openrouter-companion.<analyzer>.<verb>`.
-- Plugin REST paths: `plugins.openrouter-companion.api.<...>` (mounted via `registerWithRouter`; see `src/core/api.ts`).
+- Plugin REST routes are mounted at the HTTP prefix `/plugins/signalk-openrouter-companion/api/*` via `registerWithRouter`; see `src/core/api.ts`. The shared `requireRuntime` and `requireAnalyzerId` helpers dedupe the 503 / 404 envelopes at the top of each handler.
 - Apache-2.0 license. Author is Nearl Crews (`NearlCrews@users.noreply.github.com`).
 
 ## Custom config panel (Module Federation)
@@ -33,8 +34,8 @@ Project memory for Claude Code. Read at the start of every session.
 - The plugin advertises the `signalk-plugin-configurator` keyword in `package.json` so the SK admin loads the React panel at `src/configpanel/PluginConfigurationPanel.jsx` (built to `public/remoteEntry.js`) instead of rendering the rjsf schema.
 - `webpack.config.cjs` uses `experiments.outputModule: true` and `library: { type: 'module' }`. This is REQUIRED because our `package.json` has `"type": "module"`, which makes SK admin inject `<script type="module">` for our bundle. The legacy `library: { type: 'var' }` form leaves the federation container's `var ... = ...` in module scope (never on `window`) and breaks the loader. ESM exports `get` and `init` are what the SK admin's dynamic-import path expects.
 - Panel state contract from the admin: `{ configuration, save }`. The panel maintains a local `cfg` edit buffer initialized from `configuration` (resync via useEffect), and `save(fullCfg)` persists. No partial PATCH endpoint; the panel always sends the full object.
-- All panel `fetch` calls go through `apiFetch(path, opts)` which sets `credentials: 'same-origin'` to match the SK admin convention (see `Configuration.tsx:226`). Don't bypass it.
-- `setStatus` is guarded by a deep-equality check: identical poll responses don't re-render. New per-id state lives on the consolidated `analyzerUi: {[id]: {...}}` map; never add another parallel `{[id]: ...}` map.
+- All panel `fetch` calls go through `apiFetch(path, opts)` (sets `credentials: 'same-origin'` to match the SK admin convention) and the `fetchJson(path, opts)` envelope on top of it, which returns `{ ok, status, body, error }`. Don't bypass either.
+- `setStatus` is guarded by a deep-equality check via `jsonEqual(a, b)`: identical poll responses don't re-render. New per-id state lives on the consolidated `analyzerUi: {[id]: {...}}` map; never add another parallel `{[id]: ...}` map.
 - The rjsf schema (`src/schema.ts`) stays as the storage shape and is loaded as a fallback. Don't remove it.
 
 ## Standardized triggers contract

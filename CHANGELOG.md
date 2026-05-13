@@ -2,6 +2,120 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] - 2026-05-13
+
+Codebase-wide simplify pass driven by a 5-agent review across reuse,
+quality, efficiency, SignalK semantics, and type design. No behavior
+change; 156 tests pass (one new test for the registry's fallback
+publish path).
+
+### Added
+
+- `src/analyzers/registry.ts::ANALYZER_FACTORIES`: per-id constructor
+  map keyed by `AnalyzerId`. `src/index.ts` now iterates
+  `ANALYZER_IDS` and instantiates enabled analyzers through this map
+  instead of five hand-rolled `if (cfg.analyzers.<id>.enabled)`
+  blocks. Adding a sixth analyzer is now one entry in `ids.ts` plus
+  one entry in `registry.ts`.
+- `src/core/emitter.ts::TypedEmitter<K, E>`: shared listener
+  bookkeeping (on / emit) used by `BatteryMonitor` and
+  `EngineDetector`. The two classes had identical 10-line copies.
+- `src/core/skNode.ts::asTreeMap(tree)` + `readBankSnapshot(node)`:
+  helpers that absorb the `typeof tree === 'object' ? ...` guard
+  plus the six `readNumberAt(node, 'voltage' | 'current' | ...)`
+  calls that `health`, `alerts`, and `maintenance` repeated.
+- `src/core/triggers.ts::manualPutCtx(value?)`: factory for the
+  manually-synthesized `TriggerCtx`. Used by `api.ts` (fire
+  endpoint) and `index.ts` (PUT handler) so the shape can't drift.
+- Panel: `fetchJson(path, opts)` envelope (`{ ok, status, body,
+  error }`) replaces the five try/await/parse/catch blocks across
+  fire, reports, prompt, openrouter test, and questdb test.
+- Panel: `btn(...overrides)` helper replaces the inline
+  `{ ...S.btn, ...variant }` spreads.
+- `tests/triggerRouter.test.ts`: new case asserts that an analyzer
+  without `publishOutput` is published via
+  `deps.publisher.publishReport(a.id, ctx, text)`.
+
+### Changed (type system)
+
+- `Analyzer.id` narrowed from `string` to `AnalyzerId`. A typo in a
+  class's `readonly id = '...'` no longer compiles.
+- `AnalysisInput` aliased to `Record<string, unknown>` (was `object`).
+  `HealthInput` and `AlertInput` now extend it explicitly.
+- `isAnalyzerId(s)` checks `ANALYZER_IDS` via a Set and accepts
+  `unknown` (was the title record + `string`).
+- `JsonlEntry` is the single shape; `core/api.ts` consumes it
+  instead of the locally-duplicated `ReportEntry`.
+- `OpenRouterModelsResponse.data[].pricing` narrowed from `unknown`
+  to `{ prompt?: string; completion?: string }`.
+- `StatusResponse.analyzers[].id: AnalyzerId` (was `string`).
+- Removed unused exports: `NOTIFICATION_PATH_PREFIX`,
+  `PUT_PATH_PREFIX`, `ALARM_STATES`, the `NotificationState`
+  re-export from publisher.
+
+### Changed (hot path)
+
+- `src/index.ts` extracts one `subscribe(path, sink)` helper inside
+  `start()`. The per-delta closure no longer rebuilds the
+  `SOC_PATH_RE`/`CELL_VOLT_PATH_RE` matches; both are computed at
+  subscribe time and the bank/cell ids are captured.
+- `subscribeWatchedPath` skips `buffer.record` for non-numeric
+  values (they were getting accumulated and prematurely evicting
+  the numeric entries the analyzers actually consume).
+- `RollingBuffer.summarize` folds the time-window filter into the
+  single accumulation pass; the intermediate filtered array is
+  gone.
+- `engineIds` / `bankIds` are now `Set<string>` in the discovery
+  rescan loop. The 60s tick only calls `setPluginStatus(...)` when
+  something actually changed (was unconditional on every tick).
+
+### Changed (API hardening)
+
+- `requireRuntime` and `requireAnalyzerId` guards dedupe the
+  503 / 404 envelopes at the top of every route handler in
+  `core/api.ts`.
+- `getOpenRouterModels()` coalesces concurrent fetches via an
+  in-flight promise. Two open admin tabs no longer trigger two
+  upstream calls after the 1-hour cache expires.
+
+### Changed (panel)
+
+- `shallowJsonEqual` renamed to `jsonEqual` (it's deep via
+  `JSON.stringify`, not shallow). The misleading O(1) dirty check
+  (`cfg !== pristine && ...`) is dropped in favor of just
+  `!jsonEqual(cfg, pristine)`.
+- The `analyzerUi[id] ?? EMPTY_UI` falls back to `?? {}` inline;
+  the `EMPTY_UI` constant was a micro-optimization that didn't
+  actually save renders.
+
+### Changed (internal)
+
+- `TriggerRouter` no longer carries a per-analyzer `publish`
+  closure. `runOne` picks `publishOutput` vs `publishReport`
+  directly at dispatch time.
+- `BudgetTracker.load` resolves `now` with a local default; the
+  `as Required<BudgetOptions>` cast is gone.
+- `publisher.ts::buildEntry` uses a spread instead of conditional
+  mutation when the engine-session fields are present.
+- `drift.isBinKey` uses `k in BIN_DEFS` (faster, clearer than the
+  `BIN_ORDER.includes` cast).
+- `src/index.ts` drops the `void restart;` placeholder and the
+  three-line narration comment; the parameter is now `_restart`.
+
+### Test count
+
+155 -> 156 tests across 19 test files. dist 130.9 kB (unchanged).
+
+### Docs
+
+- `CLAUDE.md`, `DEVELOPMENT.md`, `CONTRIBUTING.md`, and the
+  `signalk-analyzer-scaffold` skill updated to reflect the registry
+  flow, the new shared helpers, and the actual Node 20.18+ engines
+  floor. The user-memory `triggers_contract.md` mirrored.
+- `.gitignore` explicitly lists `.remember/` (an inner
+  `.remember/.gitignore` already covers contents; the top-level
+  entry makes the rule grep-discoverable).
+
 ## [0.3.1] - 2026-05-12
 
 ### Fixed

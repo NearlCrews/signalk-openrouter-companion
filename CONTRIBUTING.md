@@ -71,21 +71,21 @@ Five analyzers ship today: `maintenance`, `health`, `alerts`, `aging`, `drift`. 
 
 ## Coding standards
 
-- TypeScript 6, strict mode, ESM. Target Node 22+.
+- TypeScript 6, strict mode, ESM. Node 20.18+ (CI runs on Node 20 and 22).
 - Biome handles lint and format: `npm run lint` / `npm run lint:fix`. The Biome config in `biome.json` is the source of truth.
 - **No em dashes** anywhere: in code, commits, PR descriptions, or docs. Use a colon, a comma, or split into two sentences.
 - Default to no comments. Add a comment only when it explains a non-obvious WHY (a hidden constraint, a subtle invariant, a workaround). Skip WHAT-comments and change-narrative comments; the code says what, the PR description says why.
 - Trust internal callers. Only validate at system boundaries (user input, external APIs). Skip defensive runtime checks for scenarios that can't happen.
-- Prefer the shared helpers in `src/core/`: `buildTriggers`, `bankPaths`/`enginePaths`/`notificationReportPath`, `escapeSqlLiteral` + `indexColumns`, `publishReport`, `clampPositiveInt`, `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio`. Adding a new analyzer should mostly be wiring these together.
+- Prefer the shared helpers in `src/core/`: `buildTriggers` and `manualPutCtx`, `bankPaths`/`enginePaths`/`notificationReportPath`, `escapeSqlLiteral` + `indexColumns`, `publishReport`, `clampPositiveInt`, `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio`, `asTreeMap` + `readBankSnapshot` for SK battery trees. Adding a new analyzer should mostly be wiring these together.
 
 ## Adding a new analyzer
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the full walkthrough. Short version:
 
-1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
+1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id` (typed as `AnalyzerId`), `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
 2. Use `buildTriggers(cfg.triggers, eventMapper?)` so the cron + PUT + events block stays uniform.
 3. Use `publisher.publishReport(this.id, ctx, text)` for the canonical `notifications.openrouter-companion.<id>.report` shape.
-4. Register the analyzer in `src/index.ts` and add its config section to `src/schema.ts` and `src/types.ts`.
+4. Append the id to `src/analyzers/ids.ts::ANALYZER_IDS`, the factory closure to `src/analyzers/registry.ts::ANALYZER_FACTORIES`, and the config section to `src/schema.ts` plus `src/types.ts`. `index.ts` instantiates from the registry automatically.
 5. Add tests under `tests/` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`.
 
 ## Reporting bugs

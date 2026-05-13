@@ -16,6 +16,7 @@ src/
 ├── analyzers/
 │   ├── Analyzer.ts           Shared interface, TriggerSpec union, AnalyzerDeps
 │   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
+│   ├── registry.ts           ANALYZER_FACTORIES: per-id constructor map driven by ANALYZER_IDS
 │   ├── maintenance.ts        State: engine-session narrative
 │   ├── health.ts             State: daily battery snapshot
 │   ├── alerts.ts             Transition: threshold crossings
@@ -29,16 +30,17 @@ src/
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
     ├── engineDetector.ts     Per-engine RPM state machine for session detection
+    ├── emitter.ts            TypedEmitter base used by batteryMonitor and engineDetector
     ├── triggerRouter.ts      Routes cron + put + event triggers to analyzers
     ├── cronScheduler.ts      Wraps croner for cron-driven triggers
-    ├── publisher.ts          handleMessage notification + JSONL log writer
+    ├── publisher.ts          handleMessage notification + JSONL log writer; exports JsonlEntry
     ├── budget.ts             Per-day OpenRouter call cap
     ├── openrouter.ts         HTTP client with retry and backoff ladder
     ├── questdb.ts            HTTP client + escapeSqlLiteral + indexColumns
     ├── discovery.ts          Engine and bank id discovery from SK paths
-    ├── skNode.ts             readNumberAt + readValueAt for SK tree traversal
+    ├── skNode.ts             readNumberAt + readValueAt + asTreeMap + readBankSnapshot
     ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
-    ├── triggers.ts           buildTriggers(cfg, eventMapper?) shared by all analyzers
+    ├── triggers.ts           buildTriggers(cfg, eventMapper?) + manualPutCtx(value?)
     ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
     ├── cfg.ts                clampPositiveInt + resolveSystemPrompt
     └── logger.ts             Wraps app.debug / app.error / stringify
@@ -48,7 +50,7 @@ src/
 
 ```typescript
 export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
-  readonly id: string;
+  readonly id: AnalyzerId;
   readonly title: string;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
@@ -56,6 +58,8 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
 }
 ```
+
+`AnalyzerId` is the string-literal union derived from `ANALYZER_IDS` in `src/analyzers/ids.ts`; a typo in a class's `readonly id` won't compile. `AnalysisInput = Record<string, unknown>` so analyzer-specific input interfaces should `extends AnalysisInput`.
 
 `collectContext` returns `null` to mean "no report for this trigger" (e.g., engine-stop with too short a session, or a trend window without enough data). `buildPrompt` is pure: given a snapshot, it produces the prompt halves. `publishOutput` is optional: when omitted, the `TriggerRouter` publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'` (informational, no N2K alert PGN). Override only when an analyzer needs a different path or state; transition analyzers like `alerts` use `deps.publisher.publishOnPath` with a canonical per-event path (`notifications.electrical.batteries.<bankId>.<kind>`), explicit alert state, and an `alertId` from `alertIdFor(path)` so [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) emits a stable PGN 126983 / 126985 pair.
 
@@ -111,7 +115,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-155 tests across 19 files cover:
+156 tests across 19 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
@@ -186,7 +190,7 @@ Step by step:
 
 1. Decide whether it is **state**, **transition**, or **trend**. State/trend use the shared `publishReport` shorthand (defaults to `state: nominal`, `method: ['visual']`, no N2K alert PGN). Transition wants a custom path like `alerts` uses for `notifications.electrical.batteries.<bankId>.<kind>` with `state: alert`/`normal` and an `alertId` from `alertIdFor(path)`.
 
-2. Add the new id and title to `src/analyzers/ids.ts`. Append to `ANALYZER_IDS` (which auto-extends the `AnalyzerId` union) and add the title to `ANALYZER_TITLES`. This is the single source of truth; api.ts and the panel both read it.
+2. Add the new id and title to `src/analyzers/ids.ts`. Append to `ANALYZER_IDS` (which auto-extends the `AnalyzerId` union) and add the title to `ANALYZER_TITLES`. This is the single source of truth; api.ts, the registry, and the panel all read it.
 
 3. Create `src/analyzers/<name>.ts` implementing `Analyzer<I>`:
 
@@ -210,31 +214,33 @@ Step by step:
    }
    ```
 
-4. Register the default prompt in `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS` so `GET /api/analyzers/:id/prompt` can serve it.
+4. Add the analyzer to `src/analyzers/registry.ts::ANALYZER_FACTORIES`. The factory closure forwards the cfg sub-object fields the constructor wants. `index.ts` iterates `ANALYZER_IDS` and instantiates via this map; no extra wiring in `index.ts` is needed unless the analyzer introduces a brand-new event source (like `EngineDetector` or `BatteryMonitor`).
 
-5. Add the config block (including `customSystemPrompt?: string`) to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS`. Use `pluginPutPath('myname')` for the default PUT path.
+5. Register the default prompt in `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS` so `GET /api/analyzers/:id/prompt` can serve it.
 
-6. Add the schema section in `src/schema.ts` (a per-analyzer `type: 'object'` with `enabled` and a nested `triggers` block). The schema is the storage shape and drives the rjsf fallback admin UI.
+6. Add the config block (including `customSystemPrompt?: string`) to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS`. Use `pluginPutPath('myname')` for the default PUT path.
 
-7. Wire the analyzer in `src/index.ts`: instantiate it inside the `cfg.analyzers.myname.enabled` branch and push onto the `analyzers` array, passing `customSystemPrompt: cfg.analyzers.myname.customSystemPrompt`.
+7. Add the schema section in `src/schema.ts` (a per-analyzer `type: 'object'` with `enabled` and a nested `triggers` block). The schema is the storage shape and drives the rjsf fallback admin UI.
 
 8. Add tests under `tests/myname.test.ts` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`. If your test needs a `PluginRuntime` literal, use `makePluginRuntime`.
 
-9. Document the analyzer in `README.md` (the Analyzers table and Defaults table) and `CHANGELOG.md`.
+9. Document the analyzer in `README.md` (the Analyzers table) and `CHANGELOG.md`.
 
 ## CI
 
 GitHub Actions workflows under `.github/workflows/`:
 
 - `plugin-ci.yml`: reuses the upstream SK plugin CI workflow (type-check + lint + build).
-- `test.yml`: runs the vitest suite on Node 22 and 24.
+- `ci.yml`: runs the vitest suite on Node 20.x and 22.x.
+- `codeql.yml`: CodeQL static analysis.
+- `publish.yml`: npm publish on a tag.
 
-Both run on push and pull_request to `main`.
+All run on push and pull_request to `main`.
 
 ## Tech stack
 
 - TypeScript 6 strict, ESM, ES2022 target
-- Node 22+ (specified in `package.json#engines`)
+- Node 20.18+ (specified in `package.json#engines`; CI tests on Node 20 and 22)
 - `@signalk/server-api` 2.24+ (peer dep)
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)

@@ -7,13 +7,15 @@ description: Use this skill when the user wants to add a new analyzer to signalk
 
 `signalk-openrouter-companion` is **one** npm package. Each monitoring domain is an `Analyzer` module under `src/analyzers/`. Never create a sibling package; always add a new analyzer.
 
-This skill walks you through producing every file and patch needed for a new analyzer that conforms to the framework. Three analyzers already ship and serve as worked examples:
+This skill walks you through producing every file and patch needed for a new analyzer that conforms to the framework. Five analyzers already ship and serve as worked examples:
 
 - `src/analyzers/maintenance.ts`: engine sessions, fires on `engine-stop`.
 - `src/analyzers/health.ts`: daily battery summary, fires on cron.
 - `src/analyzers/alerts.ts`: battery threshold notifications, fires on battery events.
+- `src/analyzers/aging.ts`: monthly capacity-loss trend per bank from QuestDB.
+- `src/analyzers/drift.ts`: weekly engine fuel-economy drift per RPM bin from QuestDB.
 
-Their tests (`tests/maintenance.test.ts`, `tests/health.test.ts`, `tests/alerts.test.ts`) are the patterns for the test scaffold below.
+Their tests (`tests/maintenance.test.ts`, `tests/health.test.ts`, `tests/alerts.test.ts`, `tests/aging.test.ts`, `tests/drift.test.ts`) are the patterns for the test scaffold below.
 
 The `Analyzer` interface lives in `src/analyzers/Analyzer.ts`. The standardized triggers contract (`{ cron, put, events }`) is documented in the project memory file `~/.claude/projects/-home-dietpi-src-signalk-openrouter-companion/memory/triggers_contract.md`. Read it before adding a new analyzer.
 
@@ -30,17 +32,18 @@ Confirm these with the user before generating files.
 
 ## Steps
 
-1. Re-read the existing analyzers and their tests to lift any helper patterns relevant to the new domain (buffer summaries, `getSelfPath` snapshots, QuestDB baselines).
-2. Patch `src/analyzers/ids.ts`: append the new id to `ANALYZER_IDS` and the title to `ANALYZER_TITLES`. This is the single source of truth; api.ts and the panel both read it.
+1. Re-read the existing analyzers and their tests to lift any helper patterns relevant to the new domain (buffer summaries, `getSelfPath` snapshots, `readBankSnapshot`, QuestDB baselines).
+2. Patch `src/analyzers/ids.ts`: append the new id to `ANALYZER_IDS` and the title to `ANALYZER_TITLES`. This is the single source of truth; api.ts, the registry, and the panel all read it.
 3. Create `src/analyzers/<name>.ts` from the template below. Export a `<NAME>_DEFAULT_SYSTEM_PROMPT` constant; use `resolveSystemPrompt(cfg.customSystemPrompt, DEFAULT)` in the constructor.
-4. Patch `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS`: add an entry mapping the new id to the default constant so `GET /api/analyzers/:id/prompt` can serve it.
-5. Create `tests/<name>.test.ts` from the test scaffold below.
-6. Patch `src/types.ts`: add the `*_SUPPORTED_EVENTS` constant, the config block under `PluginOptions.analyzers` (including `customSystemPrompt?: string`), the `DEFAULT_OPTIONS.analyzers.<name>` entry, and the `mergeWithDefaults` wiring.
-7. Patch `src/schema.ts`: import the new constant, add the `analyzers.properties.<name>` schema entry using `enabledGate` + `triggerSchema`, and add the matching `analyzers.<name>` entry in `buildUiSchemaInner`.
-8. Patch `src/index.ts`: import the new analyzer class, push it onto the `analyzers` array when enabled (passing `customSystemPrompt: cfg.analyzers.<name>.customSystemPrompt`), and register any non-cron/non-put event source (e.g. a new emitter alongside `EngineDetector` or `BatteryMonitor`).
-9. Run the verification commands at the bottom of this file.
+4. Patch `src/analyzers/registry.ts::ANALYZER_FACTORIES`: add an entry mapping the new id to a factory closure that constructs the analyzer from its cfg sub-object. This is what `index.ts` iterates to instantiate enabled analyzers.
+5. Patch `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS`: add an entry mapping the new id to the default constant so `GET /api/analyzers/:id/prompt` can serve it.
+6. Create `tests/<name>.test.ts` from the test scaffold below.
+7. Patch `src/types.ts`: add the `*_SUPPORTED_EVENTS` constant, the config block under `PluginOptions.analyzers` (including `customSystemPrompt?: string`), the `DEFAULT_OPTIONS.analyzers.<name>` entry, and the `mergeWithDefaults` wiring.
+8. Patch `src/schema.ts`: import the new constant, add the `analyzers.properties.<name>` schema entry using `enabledGate` + `triggerSchema`, and add the matching `analyzers.<name>` entry in `buildUiSchemaInner`.
+9. Only patch `src/index.ts` if the analyzer needs a brand-new event source (similar to `EngineDetector` or `BatteryMonitor`). Standard cron + PUT + existing event subkinds need no `index.ts` change.
+10. Run the verification commands at the bottom of this file.
 
-Keep `src/index.ts` thin: the analyzer's constructor builds `this.triggers` from config. The lifecycle just hands declared triggers to the scheduler / put-handler / domain emitter. Don't add domain-specific dispatch logic to `index.ts` beyond what the existing engine and battery sections already do.
+Keep `src/index.ts` thin: the analyzer's constructor builds `this.triggers` from config, the registry instantiates it, and the lifecycle hands declared triggers to the scheduler / put-handler / domain emitter. Don't add domain-specific dispatch logic to `index.ts` beyond what the existing engine and battery sections already do.
 
 ## Analyzer source template
 
@@ -120,12 +123,17 @@ export class FooAnalyzer implements Analyzer<FooInput> {
 Path: `tests/<name>.test.ts`. This is the minimum a TDD-style PR should ship with: trigger-derivation cases, a null-path test for `collectContext`, a happy-path `collectContext`, and a `buildPrompt` snapshot.
 
 ```ts
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { FooAnalyzer } from '../src/analyzers/foo.js';
 import { RollingBuffer } from '../src/core/buffer.js';
-import { Logger } from '../src/core/logger.js';
-import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
+import {
+  cleanupTmpDir,
+  makeAnalyzerDeps,
+  type MockApp,
+  makeMockApp,
+  makeTmpDir,
+} from './_mocks.js';
 
 function makeCfg() {
   return {
@@ -137,17 +145,9 @@ function makeCfg() {
   };
 }
 
-function makeDeps(app: MockApp, buffer: RollingBuffer): AnalyzerDeps {
-  return {
-    app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
-    buffer,
-    questdb: null,
-    publisher: {} as never,
-    budget: {} as never,
-    llm: {} as never,
-    logger: new Logger({ debug: vi.fn(), error: vi.fn() }),
-  };
-}
+// makeAnalyzerDeps from tests/_mocks.ts is the canonical factory; use it
+// rather than re-rolling the AnalyzerDeps literal. Pass {questdb} / {publisher}
+// only when the test cares about them.
 
 describe('FooAnalyzer', () => {
   let dir: string;
@@ -177,7 +177,7 @@ describe('FooAnalyzer', () => {
     const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
     const a = new FooAnalyzer(makeCfg());
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T09:00:00Z') };
-    const r = await a.collectContext(ctx, makeDeps(app, buf));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf));
     expect(r).toBeNull();
   });
 
@@ -312,28 +312,27 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
 };
 ```
 
-## `src/index.ts` patch
+## `src/analyzers/registry.ts` patch
 
-Import and register:
+Add the factory closure that wires the cfg sub-object to the constructor. `index.ts` iterates `ANALYZER_IDS` and instantiates each enabled analyzer via this map; no further wiring is needed for cron + PUT + standard event triggers.
 
 ```ts
-import { FooAnalyzer } from './analyzers/foo.js';
+import { FooAnalyzer } from './foo.js';
 
-// inside start(), alongside the existing analyzers.push(...) block:
-if (cfg.analyzers.foo.enabled) {
-  analyzers.push(
+export const ANALYZER_FACTORIES: AnalyzerFactories = {
+  // ...existing...
+  foo: (c) =>
     new FooAnalyzer({
-      triggers: cfg.analyzers.foo.triggers,
-      customSystemPrompt: cfg.analyzers.foo.customSystemPrompt,
+      triggers: c.triggers,
+      customSystemPrompt: c.customSystemPrompt,
+      // forward any analyzer-specific cfg fields too
     }),
-  );
-}
-
-// and alongside the existing registerAnalyzerPut(...) calls:
-registerAnalyzerPut(app, cfg.analyzers.foo, () => router, PLUGIN_ID);
+};
 ```
 
-If the analyzer needs a brand-new event source (similar to `EngineDetector` or `BatteryMonitor`), build it under `src/core/` and wire it up the same way: subscribe its events and call `router.dispatch(...)` with a `TriggerCtx` carrying the kind your analyzer's constructor pushed into `this.triggers`.
+`registerAnalyzerPut` is called by `index.ts` for every section via `Object.values(cfg.analyzers)`, so no PUT-specific wiring is needed.
+
+If the analyzer needs a brand-new event source (similar to `EngineDetector` or `BatteryMonitor`), build it under `src/core/` (extending `TypedEmitter<Kind, Event>` from `core/emitter.ts`) and subscribe its events in `index.ts`. Call `router.dispatch(...)` with a `TriggerCtx` carrying the kind your analyzer's constructor pushed into `this.triggers`.
 
 ## Verification
 
@@ -363,4 +362,4 @@ The result should include a `foo` key with the title and description you set.
 - Notification paths use `notifications.openrouter-companion.<id>.<...>`.
 - PUT paths use `plugins.openrouter-companion.<id>.<verb>`.
 - Stick to Signal K SI base units in prompts: V, A, K, J, ratios. Note that `propulsion.*.revolutions` is documented in Hz (rev/s), not rad/s, even though rad/s is the SI base unit for angular velocity. Don't have the prompt tell the LLM to interpret revolutions as rad/s.
-- Reuse `src/core/skNode.ts` `readNumberAt` helper rather than reimplementing node-walking.
+- Reuse `src/core/skNode.ts` helpers: `readNumberAt` for a single numeric leaf, `readValueAt` for raw value reads, `asTreeMap` to unwrap a subtree, and `readBankSnapshot` for the canonical battery snapshot fields. Don't reimplement node-walking.
