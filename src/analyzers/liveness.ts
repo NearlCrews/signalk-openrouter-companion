@@ -1,4 +1,9 @@
-import { clampPositiveInt, resolveSystemPrompt } from '../core/cfg.js';
+import {
+  clampPositiveInt,
+  REPORT_BODY_INSTRUCTION,
+  REPORT_HEADLINE_INSTRUCTION,
+  resolveSystemPrompt,
+} from '../core/cfg.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, LIVENESS_DEFAULT_STALENESS_SEC } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -16,10 +21,11 @@ export const LIVENESS_DEFAULT_SYSTEM_PROMPT = [
   'A path marked STALE has produced no sample within the configured staleness window.',
   'A path marked MULTI-SOURCE is served by more than one source. Multiple sources on a path is often intentional sensor redundancy (for example two GPS units or two depth sounders) and is healthy; treat it as a concern only when it looks like one physical device publishing under duplicate source labels.',
   'Treat intermittently-powered equipment as expected: engine and propulsion paths (propulsion.*) go silent whenever the engine is off, so their staleness is normal and not a fault unless other data shows the engine running.',
-  'Lead with the headline (overall pipeline state). Then name any genuinely stale path, and any multi-source path that looks like duplicate labelling rather than real redundancy, and briefly say why it matters.',
+  'In the report, name any genuinely stale path, and any multi-source path that looks like duplicate labelling rather than real redundancy, and briefly say why it matters.',
   'If everything is reporting normally, say so plainly.',
   'Stick to the facts in the data; do not speculate about causes you cannot see.',
-  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules. Use semicolons and commas to separate points.',
+  REPORT_HEADLINE_INSTRUCTION,
+  REPORT_BODY_INSTRUCTION,
 ].join(' ');
 
 export interface PathLiveness {

@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchJson, POLL_MS, REPORT_LIMIT } from './api.js';
 import { AnalyzerRow, DEFAULT_SEVERITY_FLOOR } from './components/AnalyzerRow.jsx';
+import { CollapsibleSection } from './components/CollapsibleSection.jsx';
 import { OpenRouterSection } from './components/OpenRouterSection.jsx';
 import { QuestDBSection } from './components/QuestDBSection.jsx';
 import { StatusBlock } from './components/StatusBlock.jsx';
 import { btn, btnClass, PANEL_CLASS, PANEL_CSS, S } from './styles.js';
 import { jsonEqual } from './utils.js';
+
+// Phases of the post-save notice: the plugin is restarting, then it is done.
+const NOTICE_RESTARTING = 'restarting';
+const NOTICE_DONE = 'done';
 
 // Inject the scoped focus/hover stylesheet once. It carries the interactive
 // states (focus rings, button hover) that inline styles cannot express.
@@ -33,6 +38,14 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const [qdbTest, setQdbTest] = useState(null);
   const [qdbTesting, setQdbTesting] = useState(false);
   const [analyzerUi, setAnalyzerUi] = useState({});
+  // Every section starts collapsed so the panel opens compact, showing just
+  // the live status and the section headers.
+  const [openrouterOpen, setOpenrouterOpen] = useState(false);
+  const [questdbOpen, setQuestdbOpen] = useState(false);
+  const [analyzersOpen, setAnalyzersOpen] = useState(false);
+  // While awaiting a post-save restart, holds { prior: startedAt-at-save-time }.
+  // Null when not awaiting one.
+  const restartWatchRef = useRef(null);
 
   useScopedStyles();
 
@@ -49,6 +62,16 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     if (r.ok && r.body) {
       setStatus((prev) => (jsonEqual(prev, r.body) ? prev : r.body));
       setStatusError(null);
+      // A save restarts the plugin. The first post-save status poll that
+      // reports a startedAt different from the one seen at save time means
+      // the restart has finished: flip the notice from "restarting" to "done".
+      const watch = restartWatchRef.current;
+      if (watch && typeof r.body.startedAt === 'number' && r.body.startedAt !== watch.prior) {
+        restartWatchRef.current = null;
+        setSavedNotice((prev) =>
+          prev?.phase === NOTICE_RESTARTING ? { ...prev, phase: NOTICE_DONE } : prev,
+        );
+      }
     } else if (r.status === 503) {
       setStatus(null);
       setStatusError('Plugin is not running. Set an API key and Save to start it.');
@@ -75,20 +98,43 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     }));
   };
 
+  // Write only triggers.cron.pattern into the edit buffer; the server merges
+  // cron.enabled and timezone from defaults. Nested because setAnalyzerCfg
+  // merges only at the analyzer level.
+  const setSchedule = (id, pattern) => {
+    setCfg((prev) => {
+      const analyzer = prev.analyzers?.[id] ?? {};
+      const triggers = analyzer.triggers ?? {};
+      const cron = triggers.cron ?? {};
+      return {
+        ...prev,
+        analyzers: {
+          ...(prev.analyzers ?? {}),
+          [id]: { ...analyzer, triggers: { ...triggers, cron: { ...cron, pattern } } },
+        },
+      };
+    });
+  };
+
   const patchUi = (id, patch) =>
     setAnalyzerUi((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
 
-  // Clear the transient saved-confirmation notice after a few seconds so it
-  // does not linger as stale text once the restart has settled.
+  // Auto-clear the saved-confirmation notice. A completed restart ("done")
+  // clears quickly; one still showing "restarting" clears only on a generous
+  // fallback, so a stuck or failed restart does not pin the notice forever.
   useEffect(() => {
     if (!savedNotice) return;
-    const handle = setTimeout(() => setSavedNotice(null), 6000);
+    const handle = setTimeout(
+      () => setSavedNotice(null),
+      savedNotice.phase === NOTICE_DONE ? 6000 : 30000,
+    );
     return () => clearTimeout(handle);
   }, [savedNotice]);
 
   const onSave = () => {
     save(cfg);
-    setSavedNotice(`Saved at ${new Date().toLocaleTimeString()}. Plugin restarting...`);
+    restartWatchRef.current = { prior: status?.startedAt };
+    setSavedNotice({ at: new Date().toLocaleTimeString(), phase: NOTICE_RESTARTING });
   };
 
   const runTest = async () => {
@@ -157,6 +203,8 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     if (analyzerUi[id]?.reportsOpen) setTimeout(() => loadReports(id), 800);
   };
 
+  const toggleExpand = (id) => patchUi(id, { expanded: !analyzerUi[id]?.expanded });
+
   const toggleReports = (id) => {
     const next = !analyzerUi[id]?.reportsOpen;
     patchUi(id, { reportsOpen: next });
@@ -217,31 +265,46 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         testResult={testResult}
       />
 
-      <OpenRouterSection
-        cfg={cfg}
-        set={setSection}
-        models={models}
-        modelsState={modelsState}
-        loadModels={loadModels}
-      />
+      <CollapsibleSection
+        title="OpenRouter"
+        open={openrouterOpen}
+        onToggle={() => setOpenrouterOpen((v) => !v)}
+      >
+        <OpenRouterSection
+          cfg={cfg}
+          set={setSection}
+          models={models}
+          modelsState={modelsState}
+          loadModels={loadModels}
+        />
+      </CollapsibleSection>
 
-      <QuestDBSection
-        cfg={cfg}
-        set={setSection}
-        testResult={qdbTest}
-        onTest={runQdbTest}
-        testing={qdbTesting}
-      />
+      <CollapsibleSection
+        title="QuestDB enrichment"
+        open={questdbOpen}
+        onToggle={() => setQuestdbOpen((v) => !v)}
+      >
+        <QuestDBSection
+          cfg={cfg}
+          set={setSection}
+          testResult={qdbTest}
+          onTest={runQdbTest}
+          testing={qdbTesting}
+        />
+      </CollapsibleSection>
 
-      <div style={S.sectionTitle}>Analyzers</div>
-      {analyzersList.length === 0 && (
-        <div style={S.empty}>
-          {status
-            ? 'No analyzers reported by the plugin yet.'
-            : 'Analyzer list loads once the plugin is running.'}
-        </div>
-      )}
-      <div>
+      <CollapsibleSection
+        title="Analyzers"
+        open={analyzersOpen}
+        onToggle={() => setAnalyzersOpen((v) => !v)}
+      >
+        {analyzersList.length === 0 && (
+          <div style={S.empty}>
+            {status
+              ? 'No analyzers reported by the plugin yet.'
+              : 'Analyzer list loads once the plugin is running.'}
+          </div>
+        )}
         {analyzersList.map((a) => (
           <AnalyzerRow
             key={a.id}
@@ -253,17 +316,20 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             enabled={cfg.analyzers?.[a.id]?.enabled ?? a.enabled}
             setEnabled={(id, enabled) => setAnalyzerCfg(id, { enabled })}
             ui={analyzerUi[a.id] ?? {}}
+            onToggleExpand={toggleExpand}
             onFire={fireAnalyzer}
             onToggleReports={toggleReports}
             onTogglePrompt={togglePrompt}
             promptValue={promptValueFor(a.id)}
             onPromptChange={onPromptChange}
             onPromptReset={onPromptReset}
+            schedule={cfg.analyzers?.[a.id]?.triggers?.cron?.pattern ?? a.cron?.pattern ?? ''}
+            onScheduleChange={setSchedule}
             severityFloor={cfg.analyzers?.forecast?.severityFloor ?? DEFAULT_SEVERITY_FLOOR}
             onSeverityFloorChange={(value) => setAnalyzerCfg('forecast', { severityFloor: value })}
           />
         ))}
-      </div>
+      </CollapsibleSection>
 
       <div style={S.saveBar}>
         <button
@@ -282,7 +348,9 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             role="status"
             aria-live="polite"
           >
-            {savedNotice}
+            {savedNotice.phase === NOTICE_DONE
+              ? `Saved at ${savedNotice.at}. Plugin restarted.`
+              : `Saved at ${savedNotice.at}. Plugin restarting...`}
           </span>
         )}
       </div>

@@ -28,6 +28,8 @@ export const T = {
     success: '#10b981',
     // Darker success for text on white: the #10b981 fill fails AA as text.
     successText: '#047857',
+    // Pale success fill behind the "enabled" analyzer pill, paired with successText.
+    successBg: '#dcfce7',
     danger: '#ef4444',
     // Darker danger for text on white: the #ef4444 fill is borderline as text.
     dangerText: '#b91c1c',

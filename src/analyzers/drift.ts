@@ -1,8 +1,13 @@
-import { clampPositiveInt, resolveSystemPrompt } from '../core/cfg.js';
+import {
+  clampPositiveInt,
+  REPORT_BODY_INSTRUCTION,
+  REPORT_HEADLINE_INSTRUCTION,
+  resolveSystemPrompt,
+} from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
 import { asFiniteNumber, fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
-import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
+import { escapeSqlLiteral, indexColumns, QUESTDB_SELF_CONTEXT } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -39,7 +44,9 @@ export const DRIFT_DEFAULT_SYSTEM_PROMPT = [
   "Do not restate per-session details. That is the maintenance analyzer's job. Focus only on this-week vs baseline drift.",
   'Identify (1) which band moved most, (2) what the drift suggests: fouled prop, dirty hull, fuel quality, alternator load creep, fuel filter clogging, air filter or intercooler fouling, engine trim, weight changes from fuel/water/gear stowage, or sustained sea state and current effects, or a transducer or sensor issue, (3) whether the magnitude warrants action this season or just monitoring.',
   'If a bin has too few samples, say so rather than guess. If the cause is not determinable from the fields shown, say "cause not determinable from telemetry".',
-  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which RPM band drifted most or "no significant drift"), then name the engine, the magnitude of the change, and a short interpretation of the likely cause.',
+  REPORT_HEADLINE_INSTRUCTION,
+  REPORT_BODY_INSTRUCTION,
+  'Name the engine, the RPM band that drifted most, the magnitude of the change, and a short interpretation of the likely cause.',
 ].join(' ');
 
 type BinKey = 'idle' | 'lowCruise' | 'highCruise' | 'topEnd' | 'wot';
@@ -67,6 +74,19 @@ const BIN_DEFS: Record<BinKey, BinDef> = {
   topEnd: { label: 'top end', min: 50.0, max: 75.0 },
   wot: { label: 'wot', min: 75.0, max: Number.POSITIVE_INFINITY },
 };
+
+// QuestDB CASE expression mapping an RPM (Hz) value to its bin key, derived
+// from BIN_DEFS so the server-side binning cannot drift from the bin edges.
+const BIN_CASE_SQL = ((): string => {
+  const whens: string[] = [];
+  let elseBin: BinKey = 'wot';
+  for (const k of BIN_ORDER) {
+    const { max } = BIN_DEFS[k];
+    if (Number.isFinite(max)) whens.push(`WHEN r.value < ${max} THEN '${k}'`);
+    else elseBin = k;
+  }
+  return `CASE ${whens.join(' ')} ELSE '${elseBin}' END`;
+})();
 
 export interface BinStats {
   count: number;
@@ -106,12 +126,12 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
-    const { questdb, app } = deps;
+    const { questdb } = deps;
     if (!questdb) return null;
     const engineIds = discoverEngineIds(Array.from(deps.buffer.pathKeys()));
     if (engineIds.length === 0) return null;
 
-    const context = app.selfContext ?? 'vessels.self';
+    const context = QUESTDB_SELF_CONTEXT;
     const firedMs = ctx.firedAt.getTime();
     const weekStart = firedMs - PAST_WEEK_DAYS * DAY_MS;
     const weekEnd = firedMs;
@@ -216,13 +236,7 @@ async function binEngineWindow(
         AND ts < '${toIso}'
     )
     SELECT
-      CASE
-        WHEN r.value < 15.0 THEN 'idle'
-        WHEN r.value < 30.0 THEN 'lowCruise'
-        WHEN r.value < 50.0 THEN 'highCruise'
-        WHEN r.value < 75.0 THEN 'topEnd'
-        ELSE 'wot'
-      END AS bin,
+      ${BIN_CASE_SQL} AS bin,
       count() AS n,
       avg(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
       avg(CASE WHEN r.ts - s.ts <= ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog

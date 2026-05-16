@@ -98,11 +98,11 @@ describe('ForecastAnalyzer', () => {
   });
 
   describe('parseForecast', () => {
-    it('parses each valid SEVERITY grade and strips the line', () => {
+    it('parses each valid SEVERITY grade and keeps the rest as the body', () => {
       for (const grade of ['severe', 'moderate', 'minor', 'none'] as const) {
-        const r = parseForecast(`SEVERITY: ${grade}\nThe outlook paragraph.`);
+        const r = parseForecast(`SEVERITY: ${grade}\nShort headline.\n\nThe outlook paragraph.`);
         expect(r.grade).toBe(grade);
-        expect(r.body).toBe('The outlook paragraph.');
+        expect(r.body).toBe('Short headline.\n\nThe outlook paragraph.');
       }
     });
 
@@ -113,14 +113,14 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('drops a malformed SEVERITY-prefixed line and falls back to none', () => {
-      const r = parseForecast('SEVERITY: catastrophic\nThe outlook paragraph.');
+      const r = parseForecast('SEVERITY: catastrophic\nShort headline.\n\nThe outlook paragraph.');
       expect(r.grade).toBe('none');
-      // The unparseable SEVERITY line is dropped, the prose body kept.
-      expect(r.body).toBe('The outlook paragraph.');
+      // The unparseable SEVERITY line is dropped, the rest kept as the body.
+      expect(r.body).toBe('Short headline.\n\nThe outlook paragraph.');
     });
 
     it('keeps the whole text and grades none when no SEVERITY line is present', () => {
-      const text = 'Conditions settled.\nNo significant change expected overnight.';
+      const text = 'Conditions settled.\n\nNo significant change expected overnight.';
       const r = parseForecast(text);
       expect(r.grade).toBe('none');
       expect(r.body).toBe(text);
@@ -130,16 +130,16 @@ describe('ForecastAnalyzer', () => {
   describe('resolveForecastState', () => {
     it('floor "severe" raises an alarm only on a severe grade', () => {
       expect(resolveForecastState('severe', 'severe')).toBe('alarm');
-      expect(resolveForecastState('moderate', 'severe')).toBe('normal');
-      expect(resolveForecastState('minor', 'severe')).toBe('normal');
-      expect(resolveForecastState('none', 'severe')).toBe('normal');
+      expect(resolveForecastState('moderate', 'severe')).toBe('nominal');
+      expect(resolveForecastState('minor', 'severe')).toBe('nominal');
+      expect(resolveForecastState('none', 'severe')).toBe('nominal');
     });
 
     it('floor "moderate" raises on moderate and severe', () => {
       expect(resolveForecastState('severe', 'moderate')).toBe('alarm');
       expect(resolveForecastState('moderate', 'moderate')).toBe('warn');
-      expect(resolveForecastState('minor', 'moderate')).toBe('normal');
-      expect(resolveForecastState('none', 'moderate')).toBe('normal');
+      expect(resolveForecastState('minor', 'moderate')).toBe('nominal');
+      expect(resolveForecastState('none', 'moderate')).toBe('nominal');
     });
 
     it('floor "minor" raises on every deterioration grade', () => {
@@ -147,7 +147,7 @@ describe('ForecastAnalyzer', () => {
       expect(resolveForecastState('moderate', 'minor')).toBe('warn');
       expect(resolveForecastState('minor', 'minor')).toBe('alert');
       // 'none' never raises, whatever the floor.
-      expect(resolveForecastState('none', 'minor')).toBe('normal');
+      expect(resolveForecastState('none', 'minor')).toBe('nominal');
     });
   });
 
@@ -372,7 +372,7 @@ describe('ForecastAnalyzer', () => {
       expect(JSON.parse(line).analyzer).toBe('forecast');
     });
 
-    it('publishes at state normal when the grade is below the floor', async () => {
+    it('publishes at state nominal when the grade is below the floor', async () => {
       const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
@@ -383,18 +383,18 @@ describe('ForecastAnalyzer', () => {
       );
       const v = firstNotificationValue(app.published[0]?.delta);
       expect(v.path).toBe(REPORT_PATH);
-      expect(v.state).toBe('normal');
+      expect(v.state).toBe('nominal');
       expect(v.message).toBe('A slight deterioration is possible later.');
     });
 
-    it('publishes the whole text at state normal when no SEVERITY line is present', async () => {
+    it('publishes the whole text at state nominal when no SEVERITY line is present', async () => {
       const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'minor' }));
       const text = 'Conditions settled; no significant change expected overnight.';
       await a.publishOutput?.(text, cronCtx, makeAnalyzerDeps(app, buf, { publisher }));
       const v = firstNotificationValue(app.published[0]?.delta);
-      expect(v.state).toBe('normal');
+      expect(v.state).toBe('nominal');
       expect(v.message).toBe(text);
     });
   });

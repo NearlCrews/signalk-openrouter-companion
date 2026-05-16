@@ -11,13 +11,14 @@ Project memory for Claude Code. Read at the start of every session.
 - Standardized triggers block per analyzer: `{ cron: { enabled, pattern, timezone }, put: { enabled, path }, events: string[] }`. Same shape for every analyzer; the events array's enum is per-analyzer.
 - Per-analyzer system prompts are overridable via `customSystemPrompt?: string` on each `*Cfg`. Constructor calls `resolveSystemPrompt(cfg.customSystemPrompt, <NAME>_DEFAULT_SYSTEM_PROMPT)`. The default is exported from each analyzer file so `core/api.ts::DEFAULT_SYSTEM_PROMPTS` can serve it via `GET /api/analyzers/:id/prompt`.
 - Shared infra in `src/core/`: `logger`, `buffer`, `budget`, `engineDetector`, `batteryMonitor`, `cronScheduler`, `triggerRouter`, `openrouter`, `questdb`, `publisher`, `discovery`, `skNode` (incl. `asTreeMap` + `readBankSnapshot`), `emitter` (TypedEmitter base for batteryMonitor/engineDetector), `format`, `paths`, `triggers` (incl. `buildTriggers` and `manualPutCtx`), `cfg` (incl. `clampPositiveInt` and `resolveSystemPrompt`), `api` (REST routes + PluginRuntime).
-- Six analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
+- Seven analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
   - `maintenance` (state): per-engine-session narrative, fires on engine-stop. No QuestDB.
   - `health` (state): daily snapshot of every battery bank, fires on cron. No QuestDB.
   - `alerts` (transition): real-time threshold crossings (low SoC, cell imbalance), fires on battery events.
   - `aging` (trend): monthly capacity-loss trend per bank over two configurable windows (default 30 and 90 days), fires on cron. Reads QuestDB.
   - `drift` (trend): weekly engine fuel-economy and per-RPM drift vs a configurable trailing baseline (default 30 days), fires on cron. Reads QuestDB.
   - `liveness` (state): reports which watched SignalK paths have gone stale or are served by multiple sources, fires on cron. Reads the `RollingBuffer` only (`pathKeys` + `slice`); no QuestDB.
+  - `forecast` (trend): short-term weather outlook extrapolated from environmental trends, fires on cron. Reads the `RollingBuffer` for trends and treats QuestDB as an optional baseline, so it still produces an outlook with no QuestDB.
 - Trend analyzers own QuestDB queries; state analyzers don't, to keep their reports independent of long-term history and avoid duplicating the trend findings.
 
 ## Conventions
@@ -113,3 +114,4 @@ Every version push updates four things together, then ships:
 - Don't restart SK before the new `dist/index.js` finishes building. SK loads plugin code at startup; if dist is older than the SK process the new REST routes will return 404 until the next restart. (See CHANGELOG 0.3.0 simplify-pass.)
 - Don't register one cron job per cron trigger in `index.ts`. Analyzers can share a schedule (`health` and `liveness` both default to `0 8 * * *`), and the router dispatches cron by pattern to every matching analyzer, so a job per trigger double-dispatches and double-spends the budget. Register one job per unique `(pattern, timezone)` pair. (See CHANGELOG 0.4.1.)
 - Don't route the REST fire endpoint through `TriggerRouter.dispatch`. `dispatch` matches by trigger path/pattern; the fire endpoint names one analyzer directly, so it uses `TriggerRouter.runById`. (See CHANGELOG 0.4.1: the old `dispatch` path matched no analyzer and "Fire now" silently ran nothing.)
+- Don't query QuestDB with `app.selfContext`. `signalk-questdb` writes every row with `context` set to the literal `self`, not the vessel's `vessels.urn:mrn:...` identifier. The trend analyzers use `QUESTDB_SELF_CONTEXT` from `src/core/questdb.ts`. (See CHANGELOG 0.5.0: the mismatch matched no rows and left `aging`, `drift`, and `forecast` silent.)

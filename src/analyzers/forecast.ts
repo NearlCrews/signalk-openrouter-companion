@@ -1,12 +1,18 @@
+import type { BufferEntry } from '../core/buffer.js';
 import { resolveSystemPrompt } from '../core/cfg.js';
-import { fmtNumber } from '../core/format.js';
+import { asFiniteNumber, fmtNumber } from '../core/format.js';
 import {
   notificationReportPath,
   WEATHER_CANONICAL_PATHS,
   WEATHER_EXTENSION_PATHS,
   WEATHER_PRESSURE_PATH,
 } from '../core/paths.js';
-import { escapeSqlLiteral, indexColumns, type QuestDBClient } from '../core/questdb.js';
+import {
+  escapeSqlLiteral,
+  indexColumns,
+  QUESTDB_SELF_CONTEXT,
+  type QuestDBClient,
+} from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import {
   type AnalyzerTriggerCfg,
@@ -41,9 +47,9 @@ type SeverityGrade = (typeof SEVERITY_GRADES)[number];
 
 // Maps an LLM grade to the Signal K notification state used when the grade
 // meets or exceeds the configured floor. Below the floor the state is forced
-// to 'normal' (see resolveForecastState).
+// to 'nominal' (see resolveForecastState).
 const GRADE_STATE: Record<SeverityGrade, NotificationState> = {
-  none: 'normal',
+  none: 'nominal',
   minor: 'alert',
   moderate: 'warn',
   severe: 'alarm',
@@ -132,8 +138,9 @@ export const FORECAST_DEFAULT_SYSTEM_PROMPT = [
   'When the extension paths are present, also weigh a lowering cloud ceiling, collapsing visibility, a widening gust spread, and precipitation onset: these are strong short-term indicators.',
   'If only the canonical paths are present, still produce an outlook from pressure tendency, wind shift, and temperature/dew point convergence.',
   'Grade the outlook on a four-level severity scale: severe (dangerous weather developing, act now), moderate (a notable deterioration is likely), minor (a slight deterioration is possible), none (settled or improving).',
-  'Output exactly two parts. The first line must be exactly "SEVERITY: severe", "SEVERITY: moderate", "SEVERITY: minor", or "SEVERITY: none", with nothing else on that line.',
-  'After that line, write the outlook as one plain-prose paragraph of 80 to 150 words. Do not use markdown: no headers, no bullets, no horizontal rules. Use commas and semicolons to separate points. Lead with the headline (the expected change, or "conditions settled"), then the supporting trend, then the practical implication for the vessel.',
+  'Output exactly three parts. The first line must be exactly "SEVERITY: severe", "SEVERITY: moderate", "SEVERITY: minor", or "SEVERITY: none", with nothing else on that line.',
+  'The second line is a headline of at most 80 characters: plain, conversational language a person reads at a glance like a phone notification, stating only the single most important takeaway about the outlook, with no statistics and no jargon.',
+  'After the headline, leave an empty line, then write the outlook as one plain-prose paragraph of 80 to 150 words. Do not use markdown: no headers, no bullets, no horizontal rules. Use commas and semicolons to separate points. Lead with the expected change (or "conditions settled"), then the supporting trend, then the practical implication for the vessel.',
 ].join(' ');
 
 interface PathTrend {
@@ -174,7 +181,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<ForecastInput | null> {
-    const { buffer, questdb, app } = deps;
+    const { buffer, questdb } = deps;
     const firedMs = ctx.firedAt.getTime();
     const windowStart = firedMs - TREND_WINDOW_HOURS * HOUR_MS;
 
@@ -183,33 +190,39 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     // QuestDB baseline is a strict enhancement: query it first so the cold-
     // start guard can let a thin buffer through when a baseline is available.
     const baseline = questdb
-      ? await queryBaseline(questdb, app.selfContext ?? 'vessels.self', firedMs)
+      ? await queryBaseline(questdb, QUESTDB_SELF_CONTEXT, firedMs)
       : new Map<string, number>();
     const hasQuestdbBaseline = baseline.size > 0;
-
-    // Oldest retained weather sample, used only to gate cold start.
-    let oldestTs: number | null = null;
-    for (const path of ALL_WEATHER_PATHS) {
-      if (!bufferPaths.has(path)) continue;
-      for (const e of buffer.slice(path, 0, firedMs)) {
-        if (oldestTs == null || e.ts < oldestTs) oldestTs = e.ts;
-      }
-    }
-    const historyMs = oldestTs == null ? 0 : firedMs - oldestTs;
-    if (historyMs < COLD_START_MIN_HISTORY_MS && !hasQuestdbBaseline) return null;
 
     const pathsToReport = ALL_WEATHER_PATHS.filter((p) => bufferPaths.has(p) || baseline.has(p));
     if (pathsToReport.length === 0) return null;
 
+    // Slice each reported path's trend window once, reused for the cold-start
+    // gate and the trend rows. Reading oldestTs from the window (not full
+    // history) is sound only because COLD_START_MIN_HISTORY_MS is shorter than
+    // the trend window: a sample old enough to pass the gate is always inside
+    // the window. Slices are time-ordered, so entries[0] is the oldest.
+    const windowEntries = new Map<string, BufferEntry[]>();
+    let oldestTs: number | null = null;
+    for (const path of pathsToReport) {
+      if (!bufferPaths.has(path)) continue;
+      const entries = buffer.slice(path, windowStart, firedMs);
+      windowEntries.set(path, entries);
+      const first = entries[0];
+      if (first && (oldestTs == null || first.ts < oldestTs)) oldestTs = first.ts;
+    }
+    const historyMs = oldestTs == null ? 0 : firedMs - oldestTs;
+    if (historyMs < COLD_START_MIN_HISTORY_MS && !hasQuestdbBaseline) return null;
+
     const trends: PathTrend[] = pathsToReport.map((path) => {
       const meta = WEATHER_PATH_META[path];
-      const entries = buffer.slice(path, windowStart, firedMs);
+      const entries = windowEntries.get(path) ?? [];
       return {
         path,
         family: meta?.family ?? 'canonical',
         label: meta?.label ?? path,
         unit: meta?.unit ?? '',
-        source: latestSource(entries),
+        source: entries.at(-1)?.source ?? null,
         current: latestValue(entries),
         buckets: bucketMeans(entries, windowStart),
         baselineMean: baseline.get(path) ?? null,
@@ -262,9 +275,8 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
     const { grade, body } = parseForecast(text);
     const state = resolveForecastState(grade, this.severityFloor);
-    const message = body.length > 0 ? body : text.trim();
     await deps.publisher.publishOnPath(
-      message,
+      body.length > 0 ? body : text.trim(),
       { analyzerId: this.id, ctx },
       { path: notificationReportPath(this.id), state },
     );
@@ -284,11 +296,12 @@ function bucketMeans(
   const sums = new Array<number>(TREND_WINDOW_HOURS).fill(0);
   const counts = new Array<number>(TREND_WINDOW_HOURS).fill(0);
   for (const e of entries) {
-    if (typeof e.value !== 'number' || !Number.isFinite(e.value)) continue;
+    const value = asFiniteNumber(e.value);
+    if (value == null) continue;
     let idx = Math.floor((e.ts - windowStart) / HOUR_MS);
     if (idx < 0) idx = 0;
     if (idx >= TREND_WINDOW_HOURS) idx = TREND_WINDOW_HOURS - 1;
-    sums[idx] = (sums[idx] ?? 0) + e.value;
+    sums[idx] = (sums[idx] ?? 0) + value;
     counts[idx] = (counts[idx] ?? 0) + 1;
   }
   return sums.map((s, i) => {
@@ -299,15 +312,10 @@ function bucketMeans(
 
 function latestValue(entries: ReadonlyArray<{ value: unknown }>): number | null {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const v = entries[i]?.value;
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const v = asFiniteNumber(entries[i]?.value);
+    if (v != null) return v;
   }
   return null;
-}
-
-function latestSource(entries: ReadonlyArray<{ source: string }>): string | null {
-  const last = entries[entries.length - 1];
-  return last ? last.source : null;
 }
 
 // Pre-compute the 3-hour barometric tendency in hPa from the pressure path's
@@ -386,8 +394,8 @@ async function queryBaseline(
     if (pathIdx < 0 || meanIdx < 0) return out;
     for (const row of res.dataset) {
       const path = row[pathIdx];
-      const mean = row[meanIdx];
-      if (typeof path === 'string' && typeof mean === 'number' && Number.isFinite(mean)) {
+      const mean = asFiniteNumber(row[meanIdx]);
+      if (typeof path === 'string' && mean != null) {
         out.set(path, mean);
       }
     }
@@ -405,27 +413,27 @@ interface ParsedForecast {
 const SEVERITY_LINE_RE = /^\s*SEVERITY:\s*(severe|moderate|minor|none)\s*$/i;
 const SEVERITY_PREFIX_RE = /^\s*SEVERITY:/i;
 
-// Parse the LLM output into its severity grade and the prose body. A valid
-// SEVERITY line is consumed; a malformed SEVERITY-prefixed line is dropped and
-// grades 'none'; text with no SEVERITY line at all is kept whole and grades
-// 'none' (the safe default: publish the outlook, raise no alarm).
+// Parse the LLM output: line 1 is the SEVERITY control line (consumed), the
+// rest is the report (a headline line followed by the outlook). A malformed
+// or missing SEVERITY line grades 'none' (the safe default: publish the
+// outlook, raise no alarm) and the whole reply is kept as the body. The
+// publisher's headlineOf then takes the report's first line for the alert.
 export function parseForecast(text: string): ParsedForecast {
-  const newlineIdx = text.indexOf('\n');
-  const firstLine = newlineIdx >= 0 ? text.slice(0, newlineIdx) : text;
-  const rest = newlineIdx >= 0 ? text.slice(newlineIdx + 1) : '';
-  const match = firstLine.match(SEVERITY_LINE_RE);
-  if (match?.[1]) {
-    return { grade: match[1].toLowerCase() as SeverityGrade, body: rest.trim() };
+  const nl = text.indexOf('\n');
+  const firstLine = (nl < 0 ? text : text.slice(0, nl)).trim();
+  const rest = nl < 0 ? '' : text.slice(nl + 1).trim();
+  const severityMatch = firstLine.match(SEVERITY_LINE_RE);
+  if (severityMatch?.[1]) {
+    return { grade: severityMatch[1].toLowerCase() as SeverityGrade, body: rest };
   }
-  if (SEVERITY_PREFIX_RE.test(firstLine)) {
-    return { grade: 'none', body: rest.trim() };
-  }
+  if (SEVERITY_PREFIX_RE.test(firstLine)) return { grade: 'none', body: rest };
   return { grade: 'none', body: text.trim() };
 }
 
 // Map an LLM grade plus the configured floor to a Signal K notification state.
 // The outlook always publishes; below the floor (or grade 'none') the state is
-// 'normal' so it stays readable in the data browser without raising an alarm.
+// 'nominal' (informational, no action) so it stays readable in the data
+// browser without raising an alarm.
 export function resolveForecastState(
   grade: SeverityGrade,
   floor: SeverityFloor,
@@ -433,5 +441,5 @@ export function resolveForecastState(
   const gradeRank = SEVERITY_GRADES.indexOf(grade);
   const floorRank = SEVERITY_GRADES.indexOf(floor);
   const raised = gradeRank > 0 && gradeRank >= floorRank;
-  return raised ? GRADE_STATE[grade] : 'normal';
+  return raised ? GRADE_STATE[grade] : 'nominal';
 }

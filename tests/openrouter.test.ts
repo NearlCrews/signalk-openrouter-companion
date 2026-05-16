@@ -272,6 +272,48 @@ describe('OpenRouterClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('retries when the 200 response body cannot be parsed', async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response('this is not json', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'parsed-ok' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    const c = makeClient();
+    const p = c.complete({ system: 's', user: 'u' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r.text).toBe('parsed-ok');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('does not wait out the backoff when the caller aborts mid-delay', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(jsonResponse(503, { error: { code: 503, message: 'down' } }));
+    // random()=1 pins the first backoff rung at its full 500ms.
+    const c = makeClient({ random: () => 1 });
+    const ctrl = new AbortController();
+    const p = c.complete({ system: 's', user: 'u', abortSignal: ctrl.signal });
+    const assertion = expect(p).rejects.toThrow();
+    // Let the first attempt fail and enter the 500ms backoff, then abort.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    ctrl.abort();
+    await assertion;
+    // The retry never fired: the backoff was cut short by the abort.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it('throws on an empty completion and does not retry', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, {

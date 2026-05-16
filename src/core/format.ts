@@ -36,3 +36,14 @@ export function fmtRatio(v: number | null | undefined, opts: FmtOpts = {}): stri
 export function asFiniteNumber(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
+
+// Clamp text to a maximum length at a word boundary. When the cut point has no
+// space in its second half, hard-cuts instead. With `ellipsis`, appends a
+// single ellipsis character and reserves one character of budget for it.
+export function clampAtWord(text: string, max: number, opts: { ellipsis?: boolean } = {}): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max - (opts.ellipsis ? 1 : 0));
+  const lastSpace = head.lastIndexOf(' ');
+  const cut = (lastSpace > max / 2 ? head.slice(0, lastSpace) : head).trimEnd();
+  return opts.ellipsis ? `${cut}…` : cut;
+}

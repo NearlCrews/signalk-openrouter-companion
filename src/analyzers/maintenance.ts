@@ -1,4 +1,8 @@
-import { resolveSystemPrompt } from '../core/cfg.js';
+import {
+  REPORT_BODY_INSTRUCTION,
+  REPORT_HEADLINE_INSTRUCTION,
+  resolveSystemPrompt,
+} from '../core/cfg.js';
 import { discoverEngineIds, WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
 import {
@@ -31,7 +35,9 @@ export const MAINTENANCE_DEFAULT_SYSTEM_PROMPT = [
   'All numeric values are in Signal K SI base units except where the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio. propulsion.*.revolutions is in Hz (rev/s, the documented Signal K unit for that path: do not convert to rad/s). Do not invent unit conversions you cannot derive.',
   'If any engine notification slot is non-normal, surface it prominently.',
   'If you cannot identify a cause from the provided fields, say "cause not determinable from telemetry" rather than guessing. Any claim must cite the field that supports it.',
-  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the session headline (engine, duration, what happened), then weave in alarm state and battery state if there is anything worth noting.',
+  REPORT_HEADLINE_INSTRUCTION,
+  REPORT_BODY_INSTRUCTION,
+  'Cover the engine session (engine, duration, what happened), then alarm state and battery state if there is anything worth noting.',
 ].join(' ');
 
 interface SessionSummary {

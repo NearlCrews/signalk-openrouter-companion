@@ -144,7 +144,11 @@ describe('plugin REST API', () => {
       const body = r.body as {
         openrouter: { apiKeySet: boolean; model: string; callsToday: number };
         questdb: { enabled: boolean; reachable: boolean | null };
-        analyzers: Array<{ id: string; enabled: boolean }>;
+        analyzers: Array<{
+          id: string;
+          enabled: boolean;
+          cron: { enabled: boolean; pattern: string };
+        }>;
       };
       expect(body.openrouter.apiKeySet).toBe(true);
       expect(body.openrouter.callsToday).toBe(0);
@@ -154,6 +158,12 @@ describe('plugin REST API', () => {
       const enabled = new Set(body.analyzers.filter((a) => a.enabled).map((a) => a.id));
       expect(enabled.has('maintenance')).toBe(true);
       expect(body.analyzers).toHaveLength(7);
+      // Each analyzer reports its cron trigger so the panel can render the
+      // frequency dropdown: event-driven analyzers carry a disabled cron,
+      // scheduled analyzers a pattern.
+      const byId = new Map(body.analyzers.map((a) => [a.id, a]));
+      expect(byId.get('maintenance')?.cron.enabled).toBe(false);
+      expect(byId.get('health')?.cron).toEqual({ enabled: true, pattern: '0 8 * * *' });
 
       vi.unstubAllGlobals();
       await plugin.stop();

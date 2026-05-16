@@ -2,6 +2,7 @@ import { appendFile } from 'node:fs/promises';
 import { SKVersion } from '@signalk/server-api';
 import type { TriggerCtx } from '../analyzers/Analyzer.js';
 import type { NotificationState } from '../types.js';
+import { clampAtWord } from './format.js';
 import { stringify } from './logger.js';
 import { notificationReportPath } from './paths.js';
 
@@ -29,6 +30,21 @@ function methodFor(state: NotificationState): string[] {
   return AUDIBLE_STATES.has(state) ? ['visual', 'sound'] : ['visual'];
 }
 
+// Defensive ceiling for the notification message. Analyzer prompts ask for an
+// <=80-char headline; this is well clear of that yet under the ~200-char point
+// where `signalk-nmea2000-emitter-cannon` hard-truncates the alert-text PGN.
+const HEADLINE_MAX_CHARS = 140;
+
+// The chartplotter alert text. Analyzer reports lead with a short headline
+// line followed by the full narrative; this returns just that first line
+// (clamped at a word boundary), leaving the full text for the JSONL log.
+export function headlineOf(text: string): string {
+  const trimmed = text.trimStart();
+  const nl = trimmed.indexOf('\n');
+  const firstLine = (nl < 0 ? trimmed : trimmed.slice(0, nl)).trim();
+  return clampAtWord(firstLine, HEADLINE_MAX_CHARS);
+}
+
 export interface SignalKNotificationDelta {
   context: string;
   updates: Array<{
@@ -42,6 +58,7 @@ export interface PublisherCfg {
   app: {
     handleMessage(pluginId: string, delta: unknown, skVersion?: SKVersion): void;
     selfContext?: string;
+    error?(msg: string): void;
   };
   pluginId: string;
   logPath: string;
@@ -77,7 +94,7 @@ export class ReportPublisher {
     const message = `${analyzerId} report unavailable: ${reason}`;
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(message, 'warn', now, notificationReportPath(analyzerId)),
+      this.makeDelta(headlineOf(message), 'warn', now, notificationReportPath(analyzerId)),
       SKVersion.v1,
     );
     await this.appendLog({
@@ -94,7 +111,7 @@ export class ReportPublisher {
     const now = new Date();
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(text, override.state, now, override.path, override.alertId),
+      this.makeDelta(headlineOf(text), override.state, now, override.path, override.alertId),
       SKVersion.v1,
     );
     await this.appendLog(this.buildEntry(text, meta, now));
@@ -162,7 +179,16 @@ export class ReportPublisher {
     };
   }
 
+  // The JSONL report log is best-effort bookkeeping. A write failure must not
+  // reject the publish: the notification delta has already gone out via
+  // handleMessage, and rejecting here would make the router treat a delivered
+  // report as an analysis failure and overwrite it with a warn. Surface the
+  // failure on the server log instead of swallowing it.
   private async appendLog(entry: JsonlEntry): Promise<void> {
-    await appendFile(this.cfg.logPath, `${JSON.stringify(entry)}\n`);
+    try {
+      await appendFile(this.cfg.logPath, `${JSON.stringify(entry)}\n`);
+    } catch (err) {
+      this.cfg.app.error?.(`report log append failed: ${stringify(err)}`);
+    }
   }
 }

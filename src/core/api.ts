@@ -47,6 +47,10 @@ export interface PluginRuntime {
   apiKeySet: boolean;
   router: TriggerRouter | null;
   logPath: string;
+  // Epoch ms when this runtime was built. SK rebuilds the runtime on every
+  // config save, so a changed value tells the config panel the restart it
+  // triggered has completed.
+  startedAt: number;
 }
 
 export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
@@ -70,12 +74,22 @@ export interface StatusResponse {
     maxCallsPerDay: number;
   };
   questdb: { enabled: boolean; reachable: boolean | null };
-  analyzers: Array<{ id: AnalyzerId; title: string; enabled: boolean }>;
+  analyzers: Array<{
+    id: AnalyzerId;
+    title: string;
+    enabled: boolean;
+    // The analyzer's cron trigger. `enabled: false` marks an event-driven
+    // analyzer with no schedule; the panel shows its frequency dropdown
+    // disabled rather than hiding it.
+    cron: { enabled: boolean; pattern: string };
+  }>;
+  startedAt: number;
 }
 
 function buildStatus(rt: PluginRuntime): StatusResponse {
   const enabled = new Set(rt.analyzers.map((a) => a.id));
   return {
+    startedAt: rt.startedAt,
     openrouter: {
       apiKeySet: rt.apiKeySet,
       model: rt.cfg.openrouter.model,
@@ -86,11 +100,15 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
       enabled: rt.cfg.questdb.enabled,
       reachable: !rt.cfg.questdb.enabled ? null : rt.questdbProbed ? rt.questdbLive !== null : null,
     },
-    analyzers: ANALYZER_IDS.map((id) => ({
-      id,
-      title: ANALYZER_TITLES[id],
-      enabled: enabled.has(id),
-    })),
+    analyzers: ANALYZER_IDS.map((id) => {
+      const cron = rt.cfg.analyzers[id].triggers.cron;
+      return {
+        id,
+        title: ANALYZER_TITLES[id],
+        enabled: enabled.has(id),
+        cron: { enabled: cron.enabled, pattern: cron.pattern },
+      };
+    }),
   };
 }
 

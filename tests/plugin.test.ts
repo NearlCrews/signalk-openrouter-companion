@@ -13,6 +13,7 @@ describe('plugin lifecycle', () => {
     app = makeMockApp(dir);
   });
   afterEach(async () => {
+    vi.useRealTimers();
     await cleanupTmpDir(dir);
   });
 
@@ -188,6 +189,28 @@ describe('plugin lifecycle', () => {
     expect(healthCall?.[2]).toBeUndefined();
 
     registerSpy.mockRestore();
+    await plugin.stop();
+  });
+
+  it('subscribes to a watched path that appears after start, via the rescan', async () => {
+    vi.useFakeTimers();
+    // Noon: no default cron ('0 8 * * *' etc.) fires within the advance below.
+    vi.setSystemTime(new Date('2026-05-10T12:00:00Z'));
+    app.availablePaths = ['propulsion.port.revolutions'];
+    const plugin = createPlugin(app as never);
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
+      () => {},
+    );
+    await plugin.whenReady();
+    expect(app.buses.has('electrical.alternators.1.voltage')).toBe(false);
+
+    // An alternator comes online after start(); the 60s rescan must pick it
+    // up. Before the fix only new battery banks were re-subscribed.
+    app.availablePaths = ['propulsion.port.revolutions', 'electrical.alternators.1.voltage'];
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(app.buses.has('electrical.alternators.1.voltage')).toBe(true);
+
     await plugin.stop();
   });
 

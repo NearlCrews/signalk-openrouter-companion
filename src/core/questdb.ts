@@ -11,6 +11,11 @@ export function escapeSqlLiteral(s: string): string {
   return s.replace(/'/g, "''");
 }
 
+// signalk-questdb writes the self vessel's rows with the literal context
+// 'self', not the full `vessels.urn:mrn:...` value that app.selfContext
+// returns. Analyzer queries must filter on this or they match no rows.
+export const QUESTDB_SELF_CONTEXT = 'self';
+
 // Build a name-to-index lookup for a QueryResult's columns. Cheaper and less
 // repetitive than calling r.columns.findIndex per field at the call site.
 export function indexColumns(r: QueryResult): Map<string, number> {

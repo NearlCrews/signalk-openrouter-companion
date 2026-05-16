@@ -24,6 +24,36 @@ export const S = {
   },
   // The very first section title sits flush against the top of the panel.
   sectionTitleFirst: { marginTop: 0 },
+  // Section header rendered as a full-width button so the whole row toggles a
+  // collapsible section. Mirrors sectionTitle's type scale and divider.
+  sectionToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: T.space.sm,
+    width: '100%',
+    marginTop: T.space.section,
+    marginBottom: T.space.lg,
+    padding: 0,
+    paddingBottom: T.space.sm,
+    background: 'none',
+    border: 'none',
+    borderBottom: `1px solid ${T.color.border}`,
+    borderRadius: 0,
+    fontSize: T.fontSize.md,
+    fontWeight: T.fontWeight.semibold,
+    fontFamily: 'inherit',
+    color: T.color.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    textAlign: 'left',
+  },
+  // Fixed-width disclosure triangle so the title text does not shift when the
+  // glyph swaps between the collapsed and expanded states.
+  sectionToggleChevron: {
+    display: 'inline-block',
+    width: T.fontSize.md,
+    color: T.color.textMuted,
+  },
   statsGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
@@ -128,6 +158,13 @@ export const S = {
     color: T.color.textSecondary,
     fontWeight: T.fontWeight.medium,
   },
+  // Read-only value shown in place of a control (event-driven analyzers have
+  // no schedule to pick).
+  staticValue: {
+    fontSize: T.fontSize.md,
+    color: T.color.textPrimary,
+    fontWeight: T.fontWeight.medium,
+  },
   hint: { fontSize: T.fontSize.xs, color: T.color.textMuted },
   testStatus: { fontSize: T.fontSize.sm, fontWeight: T.fontWeight.medium },
   testOk: { color: T.color.successText },
@@ -144,30 +181,61 @@ export const S = {
     color: T.color.textSecondary,
   },
   empty: { fontSize: T.fontSize.md, color: T.color.textMuted, padding: T.space.padEmpty },
-  analyzerRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: T.space.lg,
-    padding: T.space.padAnalyzerRow,
-    background: T.color.surface,
+  // A collapsible card per analyzer. The header (checkbox, title, status pill)
+  // is always visible; the body with controls renders only when expanded.
+  analyzerPanel: {
     border: `1px solid ${T.color.border}`,
     borderRadius: T.radius.md,
     marginBottom: T.space.sm,
+    overflow: 'hidden',
     fontSize: T.fontSize.md,
   },
-  analyzerTitle: {
-    flex: 1,
-    fontWeight: T.fontWeight.medium,
-    minWidth: 0,
-    cursor: 'pointer',
+  analyzerHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: T.space.md,
+    padding: T.space.padAnalyzerRow,
+    background: T.color.surface,
   },
-  // Pushes the per-row action buttons together as one group at the right.
+  // The chevron, title, and pill region: one full-width toggle button. Sits
+  // beside the enable checkbox, which stays a separate control.
+  analyzerHeaderToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: T.space.md,
+    flex: 1,
+    minWidth: 0,
+    padding: 0,
+    background: 'none',
+    border: 'none',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    color: 'inherit',
+    textAlign: 'left',
+  },
+  analyzerTitle: { flex: 1, fontWeight: T.fontWeight.medium, minWidth: 0 },
+  analyzerBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: T.space.lg,
+    padding: T.space.padAnalyzerRow,
+    borderTop: `1px solid ${T.color.border}`,
+    background: T.color.white,
+  },
+  // Stacked label-plus-select rows (frequency, severity floor) in the body.
+  analyzerSettings: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: T.space.sm,
+  },
+  // Per-analyzer action buttons.
   analyzerActions: {
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: T.space.sm,
   },
-  // Status pill on the analyzer row: carries a text label so state is not
+  // Status pill in the analyzer header: carries a text label so state is not
   // signalled by a color dot alone.
   analyzerPill: {
     fontSize: T.fontSize.xs,
@@ -178,21 +246,20 @@ export const S = {
     borderRadius: T.radius.sm,
     whiteSpace: 'nowrap',
   },
-  analyzerPillOn: { background: '#dcfce7', color: T.color.successText },
+  analyzerPillOn: { background: T.color.successBg, color: T.color.successText },
   analyzerPillOff: { background: T.color.surfaceSubtle, color: T.color.textMuted },
-  // Inline group holding the forecast severity-floor label and select.
-  severityGroup: {
+  // Inline label-plus-select group used by the frequency and severity-floor
+  // controls.
+  inlineControl: {
     display: 'flex',
     alignItems: 'center',
     gap: T.space.sm,
   },
+  // Reports / prompt sub-panel inside an expanded analyzer body.
   drawer: {
-    background: T.color.white,
+    background: T.color.surface,
     border: `1px solid ${T.color.border}`,
-    borderTop: 'none',
-    borderRadius: `0 0 ${T.radius.md}px ${T.radius.md}px`,
-    marginTop: -(T.space.sm + 1),
-    marginBottom: T.space.base,
+    borderRadius: T.radius.md,
     padding: T.space.lg,
   },
   reportEntry: {

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { batteryAlertPath } from '../src/core/paths.js';
-import { ReportPublisher } from '../src/core/publisher.js';
+import { headlineOf, ReportPublisher } from '../src/core/publisher.js';
 import {
   cleanupTmpDir,
   firstNotificationValue,
@@ -62,6 +62,22 @@ describe('ReportPublisher', () => {
     expect(entry.report).toBe('the report text');
   });
 
+  it('sends only the headline to the notification but logs the full report', async () => {
+    const full =
+      'Starter and console banks show no charging.\n\nThis session recorded steady voltages across all banks; the starter bank held 13.24 V at 70 percent state of charge with a modest discharge.';
+    await publisher.publishReport(
+      'health',
+      { kind: 'cron', firedAt: new Date('2026-05-10T08:00:00Z') },
+      full,
+    );
+    const v = firstNotificationValue(app.published[0]?.delta);
+    // The chartplotter notification carries only the short headline line.
+    expect(v.message).toBe('Starter and console banks show no charging.');
+    // The JSONL log keeps the full multi-paragraph report.
+    const entry = JSON.parse((await readFile(logPath, 'utf-8')).trim());
+    expect(entry.report).toBe(full);
+  });
+
   it('publishOnPath emits on the override path with the override state and audible method for alerts', async () => {
     const path = batteryAlertPath('house', 'lowSoc');
     await publisher.publishOnPath(
@@ -87,6 +103,22 @@ describe('ReportPublisher', () => {
     expect(v.alertId).toBe(0xabcd);
   });
 
+  it('still publishes and stays resolved when the JSONL log append fails', async () => {
+    // logPath points into a directory that does not exist: appendFile rejects.
+    const badPublisher = new ReportPublisher({
+      app,
+      pluginId: 'orc',
+      logPath: join(dir, 'no-such-subdir', 'reports.jsonl'),
+    });
+    await expect(
+      badPublisher.publishReport('health', { kind: 'cron', firedAt: new Date() }, 'body'),
+    ).resolves.toBeUndefined();
+    // The notification delta still went out, and the log failure surfaced on
+    // the server log rather than rejecting the publish.
+    expect(app.published).toHaveLength(1);
+    expect(app.appErrorMessages.some((m) => m.includes('log append failed'))).toBe(true);
+  });
+
   it('publishFailure emits a warn-state notification on the analyzer report path', async () => {
     await publisher.publishFailure(
       'maintenance',
@@ -103,5 +135,21 @@ describe('ReportPublisher', () => {
     // warn state is audible so the chartplotter user actually notices the LLM failed.
     expect(v.method).toEqual(['visual', 'sound']);
     expect(v.message).toContain('upstream 503');
+  });
+});
+
+describe('headlineOf', () => {
+  it('returns the first line of a multi-line report', () => {
+    expect(headlineOf('A short headline.\n\nThe long body paragraph.')).toBe('A short headline.');
+  });
+
+  it('returns a single-line report unchanged', () => {
+    expect(headlineOf('Just one line.')).toBe('Just one line.');
+  });
+
+  it('clamps an over-long headline at a word boundary', () => {
+    const out = headlineOf(`${'word '.repeat(60)}end`);
+    expect(out.length).toBeLessThanOrEqual(140);
+    expect(out.endsWith(' ')).toBe(false);
   });
 });

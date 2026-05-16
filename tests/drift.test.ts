@@ -167,6 +167,11 @@ describe('DriftAnalyzer', () => {
         expect(sql).toContain('propulsion.port.revolutions');
         expect(sql).toContain('propulsion.port.fuel.rate');
         expect(sql).toContain('navigation.speedOverGround');
+        // The bin CASE is derived from BIN_DEFS: the finite edges and the wot
+        // fallthrough must appear so server-side binning matches the bin defs.
+        expect(sql).toContain("WHEN r.value < 15 THEN 'idle'");
+        expect(sql).toContain("WHEN r.value < 75 THEN 'topEnd'");
+        expect(sql).toContain("ELSE 'wot'");
       }
     });
 

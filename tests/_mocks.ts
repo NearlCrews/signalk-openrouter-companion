@@ -192,6 +192,7 @@ export interface MakePluginRuntimeOpts {
   questdbLive?: PluginRuntime['questdbLive'];
   questdbProbed?: boolean;
   router?: PluginRuntime['router'];
+  startedAt?: number;
   llm?: PluginRuntime['llm'];
   budget?: PluginRuntime['budget'];
   logPath?: string;
@@ -217,6 +218,7 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
     apiKeySet: opts.apiKeySet ?? true,
     router: opts.router ?? null,
     logPath: opts.logPath ?? '/tmp/unused.jsonl',
+    startedAt: opts.startedAt ?? 0,
   };
 }
 

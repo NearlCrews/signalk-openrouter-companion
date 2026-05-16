@@ -189,7 +189,6 @@ describe('AgingAnalyzer', () => {
     if (!bank) throw new Error('expected at least one bank');
     expect(bank.id).toBe('house');
     expect(r?.generatedAt).toBe('2026-05-11T08:00:00.000Z');
-    expect(r?.selfContext).toBe(app.selfContext);
 
     expect(bank.windows.map((w) => w.days)).toEqual([30, 90]);
     const w30 = windowStats(bank, 30);
@@ -342,7 +341,6 @@ describe('AgingAnalyzer', () => {
     const a = new AgingAnalyzer(makeCfg());
     const out = a.buildPrompt({
       generatedAt: '2026-05-11T08:00:00.000Z',
-      selfContext: 'vessels.urn:mrn:signalk:uuid:test',
       banks: [
         {
           id: 'house',

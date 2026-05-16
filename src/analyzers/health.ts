@@ -1,4 +1,8 @@
-import { resolveSystemPrompt } from '../core/cfg.js';
+import {
+  REPORT_BODY_INSTRUCTION,
+  REPORT_HEADLINE_INSTRUCTION,
+  resolveSystemPrompt,
+} from '../core/cfg.js';
 import { fmtNumber } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
 import { asTreeMap, readBankSnapshot, readNumberAt } from '../core/skNode.js';
@@ -20,7 +24,9 @@ export const HEALTH_DEFAULT_SYSTEM_PROMPT = [
   'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
   'If you cannot identify a cause from the data, say so rather than guess.',
   'Surface anything that looks unusual: voltage outside an obvious range for the bank, cell imbalance over the configured threshold, SoC drifting low.',
-  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points within the paragraph. Lead with the headline (overall state across all banks), then mention each bank by name in one tight clause covering SoC, voltage, balance, and anything notable.',
+  REPORT_HEADLINE_INSTRUCTION,
+  REPORT_BODY_INSTRUCTION,
+  'Mention each bank by name in one tight clause covering SoC, voltage, balance, and anything notable.',
 ].join(' ');
 
 interface CellSnapshot {

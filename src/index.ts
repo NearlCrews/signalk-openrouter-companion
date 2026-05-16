@@ -18,12 +18,7 @@ import {
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
-import {
-  bankPathPrefix,
-  enginePaths,
-  WEATHER_CANONICAL_PATHS,
-  WEATHER_EXTENSION_PATHS,
-} from './core/paths.js';
+import { enginePaths, WEATHER_CANONICAL_PATHS, WEATHER_EXTENSION_PATHS } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
@@ -221,6 +216,7 @@ export default function createPlugin(app: ServerApiLike): {
               apiKeySet: true,
               router,
               logPath,
+              startedAt: Date.now(),
             };
             // Register one Cron job per unique (pattern, timezone) pair, each
             // carrying the analyzers that share it. Several analyzers can share
@@ -327,6 +323,9 @@ export default function createPlugin(app: ServerApiLike): {
         const engineIds = new Set(discoverEngineIds(available));
         const bankIds = new Set(discoverBankIds(available));
         const engineRpmPaths = new Set<string>();
+        // Watched paths already subscribed: lets the rescan pick up a path
+        // that appeared after start() without ever re-subscribing one.
+        const watchedPaths = new Set<string>();
         const watched = discoverWatchedPaths(
           available,
           cfg.analyzers.maintenance.extraWatchedPaths,
@@ -358,6 +357,7 @@ export default function createPlugin(app: ServerApiLike): {
         };
 
         const subscribeWatchedPath = (path: string): void => {
+          watchedPaths.add(path);
           // Match the path once at subscribe time so the per-delta callback
           // skips two regex executions per delta on a path that fires often.
           const socMatch = path.match(SOC_PATH_RE);
@@ -417,25 +417,22 @@ export default function createPlugin(app: ServerApiLike): {
               subscribeEnginePath(id, enginePaths(id).rpm);
               changed = true;
             }
-            const newBanks: string[] = [];
             for (const id of discoverBankIds(fresh)) {
               if (bankIds.has(id)) continue;
               bankIds.add(id);
-              newBanks.push(id);
               changed = true;
             }
-            if (newBanks.length > 0) {
-              const freshWatched = discoverWatchedPaths(
-                fresh,
-                cfg.analyzers.maintenance.extraWatchedPaths,
-              );
-              for (const id of newBanks) {
-                const prefix = bankPathPrefix(id);
-                for (const path of freshWatched) {
-                  if (engineRpmPaths.has(path)) continue;
-                  if (path.startsWith(prefix)) subscribeWatchedPath(path);
-                }
-              }
+            // Subscribe any watched path that appeared since the last scan: a
+            // battery bank, alternator, charger, or fuel tank that came online
+            // after start().
+            const freshWatched = discoverWatchedPaths(
+              fresh,
+              cfg.analyzers.maintenance.extraWatchedPaths,
+            );
+            for (const path of freshWatched) {
+              if (engineRpmPaths.has(path) || watchedPaths.has(path)) continue;
+              subscribeWatchedPath(path);
+              changed = true;
             }
             if (changed) {
               app.setPluginStatus(runningStatus(analyzers.length));

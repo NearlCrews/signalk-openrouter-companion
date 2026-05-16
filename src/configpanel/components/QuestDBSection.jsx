@@ -5,7 +5,6 @@ export function QuestDBSection({ cfg, set, testResult, onTest, testing }) {
   const noUrl = !q.url || q.url.trim() === '';
   return (
     <>
-      <div style={S.sectionTitle}>QuestDB enrichment</div>
       <div style={S.fieldRow}>
         <label htmlFor="orc-qdb-enabled" style={S.fieldLabel}>
           Enabled

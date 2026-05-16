@@ -1,8 +1,13 @@
-import { clampPositiveInt, resolveSystemPrompt } from '../core/cfg.js';
+import {
+  clampPositiveInt,
+  REPORT_BODY_INSTRUCTION,
+  REPORT_HEADLINE_INSTRUCTION,
+  resolveSystemPrompt,
+} from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
 import { asFiniteNumber, fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
-import { escapeSqlLiteral, indexColumns } from '../core/questdb.js';
+import { escapeSqlLiteral, indexColumns, QUESTDB_SELF_CONTEXT } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import {
   AGING_DEFAULT_LONG_DAYS,
@@ -29,7 +34,9 @@ export const AGING_DEFAULT_SYSTEM_PROMPT = [
   'Rank banks by capacity loss per 100 cycles, worst first. Flag any bank degrading 3 to 4 times the median rate as an outlier worth investigating.',
   "When the longest window has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient. Note that this is a linear-fit approximation; LiFePO4 capacity typically holds steady for most of the pack's life and then drops past a knee, so the projection will run optimistic late in life.",
   'Stay with the numbers in the data. If a bank is degrading within normal LiFePO4 expectations, say so plainly.',
-  'Output is rendered in the Signal K data browser as a single string. Produce one short paragraph of plain prose (80-150 words). Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points. Lead with the headline (which bank is aging fastest, or "all banks within normal range"), then mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
+  REPORT_HEADLINE_INSTRUCTION,
+  REPORT_BODY_INSTRUCTION,
+  'Mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
 ].join(' ');
 
 interface PathSummary {
@@ -62,7 +69,6 @@ interface BankAging {
 
 export interface AgingInput extends AnalysisInput {
   generatedAt: string;
-  selfContext: string;
   banks: BankAging[];
 }
 
@@ -91,7 +97,6 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const bankIds = discoverBankIds(Array.from(deps.buffer.pathKeys()));
     if (bankIds.length === 0) return null;
 
-    const selfContext = deps.app.selfContext ?? '';
     const questdb = deps.questdb;
 
     const allPaths: string[] = [];
@@ -105,7 +110,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const summariesByWindow = await Promise.all(
       this.windowDays.map(async (days) => ({
         days,
-        summaries: await queryWindow(questdb, selfContext, allPaths, days),
+        summaries: await queryWindow(questdb, QUESTDB_SELF_CONTEXT, allPaths, days),
       })),
     );
 
@@ -127,7 +132,6 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     if (banks.length === 0) return null;
     return {
       generatedAt: ctx.firedAt.toISOString(),
-      selfContext,
       banks,
     };
   }

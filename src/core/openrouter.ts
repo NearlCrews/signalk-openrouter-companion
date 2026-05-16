@@ -43,8 +43,17 @@ interface ApiErrorBody {
   error?: { code?: number; message?: string; metadata?: unknown };
 }
 
+// Statuses worth a retry: rate limiting and gateway/server faults. Every other
+// non-200 status is terminal and throws without a retry.
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
-const TERMINAL_STATUSES = new Set([400, 401, 402, 403, 408, 413, 422]);
+
+const MAX_RETRIES = 3;
+
+// One attempt's terminal outcome: either a usable result, or a retry signal
+// carrying the error to throw once the retry budget is exhausted.
+type Attempt =
+  | { kind: 'result'; result: CompleteResult }
+  | { kind: 'retry'; error: OpenRouterError; retryAfterMs: number | null };
 
 export class OpenRouterClient {
   private readonly random: () => number;
@@ -54,10 +63,21 @@ export class OpenRouterClient {
   }
 
   async complete(args: CompleteArgs): Promise<CompleteResult> {
-    return this.doCall(args, 0);
+    for (let attempt = 0; ; attempt += 1) {
+      const outcome = await this.attempt(args);
+      if (outcome.kind === 'result') return outcome.result;
+      if (attempt >= MAX_RETRIES) throw outcome.error;
+      // delay() rejects with the caller's abort reason if the signal trips
+      // mid-backoff, so a shutdown does not wait out the full delay first.
+      await delay(backoffMs(attempt, outcome.retryAfterMs, this.random), args.abortSignal);
+    }
   }
 
-  private async doCall(args: CompleteArgs, attempt: number): Promise<CompleteResult> {
+  // A single request: its own timeout and abort wiring, both cleaned up before
+  // the caller decides whether to retry. Throws for terminal failures (a
+  // terminal HTTP status, an empty completion, a caller abort); returns a retry
+  // signal for transient HTTP statuses and transport faults.
+  private async attempt(args: CompleteArgs): Promise<Attempt> {
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), this.cfg.requestTimeoutMs);
     const onCallerAbort = (): void => ctrl.abort();
@@ -86,52 +106,47 @@ export class OpenRouterClient {
           }),
         });
       } catch (err) {
-        // Caller asked to stop: propagate without retry.
-        if (args.abortSignal?.aborted) throw err;
-        // Transport failure or the internal timeout abort: retry like a transient HTTP error.
-        const message = err instanceof Error ? err.message : String(err);
-        return this.retryOrThrow(
-          args,
-          attempt,
-          null,
-          new OpenRouterError(0, message, undefined, true),
-        );
+        return transportRetry(args, err);
       }
 
       if (res.status === 200) {
-        const body = (await res.json()) as ApiResponse;
+        let body: ApiResponse;
+        try {
+          body = (await res.json()) as ApiResponse;
+        } catch (err) {
+          // The timeout firing mid-body-read, or a truncated/malformed
+          // payload: same transient treatment as a failed fetch.
+          return transportRetry(args, err);
+        }
         const text = body.choices?.[0]?.message?.content ?? '';
         if (text.trim() === '') {
           throw new OpenRouterError(200, 'empty completion', body, false);
         }
         const u = body.usage ?? {};
         return {
-          text,
-          model: body.model ?? this.cfg.model,
-          usage: {
-            promptTokens: u.prompt_tokens ?? 0,
-            completionTokens: u.completion_tokens ?? 0,
-            totalTokens: u.total_tokens ?? 0,
+          kind: 'result',
+          result: {
+            text,
+            model: body.model ?? this.cfg.model,
+            usage: {
+              promptTokens: u.prompt_tokens ?? 0,
+              completionTokens: u.completion_tokens ?? 0,
+              totalTokens: u.total_tokens ?? 0,
+            },
+            raw: body,
           },
-          raw: body,
         };
       }
 
       const errBody = await safeJson(res);
       const message = errBody?.error?.message ?? `HTTP ${res.status}`;
       const metadata = errBody?.error?.metadata;
-
-      if (TERMINAL_STATUSES.has(res.status)) {
-        throw new OpenRouterError(res.status, message, metadata, false);
-      }
       if (TRANSIENT_STATUSES.has(res.status)) {
-        const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
-        return this.retryOrThrow(
-          args,
-          attempt,
-          retryAfter,
-          new OpenRouterError(res.status, message, metadata, true),
-        );
+        return {
+          kind: 'retry',
+          error: new OpenRouterError(res.status, message, metadata, true),
+          retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
+        };
       }
       throw new OpenRouterError(res.status, message, metadata, false);
     } finally {
@@ -139,19 +154,19 @@ export class OpenRouterClient {
       args.abortSignal?.removeEventListener('abort', onCallerAbort);
     }
   }
+}
 
-  // Shared retry tail for transient HTTP statuses and transport failures:
-  // back off and recurse while attempts remain, otherwise throw `exhausted`.
-  private async retryOrThrow(
-    args: CompleteArgs,
-    attempt: number,
-    retryAfterMs: number | null,
-    exhausted: OpenRouterError,
-  ): Promise<CompleteResult> {
-    if (attempt >= 3) throw exhausted;
-    await delay(backoffMs(attempt, retryAfterMs, this.random));
-    return this.doCall(args, attempt + 1);
-  }
+// Classify a thrown fetch or body-read error. A caller-requested abort
+// propagates untouched; anything else (a transport fault or the internal
+// timeout abort) becomes a transient retry signal.
+function transportRetry(args: CompleteArgs, err: unknown): Attempt {
+  if (args.abortSignal?.aborted) throw err;
+  const message = err instanceof Error ? err.message : String(err);
+  return {
+    kind: 'retry',
+    error: new OpenRouterError(0, message, undefined, true),
+    retryAfterMs: null,
+  };
 }
 
 async function safeJson(res: Response): Promise<ApiErrorBody | null> {
@@ -176,6 +191,23 @@ function backoffMs(attempt: number, retryAfterMs: number | null, random: () => n
   return Math.max(jitteredBase, retryAfterMs ?? 0);
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+// Resolve after `ms`, or reject early with the caller's abort reason if the
+// signal trips first. Used for the inter-attempt backoff wait.
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }

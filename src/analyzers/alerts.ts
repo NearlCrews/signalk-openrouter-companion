@@ -1,5 +1,5 @@
 import { resolveSystemPrompt } from '../core/cfg.js';
-import { fmtRatio, fmtUnit } from '../core/format.js';
+import { clampAtWord, fmtRatio, fmtUnit } from '../core/format.js';
 import {
   alertIdFor,
   BATTERIES_PARENT_PATH,
@@ -26,11 +26,7 @@ import { ANALYZER_TITLES } from './ids.js';
 const MAX_ALERT_MESSAGE_CHARS = 64;
 
 function truncateForN2K(message: string): string {
-  if (message.length <= MAX_ALERT_MESSAGE_CHARS) return message;
-  const head = message.slice(0, MAX_ALERT_MESSAGE_CHARS - 1);
-  const lastSpace = head.lastIndexOf(' ');
-  const cut = lastSpace > MAX_ALERT_MESSAGE_CHARS / 2 ? head.slice(0, lastSpace) : head;
-  return `${cut.trimEnd()}…`;
+  return clampAtWord(message, MAX_ALERT_MESSAGE_CHARS, { ellipsis: true });
 }
 
 function isBatteryEventKind(s: string): s is BatteryEventKind {

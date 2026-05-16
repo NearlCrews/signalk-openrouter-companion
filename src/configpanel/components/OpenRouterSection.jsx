@@ -12,7 +12,6 @@ export function OpenRouterSection({ cfg, set, models, modelsState, loadModels })
   const hint = MODELS_HINT[modelsState] ?? `${models.length} models available (autocomplete)`;
   return (
     <>
-      <div style={S.sectionTitle}>OpenRouter</div>
       <div style={S.fieldRow}>
         <label htmlFor="orc-api-key" style={S.fieldLabel}>
           API key

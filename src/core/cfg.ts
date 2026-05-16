@@ -1,6 +1,6 @@
-// Sanitize a numeric configuration value: must be a finite integer >= 1.
-// Caller-supplied min/max clamp on top of that. Falls back to `fallback` on
-// non-finite, non-numeric, or below-1 input.
+// Sanitize a numeric configuration value. Falls back to `fallback` when the
+// input is not a finite number >= 1; otherwise it is truncated to an integer
+// and clamped into the caller-supplied min/max range.
 export function clampPositiveInt(
   v: number,
   fallback: number,
@@ -22,3 +22,16 @@ export function resolveSystemPrompt(custom: string | undefined, fallback: string
   const trimmed = custom?.trim();
   return trimmed ? trimmed : fallback;
 }
+
+// Shared opening line for every long-form report prompt. The first line of the
+// reply becomes the chartplotter notification (see headlineOf in publisher.ts),
+// so it must be short and plain; the full report is logged to disk. Kept
+// identical across analyzers so the publisher's headline split has one
+// contract to rely on.
+export const REPORT_HEADLINE_INSTRUCTION =
+  'Begin your reply with a single headline line, then an empty line, then the full report. The headline is at most 80 characters of plain, conversational language that a person reads at a glance like a phone notification: it states only the single most important takeaway, with no statistics, no lists, and no jargon.';
+
+// Shared body-format clause for the long-form report prompts. Each analyzer
+// appends its own content-specific sentence after this.
+export const REPORT_BODY_INSTRUCTION =
+  'The full report is one short paragraph of plain prose (80 to 150 words) rendered in the Signal K data browser. Do not use markdown: no headers, no bullets, no horizontal rules, no section dividers. Use semicolons and commas to separate points.';
