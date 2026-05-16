@@ -5,6 +5,7 @@ import { AlertAnalyzer } from './alerts.js';
 import { DriftAnalyzer } from './drift.js';
 import { HealthAnalyzer } from './health.js';
 import type { AnalyzerId } from './ids.js';
+import { LivenessAnalyzer } from './liveness.js';
 import { MaintenanceAnalyzer } from './maintenance.js';
 
 // Per-id factory map. Each factory receives the analyzer's cfg sub-object
@@ -44,6 +45,12 @@ export const ANALYZER_FACTORIES: AnalyzerFactories = {
   alerts: (c) =>
     new AlertAnalyzer({
       triggers: c.triggers,
+      customSystemPrompt: c.customSystemPrompt,
+    }),
+  liveness: (c) =>
+    new LivenessAnalyzer({
+      triggers: c.triggers,
+      stalenessThresholdSec: c.stalenessThresholdSec,
       customSystemPrompt: c.customSystemPrompt,
     }),
 };

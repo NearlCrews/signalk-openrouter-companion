@@ -15,6 +15,8 @@ export const AGING_SUPPORTED_EVENTS = [] as const;
 
 export const DRIFT_SUPPORTED_EVENTS = [] as const;
 
+export const LIVENESS_SUPPORTED_EVENTS = [] as const;
+
 export const ALERTS_SUPPORTED_EVENTS = [
   'low-soc-enter',
   'low-soc-exit',
@@ -28,6 +30,11 @@ export const ALERTS_SUPPORTED_EVENTS = [
 export const AGING_DEFAULT_SHORT_DAYS = 30;
 export const AGING_DEFAULT_LONG_DAYS = 90;
 export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
+
+// Liveness-analyzer default: a watched path with no sample newer than this
+// many seconds is reported stale. Source-of-truth for the schema default and
+// the analyzer constructor's clamp fallback.
+export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 
 // Signal K notification states (the full ALARM_STATE enum). The publisher's
 // typed `state` argument and per-analyzer publish overrides both resolve to
@@ -84,6 +91,12 @@ export interface PluginOptions {
       socExitHysteresis: number;
       cellImbalanceV: number;
       imbalanceSettleSec: number;
+      customSystemPrompt?: string;
+    };
+    liveness: {
+      enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
+      stalenessThresholdSec: number;
       customSystemPrompt?: string;
     };
   };
@@ -162,6 +175,15 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       cellImbalanceV: 0.05,
       imbalanceSettleSec: 60,
     },
+    liveness: {
+      enabled: true,
+      triggers: {
+        cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
+        put: { enabled: true, path: pluginPutPath('liveness') },
+        events: [],
+      },
+      stalenessThresholdSec: LIVENESS_DEFAULT_STALENESS_SEC,
+    },
   },
   output: {
     logFilename: 'reports.jsonl',
@@ -204,6 +226,7 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
         aging?: WithPartialTriggers<PluginOptions['analyzers']['aging']>;
         drift?: WithPartialTriggers<PluginOptions['analyzers']['drift']>;
         alerts?: WithPartialTriggers<PluginOptions['analyzers']['alerts']>;
+        liveness?: WithPartialTriggers<PluginOptions['analyzers']['liveness']>;
       }
     | undefined;
   return {
@@ -218,6 +241,7 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
       aging: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.aging, inputAnalyzers?.aging),
       drift: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.drift, inputAnalyzers?.drift),
       alerts: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.alerts, inputAnalyzers?.alerts),
+      liveness: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.liveness, inputAnalyzers?.liveness),
     },
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
   };

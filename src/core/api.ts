@@ -5,6 +5,7 @@ import { ALERTS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/alerts.js';
 import { DRIFT_DEFAULT_SYSTEM_PROMPT } from '../analyzers/drift.js';
 import { HEALTH_DEFAULT_SYSTEM_PROMPT } from '../analyzers/health.js';
 import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '../analyzers/ids.js';
+import { LIVENESS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/liveness.js';
 import { MAINTENANCE_DEFAULT_SYSTEM_PROMPT } from '../analyzers/maintenance.js';
 import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
@@ -53,6 +54,7 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
   aging: AGING_DEFAULT_SYSTEM_PROMPT,
   drift: DRIFT_DEFAULT_SYSTEM_PROMPT,
   alerts: ALERTS_DEFAULT_SYSTEM_PROMPT,
+  liveness: LIVENESS_DEFAULT_SYSTEM_PROMPT,
 };
 
 const REPORTS_DEFAULT_LIMIT = 10;
