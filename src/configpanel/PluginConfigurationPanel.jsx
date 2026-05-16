@@ -4,8 +4,21 @@ import { AnalyzerRow, DEFAULT_SEVERITY_FLOOR } from './components/AnalyzerRow.js
 import { OpenRouterSection } from './components/OpenRouterSection.jsx';
 import { QuestDBSection } from './components/QuestDBSection.jsx';
 import { StatusBlock } from './components/StatusBlock.jsx';
-import { btn, S } from './styles.js';
+import { btn, btnClass, PANEL_CLASS, PANEL_CSS, S } from './styles.js';
 import { jsonEqual } from './utils.js';
+
+// Inject the scoped focus/hover stylesheet once. It carries the interactive
+// states (focus rings, button hover) that inline styles cannot express.
+function useScopedStyles() {
+  useEffect(() => {
+    const id = 'orc-config-panel-styles';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = PANEL_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
 
 export default function PluginConfigurationPanel({ configuration, save }) {
   const [status, setStatus] = useState(null);
@@ -20,6 +33,8 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const [qdbTest, setQdbTest] = useState(null);
   const [qdbTesting, setQdbTesting] = useState(false);
   const [analyzerUi, setAnalyzerUi] = useState({});
+
+  useScopedStyles();
 
   // Reset edit buffer + pristine ref whenever the host pushes a new config.
   useEffect(() => {
@@ -62,6 +77,14 @@ export default function PluginConfigurationPanel({ configuration, save }) {
 
   const patchUi = (id, patch) =>
     setAnalyzerUi((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
+
+  // Clear the transient saved-confirmation notice after a few seconds so it
+  // does not linger as stale text once the restart has settled.
+  useEffect(() => {
+    if (!savedNotice) return;
+    const handle = setTimeout(() => setSavedNotice(null), 6000);
+    return () => clearTimeout(handle);
+  }, [savedNotice]);
 
   const onSave = () => {
     save(cfg);
@@ -184,8 +207,8 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const analyzersList = status?.analyzers ?? [];
 
   return (
-    <div style={S.root}>
-      <div style={S.sectionTitle}>Live status</div>
+    <div className={PANEL_CLASS} style={S.root}>
+      <div style={{ ...S.sectionTitle, ...S.sectionTitleFirst }}>Live status</div>
       <StatusBlock
         status={status}
         statusError={statusError}
@@ -211,6 +234,13 @@ export default function PluginConfigurationPanel({ configuration, save }) {
       />
 
       <div style={S.sectionTitle}>Analyzers</div>
+      {analyzersList.length === 0 && (
+        <div style={S.empty}>
+          {status
+            ? 'No analyzers reported by the plugin yet.'
+            : 'Analyzer list loads once the plugin is running.'}
+        </div>
+      )}
       <div>
         {analyzersList.map((a) => (
           <AnalyzerRow
@@ -238,13 +268,23 @@ export default function PluginConfigurationPanel({ configuration, save }) {
       <div style={S.saveBar}>
         <button
           type="button"
-          style={btn(S.btnSave, !dirty && S.btnDisabled)}
+          className={btnClass(false)}
+          style={btn(S.btnSave, !dirty && S.btnSaveIdle, !dirty && S.btnDisabled)}
           onClick={onSave}
           disabled={!dirty}
         >
-          {dirty ? 'Save configuration' : 'No changes'}
+          {dirty ? 'Save configuration' : 'Saved'}
         </button>
-        {savedNotice && <span style={{ ...S.testStatus, ...S.testOk }}>{savedNotice}</span>}
+        {dirty && <span style={S.saveHint}>Unsaved changes</span>}
+        {savedNotice && (
+          <span
+            style={{ ...S.testStatus, ...S.testOk, ...S.saveSpacer }}
+            role="status"
+            aria-live="polite"
+          >
+            {savedNotice}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -7,16 +7,23 @@ export const S = {
     fontFamily: T.font.system,
     color: T.color.textPrimary,
     padding: T.space.padRoot,
+    // Leave room for the sticky save bar so the last analyzer row is never
+    // hidden behind it when scrolled to the bottom.
+    paddingBottom: 72,
   },
   sectionTitle: {
     fontSize: T.fontSize.md,
     fontWeight: T.fontWeight.semibold,
-    color: T.color.textMuted,
+    color: T.color.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
-    marginBottom: T.space.base,
+    marginBottom: T.space.lg,
     marginTop: T.space.section,
+    paddingBottom: T.space.sm,
+    borderBottom: `1px solid ${T.color.border}`,
   },
+  // The very first section title sits flush against the top of the panel.
+  sectionTitleFirst: { marginTop: 0 },
   statsGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
@@ -53,21 +60,29 @@ export const S = {
   }),
   btn: {
     padding: T.space.padBtn,
-    border: 'none',
+    border: '1px solid transparent',
     borderRadius: T.radius.sm,
     fontSize: T.fontSize.sm,
     fontWeight: T.fontWeight.semibold,
     background: T.color.primary,
     color: T.color.white,
     cursor: 'pointer',
+    // Match the host transition feel so hover/active changes are not jarring.
+    transition: 'background 0.12s ease, box-shadow 0.12s ease',
   },
   btnSecondary: {
     background: T.color.surfaceSubtle,
     color: T.color.secondaryText,
     border: `1px solid ${T.color.secondaryBorder}`,
   },
-  btnSave: { padding: T.space.padBtnSave, fontSize: T.fontSize.md },
-  btnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
+  btnSave: {
+    padding: T.space.padBtnSave,
+    fontSize: T.fontSize.md,
+    background: T.color.success,
+  },
+  // The save button when there is nothing to save: muted, clearly inert.
+  btnSaveIdle: { background: T.color.disabled },
+  btnDisabled: { opacity: 0.55, cursor: 'not-allowed' },
   inlineRow: {
     display: 'flex',
     alignItems: 'center',
@@ -98,20 +113,25 @@ export const S = {
     color: T.color.textPrimary,
     minWidth: 220,
   },
-  inputSmall: { minWidth: 80, width: 100 },
+  inputSmall: { minWidth: 0, width: 100 },
   select: {
     padding: T.space.padSelect,
     borderRadius: T.radius.sm,
     border: `1px solid ${T.color.borderStrong}`,
-    fontSize: T.fontSize.sm,
+    fontSize: T.fontSize.md,
     background: T.color.white,
     color: T.color.textPrimary,
+    cursor: 'pointer',
   },
-  selectLabel: { fontSize: T.fontSize.xs, color: T.color.textMuted },
+  selectLabel: {
+    fontSize: T.fontSize.sm,
+    color: T.color.textSecondary,
+    fontWeight: T.fontWeight.medium,
+  },
   hint: { fontSize: T.fontSize.xs, color: T.color.textMuted },
-  testStatus: { fontSize: T.fontSize.sm },
-  testOk: { color: T.color.success },
-  testErr: { color: T.color.danger },
+  testStatus: { fontSize: T.fontSize.sm, fontWeight: T.fontWeight.medium },
+  testOk: { color: T.color.successText },
+  testErr: { color: T.color.dangerText },
   pre: {
     background: T.color.surface,
     border: `1px solid ${T.color.border}`,
@@ -127,7 +147,7 @@ export const S = {
   analyzerRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: T.space.base,
+    gap: T.space.lg,
     padding: T.space.padAnalyzerRow,
     background: T.color.surface,
     border: `1px solid ${T.color.border}`,
@@ -135,19 +155,44 @@ export const S = {
     marginBottom: T.space.sm,
     fontSize: T.fontSize.md,
   },
-  analyzerTitle: { flex: 1, fontWeight: T.fontWeight.medium },
-  analyzerState: {
+  analyzerTitle: {
+    flex: 1,
+    fontWeight: T.fontWeight.medium,
+    minWidth: 0,
+    cursor: 'pointer',
+  },
+  // Pushes the per-row action buttons together as one group at the right.
+  analyzerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: T.space.sm,
+  },
+  // Status pill on the analyzer row: carries a text label so state is not
+  // signalled by a color dot alone.
+  analyzerPill: {
     fontSize: T.fontSize.xs,
-    color: T.color.textMuted,
-    minWidth: 60,
-    textAlign: 'right',
+    fontWeight: T.fontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    padding: '2px 8px',
+    borderRadius: T.radius.sm,
+    whiteSpace: 'nowrap',
+  },
+  analyzerPillOn: { background: '#dcfce7', color: T.color.successText },
+  analyzerPillOff: { background: T.color.surfaceSubtle, color: T.color.textMuted },
+  // Inline group holding the forecast severity-floor label and select.
+  severityGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: T.space.sm,
   },
   drawer: {
     background: T.color.white,
     border: `1px solid ${T.color.border}`,
-    borderRadius: T.radius.md,
-    marginTop: -T.space.xxs,
-    marginBottom: T.space.md,
+    borderTop: 'none',
+    borderRadius: `0 0 ${T.radius.md}px ${T.radius.md}px`,
+    marginTop: -(T.space.sm + 1),
+    marginBottom: T.space.base,
     padding: T.space.lg,
   },
   reportEntry: {
@@ -161,7 +206,7 @@ export const S = {
     marginTop: T.space.xs,
     whiteSpace: 'pre-wrap',
   },
-  reportFailure: { fontSize: T.fontSize.sm, color: T.color.danger, marginTop: T.space.xs },
+  reportFailure: { fontSize: T.fontSize.sm, color: T.color.dangerText, marginTop: T.space.xs },
   fireResult: { fontSize: T.fontSize.xs, marginLeft: T.space.xs },
   textarea: {
     width: '100%',
@@ -187,7 +232,18 @@ export const S = {
     display: 'flex',
     alignItems: 'center',
     gap: T.space.lg,
+    // Lift the bar off the content scrolling beneath it.
+    boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.06)',
   },
+  // Reserves space and keeps the dirty hint left of the save button so the
+  // button does not shift horizontally when the hint appears.
+  saveHint: {
+    fontSize: T.fontSize.sm,
+    color: T.color.warningText,
+    fontWeight: T.fontWeight.medium,
+  },
+  // Pushes the saved-confirmation notice to the right edge of the save bar.
+  saveSpacer: { marginLeft: 'auto' },
 };
 
 // Spread S.btn first, then any number of overrides (variants or disabled
@@ -195,3 +251,44 @@ export const S = {
 export function btn(...overrides) {
   return Object.assign({}, S.btn, ...overrides.filter(Boolean));
 }
+
+// className for a button: selects the hover rule in PANEL_CSS. Pass
+// `secondary: true` for the slate variant, otherwise the primary blue.
+export function btnClass(secondary) {
+  return secondary ? 'orc-btn-secondary' : 'orc-btn-primary';
+}
+
+// Root class so the scoped stylesheet below only targets this panel and
+// never bleeds into the surrounding SK admin UI.
+export const PANEL_CLASS = 'orc-config-panel';
+
+// Inline styles cannot express :focus-visible or :hover, both of which are
+// accessibility-critical (a visible focus ring) and polish-critical (button
+// hover feedback). This stylesheet is injected once, scoped under
+// PANEL_CLASS, so it adds the interactive states the inline `S` object
+// cannot. Colors mirror the design tokens.
+export const PANEL_CSS = `
+.${PANEL_CLASS} input:focus-visible,
+.${PANEL_CLASS} select:focus-visible,
+.${PANEL_CLASS} textarea:focus-visible,
+.${PANEL_CLASS} button:focus-visible {
+  outline: none;
+  border-color: ${T.color.primary};
+  box-shadow: 0 0 0 3px ${T.color.focusRing};
+}
+.${PANEL_CLASS} button:not(:disabled) { cursor: pointer; }
+.${PANEL_CLASS} button.orc-btn-primary:not(:disabled):hover {
+  background: ${T.color.primaryHover};
+}
+.${PANEL_CLASS} button.orc-btn-secondary:not(:disabled):hover {
+  background: ${T.color.surfaceHover};
+}
+.${PANEL_CLASS} button:disabled { cursor: not-allowed; }
+.${PANEL_CLASS} input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: ${T.color.primary};
+  cursor: pointer;
+  margin: 0;
+}
+`;

@@ -1,13 +1,17 @@
-import { btn, S } from '../styles.js';
+import { btn, btnClass, S } from '../styles.js';
 
 export function QuestDBSection({ cfg, set, testResult, onTest, testing }) {
   const q = cfg.questdb ?? {};
+  const noUrl = !q.url || q.url.trim() === '';
   return (
     <>
       <div style={S.sectionTitle}>QuestDB enrichment</div>
       <div style={S.fieldRow}>
-        <span style={S.fieldLabel}>Enabled</span>
+        <label htmlFor="orc-qdb-enabled" style={S.fieldLabel}>
+          Enabled
+        </label>
         <input
+          id="orc-qdb-enabled"
           type="checkbox"
           checked={!!q.enabled}
           onChange={(e) => set({ questdb: { ...q, enabled: e.target.checked } })}
@@ -17,9 +21,14 @@ export function QuestDBSection({ cfg, set, testResult, onTest, testing }) {
       {q.enabled && (
         <>
           <div style={S.fieldRow}>
-            <span style={S.fieldLabel}>QuestDB REST URL</span>
+            <label htmlFor="orc-qdb-url" style={S.fieldLabel}>
+              QuestDB REST URL
+            </label>
             <input
-              type="text"
+              id="orc-qdb-url"
+              type="url"
+              spellCheck={false}
+              placeholder="http://localhost:9000"
               style={S.input}
               value={q.url ?? ''}
               onChange={(e) => set({ questdb: { ...q, url: e.target.value } })}
@@ -28,17 +37,25 @@ export function QuestDBSection({ cfg, set, testResult, onTest, testing }) {
           <div style={S.inlineRow}>
             <button
               type="button"
-              style={btn(testing && S.btnDisabled)}
+              className={btnClass(false)}
+              style={btn((testing || noUrl) && S.btnDisabled)}
               onClick={onTest}
-              disabled={testing}
+              disabled={testing || noUrl}
+              title={noUrl ? 'Enter a REST URL first' : undefined}
             >
               {testing ? 'Testing...' : 'Test connection'}
             </button>
-            {testResult && (
-              <span style={{ ...S.testStatus, ...(testResult.ok ? S.testOk : S.testErr) }}>
-                {testResult.ok ? `Reachable at ${testResult.url}` : testResult.text}
-              </span>
-            )}
+            <span
+              style={{ ...S.testStatus, ...(testResult?.ok ? S.testOk : S.testErr) }}
+              role="status"
+              aria-live="polite"
+            >
+              {testResult
+                ? testResult.ok
+                  ? `Reachable at ${testResult.url}`
+                  : testResult.text
+                : ''}
+            </span>
           </div>
         </>
       )}

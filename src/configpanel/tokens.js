@@ -6,21 +6,34 @@ export const T = {
   color: {
     textPrimary: '#333',
     textSecondary: '#555',
-    textMuted: '#888',
+    // Muted text. #6b7280 clears WCAG AA (4.5:1) on both the white panel
+    // background and the #f8f9fa stat-card surface; the old #888 did not.
+    textMuted: '#6b7280',
     white: '#fff',
     surface: '#f8f9fa',
     // Light slate, shared by the secondary-button fill and the report-row divider.
     surfaceSubtle: '#f1f5f9',
+    // Slightly stronger slate used for secondary-button hover.
+    surfaceHover: '#e2e8f0',
     border: '#e0e0e0',
     // Slightly darker border used on text inputs, selects, and the textarea.
     borderStrong: '#ccc',
     primary: '#3b82f6',
+    // Darker primary for the button hover/active state.
+    primaryHover: '#2563eb',
+    // Translucent primary used for the input/button focus ring.
+    focusRing: 'rgba(59, 130, 246, 0.4)',
     secondaryText: '#475569',
     secondaryBorder: '#e2e8f0',
     success: '#10b981',
+    // Darker success for text on white: the #10b981 fill fails AA as text.
+    successText: '#047857',
     danger: '#ef4444',
+    // Darker danger for text on white: the #ef4444 fill is borderline as text.
+    dangerText: '#b91c1c',
     disabled: '#9ca3af',
     warning: '#f59e0b',
+    warningText: '#b45309',
   },
   // Spacing scale plus the composite (vertical horizontal) paddings.
   space: {

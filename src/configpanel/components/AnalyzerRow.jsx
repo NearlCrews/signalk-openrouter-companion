@@ -1,4 +1,4 @@
-import { btn, S } from '../styles.js';
+import { btn, btnClass, S } from '../styles.js';
 import { T } from '../tokens.js';
 import { PromptDrawer } from './PromptDrawer.jsx';
 
@@ -26,19 +26,30 @@ export function AnalyzerRow({
   severityFloor,
   onSeverityFloorChange,
 }) {
+  const checkboxId = `orc-analyzer-${analyzer.id}`;
+  const floorId = `orc-floor-${analyzer.id}`;
   return (
     <>
       <div style={S.analyzerRow}>
         <input
+          id={checkboxId}
           type="checkbox"
           checked={enabled}
           onChange={(e) => setEnabled(analyzer.id, e.target.checked)}
         />
-        <span style={S.analyzerTitle}>{analyzer.title}</span>
+        <label htmlFor={checkboxId} style={S.analyzerTitle}>
+          {analyzer.title}
+        </label>
+        <span style={{ ...S.analyzerPill, ...(enabled ? S.analyzerPillOn : S.analyzerPillOff) }}>
+          {enabled ? 'Enabled' : 'Disabled'}
+        </span>
         {analyzer.id === 'forecast' && (
-          <>
-            <span style={S.selectLabel}>Severity floor</span>
+          <span style={S.severityGroup}>
+            <label htmlFor={floorId} style={S.selectLabel}>
+              Severity floor
+            </label>
             <select
+              id={floorId}
               style={S.select}
               value={severityFloor}
               onChange={(e) => onSeverityFloorChange(e.target.value)}
@@ -49,40 +60,58 @@ export function AnalyzerRow({
                 </option>
               ))}
             </select>
-          </>
-        )}
-        {ui.fire && (
-          <span style={{ ...S.fireResult, color: ui.fire.ok ? T.color.success : T.color.danger }}>
-            {ui.fire.text}
           </span>
         )}
-        <button
-          type="button"
-          style={btn((!enabled || ui.fire?.pending) && S.btnDisabled)}
-          disabled={!enabled || ui.fire?.pending}
-          onClick={() => onFire(analyzer.id)}
-        >
-          {ui.fire?.pending ? 'Firing...' : 'Fire now'}
-        </button>
-        <button
-          type="button"
-          style={btn(S.btnSecondary)}
-          onClick={() => onToggleReports(analyzer.id)}
-        >
-          {ui.reportsOpen ? 'Hide reports' : 'View reports'}
-        </button>
-        <button
-          type="button"
-          style={btn(S.btnSecondary)}
-          onClick={() => onTogglePrompt(analyzer.id)}
-        >
-          {ui.promptOpen ? 'Hide prompt' : 'Edit prompt'}
-        </button>
-        <span style={S.analyzerState}>{enabled ? 'enabled' : 'disabled'}</span>
+        <span style={S.analyzerActions}>
+          {ui.fire && (
+            <span
+              style={{
+                ...S.fireResult,
+                color: ui.fire.ok ? T.color.successText : T.color.dangerText,
+              }}
+              role="status"
+              aria-live="polite"
+            >
+              {ui.fire.text}
+            </span>
+          )}
+          <button
+            type="button"
+            className={btnClass(false)}
+            style={btn((!enabled || ui.fire?.pending) && S.btnDisabled)}
+            disabled={!enabled || ui.fire?.pending}
+            title={enabled ? undefined : 'Enable this analyzer to fire it'}
+            onClick={() => onFire(analyzer.id)}
+          >
+            {ui.fire?.pending ? 'Firing...' : 'Fire now'}
+          </button>
+          <button
+            type="button"
+            className={btnClass(true)}
+            style={btn(S.btnSecondary)}
+            aria-expanded={!!ui.reportsOpen}
+            onClick={() => onToggleReports(analyzer.id)}
+          >
+            {ui.reportsOpen ? 'Hide reports' : 'View reports'}
+          </button>
+          <button
+            type="button"
+            className={btnClass(true)}
+            style={btn(S.btnSecondary)}
+            aria-expanded={!!ui.promptOpen}
+            onClick={() => onTogglePrompt(analyzer.id)}
+          >
+            {ui.promptOpen ? 'Hide prompt' : 'Edit prompt'}
+          </button>
+        </span>
       </div>
       {ui.reportsOpen && (
         <div style={S.drawer}>
-          {ui.reportsLoading && <div style={S.empty}>Loading reports...</div>}
+          {ui.reportsLoading && (
+            <div style={S.empty} role="status" aria-live="polite">
+              Loading reports...
+            </div>
+          )}
           {!ui.reportsLoading && (!ui.reports || ui.reports.length === 0) && (
             <div style={S.empty}>No reports yet for this analyzer.</div>
           )}
