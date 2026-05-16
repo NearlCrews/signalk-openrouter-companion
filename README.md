@@ -5,11 +5,12 @@
 [![License](https://img.shields.io/github/license/NearlCrews/signalk-openrouter-companion.svg)](LICENSE)
 [![CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml)
 
-Runs LLM analyzers over your vessel's propulsion and electrical telemetry and
-writes the results back as plain-prose Signal K notifications: how the last
-engine session went, how the battery banks are doing, whether capacity is
-fading over the season. A paid [OpenRouter](https://openrouter.ai) API key is
-required; calls are billed per token and capped per day.
+Runs LLM analyzers over your vessel's propulsion, electrical, and weather
+telemetry and writes the results back as plain-prose Signal K notifications:
+how the last engine session went, how the battery banks are doing, whether
+capacity is fading over the season, and where the local weather is heading. A
+paid [OpenRouter](https://openrouter.ai) API key is required; calls are billed
+per token and capped per day.
 
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
@@ -28,8 +29,9 @@ See the [0.4.2 changelog entry](CHANGELOG.md#042---2026-05-16) and the
 
 ## Features
 
-- Six independent analyzers: engine-session maintenance, battery health,
-  threshold alerts, capacity aging, performance drift, and sensor liveness
+- Seven independent analyzers: engine-session maintenance, battery health,
+  threshold alerts, capacity aging, performance drift, sensor liveness, and a
+  short-term weather outlook
 - Plain-prose reports written back as Signal K notifications, readable in the
   Data Browser
 - Each analyzer runs on a schedule, on a Signal K PUT, or on a vessel event
@@ -81,7 +83,7 @@ form. The main settings:
 | Model | OpenRouter model slug. | anthropic/claude-haiku-4.5 |
 | Max calls per day | Hard cap on OpenRouter calls per UTC day, to bound spend. | 20 |
 | QuestDB | Optional history source for the trend analyzers. | enabled, localhost:9000 |
-| Analyzers | Each of the six can be enabled or disabled independently. | all enabled |
+| Analyzers | Each of the seven can be enabled or disabled independently. | all enabled |
 
 Advanced settings (engine RPM thresholds, cell-imbalance settle times, trend
 window lengths, custom cron patterns) are not in the panel; they live in the
@@ -90,7 +92,7 @@ saved JSON config at
 
 ## Analyzers
 
-Six analyzers ship, all enabled by default.
+Seven analyzers ship, all enabled by default.
 
 - **maintenance**: a short narrative of each completed engine session. Fires
   when the engine stops.
@@ -103,12 +105,21 @@ Six analyzers ship, all enabled by default.
   QuestDB history.
 - **liveness**: a daily check that the data the other analyzers depend on is
   still flowing.
+- **forecast**: a short-term weather outlook. Reads how barometric pressure,
+  wind, temperature, and (when available) cloud, visibility, and precipitation
+  are trending, then predicts how conditions develop over the next few hours.
+  Works with a real onboard barometer and anemometer, or with
+  [`signalk-virtual-weather-sensors`](https://www.npmjs.com/package/signalk-virtual-weather-sensors).
+  A severity-floor dropdown sets when the outlook raises an alarm. Runs every
+  3 hours by default.
 
 Reports publish as informational notifications (`state: nominal`). The
 `alerts` analyzer publishes true alerts with a stable alert id, which a
 co-installed
 [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon)
-can forward to a NMEA 2000 chartplotter.
+can forward to a NMEA 2000 chartplotter. The `forecast` analyzer publishes its
+outlook at `state: normal` and escalates to an alert state when the predicted
+severity meets the configured floor.
 
 ## Documentation
 

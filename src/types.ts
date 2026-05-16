@@ -17,6 +17,8 @@ export const DRIFT_SUPPORTED_EVENTS = [] as const;
 
 export const LIVENESS_SUPPORTED_EVENTS = [] as const;
 
+export const FORECAST_SUPPORTED_EVENTS = [] as const;
+
 export const ALERTS_SUPPORTED_EVENTS = [
   'low-soc-enter',
   'low-soc-exit',
@@ -35,6 +37,18 @@ export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
 // many seconds is reported stale. Source-of-truth for the schema default and
 // the analyzer constructor's clamp fallback.
 export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
+
+// Forecast-analyzer severity floor: the lowest LLM-graded outlook severity
+// that raises an alarm on the forecast notification. Below the floor the
+// outlook still publishes, with state 'normal', so it stays readable in the
+// data browser. Source-of-truth for the schema enum and the analyzer.
+export const FORECAST_SEVERITY_FLOORS = ['severe', 'moderate', 'minor'] as const;
+export type SeverityFloor = (typeof FORECAST_SEVERITY_FLOORS)[number];
+
+// Forecast-analyzer default severity floor: 'moderate' ("Moderate and up")
+// raises an alarm on a moderate or severe outlook. Source-of-truth for the
+// schema default and the analyzer constructor's fallback.
+export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = 'moderate';
 
 // Signal K notification states (the full ALARM_STATE enum). The publisher's
 // typed `state` argument and per-analyzer publish overrides both resolve to
@@ -97,6 +111,12 @@ export interface PluginOptions {
       enabled: boolean;
       triggers: AnalyzerTriggerCfg;
       stalenessThresholdSec: number;
+      customSystemPrompt?: string;
+    };
+    forecast: {
+      enabled: boolean;
+      triggers: AnalyzerTriggerCfg;
+      severityFloor: SeverityFloor;
       customSystemPrompt?: string;
     };
   };
@@ -184,6 +204,17 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       },
       stalenessThresholdSec: LIVENESS_DEFAULT_STALENESS_SEC,
     },
+    forecast: {
+      enabled: false,
+      triggers: {
+        // Every 3 hours, aligning with the classic 3-hour barometric-tendency
+        // interval. User-editable in the admin panel like every analyzer.
+        cron: { enabled: true, pattern: '0 */3 * * *', timezone: '' },
+        put: { enabled: true, path: pluginPutPath('forecast') },
+        events: [],
+      },
+      severityFloor: FORECAST_DEFAULT_SEVERITY_FLOOR,
+    },
   },
   output: {
     logFilename: 'reports.jsonl',
@@ -231,6 +262,7 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
         drift?: WithPartialTriggers<PluginOptions['analyzers']['drift']>;
         alerts?: WithPartialTriggers<PluginOptions['analyzers']['alerts']>;
         liveness?: WithPartialTriggers<PluginOptions['analyzers']['liveness']>;
+        forecast?: WithPartialTriggers<PluginOptions['analyzers']['forecast']>;
       }
     | undefined;
   return {
@@ -246,6 +278,7 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
       drift: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.drift, inputAnalyzers?.drift),
       alerts: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.alerts, inputAnalyzers?.alerts),
       liveness: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.liveness, inputAnalyzers?.liveness),
+      forecast: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.forecast, inputAnalyzers?.forecast),
     },
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
   };

@@ -18,7 +18,12 @@ import {
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
-import { bankPathPrefix, enginePaths } from './core/paths.js';
+import {
+  bankPathPrefix,
+  enginePaths,
+  WEATHER_CANONICAL_PATHS,
+  WEATHER_EXTENSION_PATHS,
+} from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
@@ -364,6 +369,23 @@ export default function createPlugin(app: ServerApiLike): {
         for (const path of watched) {
           if (engineRpmPaths.has(path)) continue;
           subscribeWatchedPath(path);
+        }
+
+        // The forecast analyzer reads weather telemetry from the rolling
+        // buffer. The weather paths are fixed canonical strings, so no
+        // per-instance discovery is needed: subscribe the list directly. They
+        // are subscribed unconditionally (not filtered by getAvailablePaths)
+        // so a weather producer that starts after this plugin is still
+        // captured; collectContext degrades gracefully on paths that never
+        // produce data.
+        if (cfg.analyzers.forecast.enabled) {
+          const watchedSet = new Set(watched);
+          for (const path of [...WEATHER_CANONICAL_PATHS, ...WEATHER_EXTENSION_PATHS]) {
+            if (watchedSet.has(path) || engineRpmPaths.has(path)) continue;
+            subscribe(path, (value, ts, src) => {
+              if (typeof value === 'number') buffer.record(path, value, ts, src);
+            });
+          }
         }
 
         for (const section of Object.values(cfg.analyzers)) {

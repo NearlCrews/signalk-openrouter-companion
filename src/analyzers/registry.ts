@@ -3,6 +3,7 @@ import type { Analyzer } from './Analyzer.js';
 import { AgingAnalyzer } from './aging.js';
 import { AlertAnalyzer } from './alerts.js';
 import { DriftAnalyzer } from './drift.js';
+import { ForecastAnalyzer } from './forecast.js';
 import { HealthAnalyzer } from './health.js';
 import type { AnalyzerId } from './ids.js';
 import { LivenessAnalyzer } from './liveness.js';
@@ -52,6 +53,12 @@ export const ANALYZER_FACTORIES: AnalyzerFactories = {
     new LivenessAnalyzer({
       triggers: c.triggers,
       stalenessThresholdSec: c.stalenessThresholdSec,
+      customSystemPrompt: c.customSystemPrompt,
+    }),
+  forecast: (c) =>
+    new ForecastAnalyzer({
+      triggers: c.triggers,
+      severityFloor: c.severityFloor,
       customSystemPrompt: c.customSystemPrompt,
     }),
 };

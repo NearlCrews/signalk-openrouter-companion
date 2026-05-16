@@ -3,6 +3,7 @@ import type { Analyzer } from '../analyzers/Analyzer.js';
 import { AGING_DEFAULT_SYSTEM_PROMPT } from '../analyzers/aging.js';
 import { ALERTS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/alerts.js';
 import { DRIFT_DEFAULT_SYSTEM_PROMPT } from '../analyzers/drift.js';
+import { FORECAST_DEFAULT_SYSTEM_PROMPT } from '../analyzers/forecast.js';
 import { HEALTH_DEFAULT_SYSTEM_PROMPT } from '../analyzers/health.js';
 import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '../analyzers/ids.js';
 import { LIVENESS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/liveness.js';
@@ -55,6 +56,7 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
   drift: DRIFT_DEFAULT_SYSTEM_PROMPT,
   alerts: ALERTS_DEFAULT_SYSTEM_PROMPT,
   liveness: LIVENESS_DEFAULT_SYSTEM_PROMPT,
+  forecast: FORECAST_DEFAULT_SYSTEM_PROMPT,
 };
 
 const REPORTS_DEFAULT_LIMIT = 10;

@@ -5,6 +5,8 @@ import {
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
   DRIFT_SUPPORTED_EVENTS,
+  FORECAST_SEVERITY_FLOORS,
+  FORECAST_SUPPORTED_EVENTS,
   HEALTH_SUPPORTED_EVENTS,
   LIVENESS_SUPPORTED_EVENTS,
   MAINTENANCE_SUPPORTED_EVENTS,
@@ -543,6 +545,36 @@ function buildSchemaInner(): PluginSchema {
               },
             }),
           },
+          forecast: {
+            type: 'object',
+            title: 'Weather Outlook Advisor',
+            description:
+              'Reads how environmental conditions are changing and publishes a short-term weather outlook as a Signal K notification.',
+            properties: {
+              enabled: {
+                type: 'boolean',
+                title: 'Enable weather outlook advisor',
+                default: DEFAULT_OPTIONS.analyzers.forecast.enabled,
+              },
+            },
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.forecast.triggers,
+                  supportedEvents: FORECAST_SUPPORTED_EVENTS,
+                }),
+                severityFloor: {
+                  type: 'string',
+                  title: 'Alarm severity floor',
+                  description:
+                    'How bad the predicted weather must be before the outlook raises an alarm. Below the floor the outlook still publishes at a normal state, so it is always readable in the Data Browser.',
+                  enum: [...FORECAST_SEVERITY_FLOORS],
+                  enumNames: ['Severe only', 'Moderate and up', 'Any deterioration'],
+                  default: DEFAULT_OPTIONS.analyzers.forecast.severityFloor,
+                },
+              },
+            }),
+          },
         },
       },
     },
@@ -633,6 +665,10 @@ function buildUiSchemaInner(): PluginUiSchema {
       liveness: {
         'ui:order': ['enabled', 'triggers', 'stalenessThresholdSec'],
         triggers: triggerUiSchema({ supportedEvents: LIVENESS_SUPPORTED_EVENTS }),
+      },
+      forecast: {
+        'ui:order': ['enabled', 'triggers', 'severityFloor'],
+        triggers: triggerUiSchema({ supportedEvents: FORECAST_SUPPORTED_EVENTS }),
       },
     },
   };

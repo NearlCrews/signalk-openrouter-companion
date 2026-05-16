@@ -148,11 +148,12 @@ describe('plugin REST API', () => {
       };
       expect(body.openrouter.apiKeySet).toBe(true);
       expect(body.openrouter.callsToday).toBe(0);
-      // All analyzers default enabled. Assert one is present plus the count,
-      // rather than the full set, to stay resilient to default flips.
+      // The status payload lists every analyzer with its enabled flag. Assert
+      // one enabled analyzer is present plus the total count, rather than the
+      // full set, to stay resilient to default flips.
       const enabled = new Set(body.analyzers.filter((a) => a.enabled).map((a) => a.id));
       expect(enabled.has('maintenance')).toBe(true);
-      expect(body.analyzers).toHaveLength(6);
+      expect(body.analyzers).toHaveLength(7);
 
       vi.unstubAllGlobals();
       await plugin.stop();

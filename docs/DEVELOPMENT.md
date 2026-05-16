@@ -22,7 +22,8 @@ src/
 │   ├── alerts.ts             Transition: threshold crossings
 │   ├── aging.ts              Trend: capacity loss per bank from QuestDB
 │   ├── drift.ts              Trend: fuel-economy drift per RPM bin from QuestDB
-│   └── liveness.ts           State: stale-path and multi-source detection
+│   ├── liveness.ts           State: stale-path and multi-source detection
+│   └── forecast.ts           Trend: short-term weather outlook from buffer + optional QuestDB
 ├── configpanel/
 │   ├── index.js              Module Federation entry stub (Webpack emits remoteEntry around this)
 │   └── PluginConfigurationPanel.jsx  React 19 panel exposed as `./PluginConfigurationPanel`
@@ -82,13 +83,38 @@ Full rules for adding a new analyzer live in [CLAUDE.md](../CLAUDE.md) and the p
 
 ### State vs transition vs trend
 
-The six analyzers are split by purpose so they don't duplicate findings:
+The seven analyzers are split by purpose so they don't duplicate findings:
 
 - **State** (`maintenance`, `health`, `liveness`): describe "now". Read from the in-memory `RollingBuffer` (`maintenance` and `health` also read the live SK tree via `app.getSelfPath(...)`; `liveness` reads the buffer only). No QuestDB.
 - **Transition** (`alerts`): describe a threshold crossing. Triggered by `battery-event` subkinds from `BatteryMonitor`. Reads a one-shot snapshot.
-- **Trend** (`aging`, `drift`): describe gradual change over a configurable window. Read history from QuestDB; the buffer is only used to discover which banks and engines exist.
+- **Trend** (`aging`, `drift`, `forecast`): describe gradual change over a window. `aging` and `drift` read history only from QuestDB; the buffer just discovers which banks and engines exist. `forecast` is the exception: it reads weather trends straight from the `RollingBuffer` (which retains ~24h) and treats QuestDB as an optional baseline extension, so it still produces a forecast with no QuestDB configured.
 
 Trend analyzers own QuestDB queries; state analyzers don't, so a daily health report stays independent of long-term history and won't duplicate the trend analyzers' findings.
+
+### Weather Outlook Advisor
+
+The `forecast` analyzer broadens the Companion past engine and battery telemetry: it reads how environmental conditions are changing and publishes a plain-prose short-term weather outlook. AccuWeather, as integrated by `signalk-virtual-weather-sensors`, reports current conditions only, so the prediction here is the LLM extrapolating an outlook from observed trends, anchored on the latest reading.
+
+**Two input path families.** The analyzer is explicitly aware of two distinct families of Signal K input paths, and subscribes whatever subset `app.streambundle.getAvailablePaths()` reports as present:
+
+- **Canonical paths** are the Signal K 1.8.2 standard leaves, provider-agnostic so a real onboard sensor or the weather plugin can feed them: `environment.outside.pressure`, `environment.outside.temperature`, `environment.outside.dewPointTemperature`, `environment.outside.relativeHumidity`, `environment.wind.speedOverGround`, `environment.wind.directionTrue`.
+- **Virtual Weather Sensor extension paths** are producer-namespaced under `environment.weather.*`, emitted by `signalk-virtual-weather-sensors` (or another producer) and present only when that plugin feeds them: `environment.weather.speedGust`, `environment.weather.cloudCover`, `environment.weather.cloudCeiling`, `environment.weather.visibility`, `environment.weather.precipitationLastHour`, `environment.weather.temperatureDeparture24h`.
+
+Both lists live as static `WEATHER_CANONICAL_PATHS` / `WEATHER_EXTENSION_PATHS` constants in `src/core/paths.ts`. Each buffered value keeps its `$source` so the prompt distinguishes an AccuWeather-sourced reading from a real onboard sensor.
+
+**Graceful degradation.** The analyzer is source-agnostic and never hard-depends on the weather plugin. On a canonical-only feed it still produces a forecast: pressure tendency, wind veer or back, and temperature/dewpoint convergence carry the prediction. When the extension paths are also present the outlook is enriched, since a lowering cloud ceiling, collapsing visibility, precipitation onset, and the 24h temperature departure are strong leading indicators. If less than ~1h of history is buffered and no QuestDB baseline is reachable, `collectContext` returns `null` and the tick is skipped, spending no OpenRouter call.
+
+**Severity grading and the floor.** The model returns a machine-readable first line, `SEVERITY: severe|moderate|minor|none`, ahead of the prose paragraph. `forecast` parses and strips that line; a missing or malformed line falls back to grade `none`. The `severityFloor` config dropdown has three settings that control when the notification raises an alarm:
+
+| Dropdown label    | Config value | Raises an alarm when the grade is |
+| ----------------- | ------------ | --------------------------------- |
+| Severe only       | `severe`     | `severe`                          |
+| Moderate and up   | `moderate`   | `severe`, `moderate`              |
+| Any deterioration | `minor`      | `severe`, `moderate`, `minor`     |
+
+The default is `moderate`. When the grade meets or exceeds the floor the notification publishes with a mapped Signal K state: `severe` to `alarm`, `moderate` to `warn`, `minor` to `alert`. When the grade is below the floor, or is `none`, the outlook is still published with `state: normal` so it stays readable in the Data Browser; it simply raises no alarm.
+
+**Output path.** The outlook publishes on the single stable path `notifications.openrouter-companion.forecast.report`. It deliberately stays in the Companion namespace and does not use `notifications.environment.weather.*`: that branch belongs to `signalk-virtual-weather-sensors` for its current-condition alerts, and keeping the prediction under the Companion's own namespace keeps provenance unambiguous.
 
 ## REST API
 
@@ -132,7 +158,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-183 tests across 20 files cover:
+209 tests across 21 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).

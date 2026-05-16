@@ -94,6 +94,15 @@ const S = {
     minWidth: 220,
   },
   inputSmall: { minWidth: 80, width: 100 },
+  select: {
+    padding: '5px 8px',
+    borderRadius: 6,
+    border: '1px solid #ccc',
+    fontSize: 12,
+    background: '#fff',
+    color: '#333',
+  },
+  selectLabel: { fontSize: 11, color: '#888' },
   hint: { fontSize: 11, color: '#888' },
   testStatus: { fontSize: 12 },
   testOk: { color: '#10b981' },
@@ -168,6 +177,16 @@ const MODELS_HINT = {
   loading: 'Loading model list...',
   error: 'Could not load models; type slug manually',
 };
+
+// Weather Outlook Advisor: how bad the predicted weather must be before the
+// outlook raises an alarm. Values and labels mirror the `severityFloor` enum
+// in src/schema.ts and the config shape in src/types.ts.
+const SEVERITY_FLOOR_OPTIONS = [
+  { value: 'severe', label: 'Severe only' },
+  { value: 'moderate', label: 'Moderate and up' },
+  { value: 'minor', label: 'Any deterioration' },
+];
+const DEFAULT_SEVERITY_FLOOR = 'moderate';
 
 function questdbLabel(qdb) {
   if (!qdb.enabled) return { text: 'Disabled', color: '#9ca3af' };
@@ -391,6 +410,8 @@ function AnalyzerRow({
   promptValue,
   onPromptChange,
   onPromptReset,
+  severityFloor,
+  onSeverityFloorChange,
 }) {
   return (
     <>
@@ -401,6 +422,22 @@ function AnalyzerRow({
           onChange={(e) => setEnabled(analyzer.id, e.target.checked)}
         />
         <span style={S.analyzerTitle}>{analyzer.title}</span>
+        {analyzer.id === 'forecast' && (
+          <>
+            <span style={S.selectLabel}>Severity floor</span>
+            <select
+              style={S.select}
+              value={severityFloor}
+              onChange={(e) => onSeverityFloorChange(e.target.value)}
+            >
+              {SEVERITY_FLOOR_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         {ui.fire && (
           <span style={{ ...S.fireResult, color: ui.fire.ok ? '#10b981' : '#ef4444' }}>
             {ui.fire.text}
@@ -686,6 +723,8 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             promptValue={promptValueFor(a.id)}
             onPromptChange={onPromptChange}
             onPromptReset={onPromptReset}
+            severityFloor={cfg.analyzers?.forecast?.severityFloor ?? DEFAULT_SEVERITY_FLOOR}
+            onSeverityFloorChange={(value) => setAnalyzerCfg('forecast', { severityFloor: value })}
           />
         ))}
       </div>

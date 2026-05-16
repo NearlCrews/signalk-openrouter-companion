@@ -1,0 +1,437 @@
+import { resolveSystemPrompt } from '../core/cfg.js';
+import { fmtNumber } from '../core/format.js';
+import {
+  notificationReportPath,
+  WEATHER_CANONICAL_PATHS,
+  WEATHER_EXTENSION_PATHS,
+  WEATHER_PRESSURE_PATH,
+} from '../core/paths.js';
+import { escapeSqlLiteral, indexColumns, type QuestDBClient } from '../core/questdb.js';
+import { buildTriggers } from '../core/triggers.js';
+import {
+  type AnalyzerTriggerCfg,
+  FORECAST_DEFAULT_SEVERITY_FLOOR,
+  type NotificationState,
+  type SeverityFloor,
+} from '../types.js';
+import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import { ANALYZER_TITLES } from './ids.js';
+
+const HOUR_MS = 3_600_000;
+// Hourly-mean trend buckets span the last 12h of the rolling buffer.
+const TREND_WINDOW_HOURS = 12;
+// Cold-start floor: with less buffered history than this and no QuestDB
+// baseline, collectContext returns null rather than asking the LLM to guess
+// from a near-empty table. Mirrors how the drift analyzer returns null with
+// no data.
+const COLD_START_MIN_HISTORY_MS = HOUR_MS;
+// QuestDB baseline window: 24h to 72h before the trigger, so the LLM can tell
+// a passing squall from a settling multi-day pattern. A strict enhancement,
+// never required.
+const BASELINE_FROM_HOURS = 72;
+const BASELINE_TO_HOURS = 24;
+// Barometric tendency is reported over the classic 3-hour interval.
+const TENDENCY_HOURS = 3;
+const PA_PER_HPA = 100;
+
+// Four-level severity scale, ordered weakest to strongest so the array index
+// doubles as the rank used for the severity-floor comparison.
+const SEVERITY_GRADES = ['none', 'minor', 'moderate', 'severe'] as const;
+type SeverityGrade = (typeof SEVERITY_GRADES)[number];
+
+// Maps an LLM grade to the Signal K notification state used when the grade
+// meets or exceeds the configured floor. Below the floor the state is forced
+// to 'normal' (see resolveForecastState).
+const GRADE_STATE: Record<SeverityGrade, NotificationState> = {
+  none: 'normal',
+  minor: 'alert',
+  moderate: 'warn',
+  severe: 'alarm',
+};
+
+type PathFamily = 'canonical' | 'extension';
+
+interface WeatherPathMeta {
+  family: PathFamily;
+  label: string;
+  unit: string;
+}
+
+// Per-path family/label/unit metadata. Units are Signal K SI base units, named
+// in the prompt so the LLM does not misread Pa as hPa or radians as degrees.
+const WEATHER_PATH_META: Record<string, WeatherPathMeta> = {
+  'environment.outside.pressure': { family: 'canonical', label: 'barometric pressure', unit: 'Pa' },
+  'environment.outside.temperature': {
+    family: 'canonical',
+    label: 'air temperature',
+    unit: 'K',
+  },
+  'environment.outside.dewPointTemperature': {
+    family: 'canonical',
+    label: 'dew point',
+    unit: 'K',
+  },
+  'environment.outside.relativeHumidity': {
+    family: 'canonical',
+    label: 'relative humidity',
+    unit: 'ratio 0-1',
+  },
+  'environment.wind.speedOverGround': {
+    family: 'canonical',
+    label: 'wind speed',
+    unit: 'm/s',
+  },
+  'environment.wind.directionTrue': {
+    family: 'canonical',
+    label: 'wind direction (true)',
+    unit: 'rad',
+  },
+  'environment.weather.speedGust': { family: 'extension', label: 'wind gust', unit: 'm/s' },
+  'environment.weather.cloudCover': {
+    family: 'extension',
+    label: 'cloud cover',
+    unit: 'ratio 0-1',
+  },
+  'environment.weather.cloudCeiling': {
+    family: 'extension',
+    label: 'cloud ceiling',
+    unit: 'm',
+  },
+  'environment.weather.visibility': { family: 'extension', label: 'visibility', unit: 'm' },
+  'environment.weather.precipitationLastHour': {
+    family: 'extension',
+    label: 'precipitation (last hour)',
+    unit: 'm',
+  },
+  'environment.weather.temperatureDeparture24h': {
+    family: 'extension',
+    label: '24h temperature departure',
+    unit: 'K',
+  },
+};
+
+const ALL_WEATHER_PATHS: ReadonlyArray<string> = [
+  ...WEATHER_CANONICAL_PATHS,
+  ...WEATHER_EXTENSION_PATHS,
+];
+
+export interface ForecastCfg {
+  triggers: AnalyzerTriggerCfg;
+  severityFloor: SeverityFloor;
+  customSystemPrompt?: string;
+}
+
+// Static: window lengths and the severity scale are described here so a
+// customSystemPrompt override never loses the SEVERITY-line contract that
+// publishOutput depends on (a missing line just falls back to grade 'none').
+export const FORECAST_DEFAULT_SYSTEM_PROMPT = [
+  'You are an experienced marine weather forecaster producing a short-term outlook for a vessel from observed environmental trends.',
+  'You have no forecast feed: extrapolate the outlook from how conditions are changing, anchored by the latest observed snapshot, which is a wider-area reading than any single onboard sensor.',
+  'Units are Signal K SI base units: pressure in Pa (divide by 100 for hPa), temperature and dew point in K, wind speed in m/s, wind direction in radians true, humidity and cloud cover as 0-1 ratios, visibility and cloud ceiling in m.',
+  'Weigh the classic leading indicators: barometric tendency (the rate and sign of the pressure change; a fall of 3 hPa or more in 3 hours signals a deepening system), wind veering (a clockwise shift) versus backing (a counter-clockwise shift), and air temperature converging on the dew point (fog or precipitation risk).',
+  'When the extension paths are present, also weigh a lowering cloud ceiling, collapsing visibility, a widening gust spread, and precipitation onset: these are strong short-term indicators.',
+  'If only the canonical paths are present, still produce an outlook from pressure tendency, wind shift, and temperature/dew point convergence.',
+  'Grade the outlook on a four-level severity scale: severe (dangerous weather developing, act now), moderate (a notable deterioration is likely), minor (a slight deterioration is possible), none (settled or improving).',
+  'Output exactly two parts. The first line must be exactly "SEVERITY: severe", "SEVERITY: moderate", "SEVERITY: minor", or "SEVERITY: none", with nothing else on that line.',
+  'After that line, write the outlook as one plain-prose paragraph of 80 to 150 words. Do not use markdown: no headers, no bullets, no horizontal rules. Use commas and semicolons to separate points. Lead with the headline (the expected change, or "conditions settled"), then the supporting trend, then the practical implication for the vessel.',
+].join(' ');
+
+interface PathTrend {
+  path: string;
+  family: PathFamily;
+  label: string;
+  unit: string;
+  source: string | null;
+  current: number | null;
+  // Hourly means over the trend window, oldest bucket first. null where a
+  // bucket holds no numeric sample.
+  buckets: Array<number | null>;
+  // 24-72h QuestDB mean, or null when QuestDB is absent or has no rows.
+  baselineMean: number | null;
+}
+
+export interface ForecastInput extends AnalysisInput {
+  generatedAt: string;
+  trendWindowHours: number;
+  tendencyHours: number;
+  // Pre-computed 3h pressure change in hPa, so the LLM does not derive it.
+  pressureTendencyHpa: number | null;
+  hasQuestdbBaseline: boolean;
+  trends: PathTrend[];
+}
+
+export class ForecastAnalyzer implements Analyzer<ForecastInput> {
+  readonly id = 'forecast';
+  readonly title = ANALYZER_TITLES.forecast;
+  readonly triggers: ReadonlyArray<TriggerSpec>;
+  private readonly systemPrompt: string;
+  private readonly severityFloor: SeverityFloor;
+
+  constructor(cfg: ForecastCfg) {
+    this.triggers = buildTriggers(cfg.triggers);
+    this.severityFloor = normalizeFloor(cfg.severityFloor);
+    this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, FORECAST_DEFAULT_SYSTEM_PROMPT);
+  }
+
+  async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<ForecastInput | null> {
+    const { buffer, questdb, app } = deps;
+    const firedMs = ctx.firedAt.getTime();
+    const windowStart = firedMs - TREND_WINDOW_HOURS * HOUR_MS;
+
+    const bufferPaths = new Set(buffer.pathKeys());
+
+    // QuestDB baseline is a strict enhancement: query it first so the cold-
+    // start guard can let a thin buffer through when a baseline is available.
+    const baseline = questdb
+      ? await queryBaseline(questdb, app.selfContext ?? 'vessels.self', firedMs)
+      : new Map<string, number>();
+    const hasQuestdbBaseline = baseline.size > 0;
+
+    // Oldest retained weather sample, used only to gate cold start.
+    let oldestTs: number | null = null;
+    for (const path of ALL_WEATHER_PATHS) {
+      if (!bufferPaths.has(path)) continue;
+      for (const e of buffer.slice(path, 0, firedMs)) {
+        if (oldestTs == null || e.ts < oldestTs) oldestTs = e.ts;
+      }
+    }
+    const historyMs = oldestTs == null ? 0 : firedMs - oldestTs;
+    if (historyMs < COLD_START_MIN_HISTORY_MS && !hasQuestdbBaseline) return null;
+
+    const pathsToReport = ALL_WEATHER_PATHS.filter((p) => bufferPaths.has(p) || baseline.has(p));
+    if (pathsToReport.length === 0) return null;
+
+    const trends: PathTrend[] = pathsToReport.map((path) => {
+      const meta = WEATHER_PATH_META[path];
+      const entries = buffer.slice(path, windowStart, firedMs);
+      return {
+        path,
+        family: meta?.family ?? 'canonical',
+        label: meta?.label ?? path,
+        unit: meta?.unit ?? '',
+        source: latestSource(entries),
+        current: latestValue(entries),
+        buckets: bucketMeans(entries, windowStart),
+        baselineMean: baseline.get(path) ?? null,
+      };
+    });
+
+    return {
+      generatedAt: new Date(firedMs).toISOString(),
+      trendWindowHours: TREND_WINDOW_HOURS,
+      tendencyHours: TENDENCY_HOURS,
+      pressureTendencyHpa: pressureTendency(trends),
+      hasQuestdbBaseline,
+      trends,
+    };
+  }
+
+  buildPrompt(input: ForecastInput): { system: string; user: string } {
+    const lines: string[] = [];
+    lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(
+      `Trend window: last ${input.trendWindowHours}h of observations, shown as hourly means oldest to newest.`,
+    );
+    lines.push(
+      input.pressureTendencyHpa == null
+        ? 'Barometric tendency: not determinable from the retained history.'
+        : `Barometric tendency: ${fmtSigned(input.pressureTendencyHpa)} hPa over the last ${input.tendencyHours}h.`,
+    );
+    lines.push(
+      input.hasQuestdbBaseline
+        ? 'A 24-72h QuestDB baseline mean is shown per path for context.'
+        : 'No QuestDB baseline available; this outlook is based on the rolling buffer only.',
+    );
+    lines.push('');
+
+    const canonical = input.trends.filter((t) => t.family === 'canonical');
+    const extension = input.trends.filter((t) => t.family === 'extension');
+    lines.push('### Canonical paths (standard sensors or weather plugin)');
+    appendTrendLines(lines, canonical);
+    lines.push('');
+    lines.push('### Extension paths (signalk-virtual-weather-sensors)');
+    if (extension.length === 0) {
+      lines.push('None present; the outlook runs on canonical data only.');
+    } else {
+      appendTrendLines(lines, extension);
+    }
+
+    return { system: this.systemPrompt, user: lines.join('\n') };
+  }
+
+  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
+    const { grade, body } = parseForecast(text);
+    const state = resolveForecastState(grade, this.severityFloor);
+    const message = body.length > 0 ? body : text.trim();
+    await deps.publisher.publishOnPath(
+      message,
+      { analyzerId: this.id, ctx },
+      { path: notificationReportPath(this.id), state },
+    );
+  }
+}
+
+function normalizeFloor(v: unknown): SeverityFloor {
+  return v === 'severe' || v === 'moderate' || v === 'minor' ? v : FORECAST_DEFAULT_SEVERITY_FLOOR;
+}
+
+// Slice the buffer entries into TREND_WINDOW_HOURS hourly-mean buckets, oldest
+// bucket first. Out-of-range timestamps are clamped to the edge buckets.
+function bucketMeans(
+  entries: ReadonlyArray<{ value: unknown; ts: number }>,
+  windowStart: number,
+): Array<number | null> {
+  const sums = new Array<number>(TREND_WINDOW_HOURS).fill(0);
+  const counts = new Array<number>(TREND_WINDOW_HOURS).fill(0);
+  for (const e of entries) {
+    if (typeof e.value !== 'number' || !Number.isFinite(e.value)) continue;
+    let idx = Math.floor((e.ts - windowStart) / HOUR_MS);
+    if (idx < 0) idx = 0;
+    if (idx >= TREND_WINDOW_HOURS) idx = TREND_WINDOW_HOURS - 1;
+    sums[idx] = (sums[idx] ?? 0) + e.value;
+    counts[idx] = (counts[idx] ?? 0) + 1;
+  }
+  return sums.map((s, i) => {
+    const n = counts[i] ?? 0;
+    return n > 0 ? s / n : null;
+  });
+}
+
+function latestValue(entries: ReadonlyArray<{ value: unknown }>): number | null {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const v = entries[i]?.value;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function latestSource(entries: ReadonlyArray<{ source: string }>): string | null {
+  const last = entries[entries.length - 1];
+  return last ? last.source : null;
+}
+
+// Pre-compute the 3-hour barometric tendency in hPa from the pressure path's
+// hourly buckets: the most recent bucket minus the bucket TENDENCY_HOURS
+// earlier. null when either bucket is empty.
+function pressureTendency(trends: ReadonlyArray<PathTrend>): number | null {
+  const pressure = trends.find((t) => t.path === WEATHER_PRESSURE_PATH);
+  if (!pressure) return null;
+  const { buckets } = pressure;
+  let latestIdx = -1;
+  for (let i = buckets.length - 1; i >= 0; i -= 1) {
+    if (buckets[i] != null) {
+      latestIdx = i;
+      break;
+    }
+  }
+  if (latestIdx < 0) return null;
+  const priorIdx = latestIdx - TENDENCY_HOURS;
+  if (priorIdx < 0) return null;
+  const latest = buckets[latestIdx];
+  const prior = buckets[priorIdx];
+  if (latest == null || prior == null) return null;
+  return (latest - prior) / PA_PER_HPA;
+}
+
+function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): void {
+  if (trends.length === 0) {
+    lines.push('None present.');
+    return;
+  }
+  for (const t of trends) {
+    const hourly = t.buckets.map((b) => (b == null ? '-' : fmtNumber(b))).join(', ');
+    const parts = [
+      `now=${fmtNumber(t.current)}`,
+      `source=${t.source ?? 'n/a'}`,
+      `hourly=[${hourly}]`,
+    ];
+    if (t.baselineMean != null) parts.push(`baseline=${fmtNumber(t.baselineMean)}`);
+    lines.push(`- ${t.label} (${t.path}) [${t.unit}]: ${parts.join('; ')}`);
+  }
+}
+
+function fmtSigned(v: number): string {
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
+}
+
+// One QuestDB query that returns the per-path mean over the 24-72h baseline
+// window. Returns an empty map on any failure: the baseline is optional and
+// the analyzer runs buffer-only without it.
+async function queryBaseline(
+  questdb: QuestDBClient,
+  context: string,
+  firedMs: number,
+): Promise<Map<string, number>> {
+  const escapedCtx = escapeSqlLiteral(context);
+  const fromIso = new Date(firedMs - BASELINE_FROM_HOURS * HOUR_MS).toISOString();
+  const toIso = new Date(firedMs - BASELINE_TO_HOURS * HOUR_MS).toISOString();
+  const pathList = ALL_WEATHER_PATHS.map((p) => `'${escapeSqlLiteral(p)}'`).join(', ');
+  const sql = `
+    SELECT path, avg(value) AS mean_value FROM signalk
+    WHERE path IN (${pathList})
+      AND context = '${escapedCtx}'
+      AND ts >= '${fromIso}'
+      AND ts < '${toIso}'
+    GROUP BY path
+  `
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  const out = new Map<string, number>();
+  try {
+    const res = await questdb.query(sql);
+    const cols = indexColumns(res);
+    const pathIdx = cols.get('path') ?? -1;
+    const meanIdx = cols.get('mean_value') ?? -1;
+    if (pathIdx < 0 || meanIdx < 0) return out;
+    for (const row of res.dataset) {
+      const path = row[pathIdx];
+      const mean = row[meanIdx];
+      if (typeof path === 'string' && typeof mean === 'number' && Number.isFinite(mean)) {
+        out.set(path, mean);
+      }
+    }
+  } catch {
+    return out;
+  }
+  return out;
+}
+
+interface ParsedForecast {
+  grade: SeverityGrade;
+  body: string;
+}
+
+const SEVERITY_LINE_RE = /^\s*SEVERITY:\s*(severe|moderate|minor|none)\s*$/i;
+const SEVERITY_PREFIX_RE = /^\s*SEVERITY:/i;
+
+// Parse the LLM output into its severity grade and the prose body. A valid
+// SEVERITY line is consumed; a malformed SEVERITY-prefixed line is dropped and
+// grades 'none'; text with no SEVERITY line at all is kept whole and grades
+// 'none' (the safe default: publish the outlook, raise no alarm).
+export function parseForecast(text: string): ParsedForecast {
+  const newlineIdx = text.indexOf('\n');
+  const firstLine = newlineIdx >= 0 ? text.slice(0, newlineIdx) : text;
+  const rest = newlineIdx >= 0 ? text.slice(newlineIdx + 1) : '';
+  const match = firstLine.match(SEVERITY_LINE_RE);
+  if (match?.[1]) {
+    return { grade: match[1].toLowerCase() as SeverityGrade, body: rest.trim() };
+  }
+  if (SEVERITY_PREFIX_RE.test(firstLine)) {
+    return { grade: 'none', body: rest.trim() };
+  }
+  return { grade: 'none', body: text.trim() };
+}
+
+// Map an LLM grade plus the configured floor to a Signal K notification state.
+// The outlook always publishes; below the floor (or grade 'none') the state is
+// 'normal' so it stays readable in the data browser without raising an alarm.
+export function resolveForecastState(
+  grade: SeverityGrade,
+  floor: SeverityFloor,
+): NotificationState {
+  const gradeRank = SEVERITY_GRADES.indexOf(grade);
+  const floorRank = SEVERITY_GRADES.indexOf(floor);
+  const raised = gradeRank > 0 && gradeRank >= floorRank;
+  return raised ? GRADE_STATE[grade] : 'normal';
+}

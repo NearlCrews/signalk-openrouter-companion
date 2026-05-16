@@ -2,6 +2,47 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - unreleased
+
+Adds a seventh analyzer, `forecast` (the Weather Outlook Advisor), broadening
+the Companion from engine and battery telemetry to vessel weather telemetry.
+
+### Added
+
+- **Weather Outlook Advisor (`forecast` analyzer).** Reads how environmental
+  conditions are changing over the last several hours and publishes a
+  plain-prose short-term weather outlook as a Signal K notification on
+  `notifications.openrouter-companion.forecast.report`. Barometric tendency
+  (hPa per 3h, pre-computed for the model), wind veer or back, and
+  temperature/dewpoint convergence carry the prediction; a lowering cloud
+  ceiling, collapsing visibility, and precipitation onset enrich it when those
+  paths are present. Runs on a cron schedule, every 3 hours by default.
+  Opt-in, disabled by default like every analyzer.
+- **Two input path families.** The analyzer consumes both the canonical
+  Signal K leaves (`environment.outside.*`, `environment.wind.*`) and the
+  producer-namespaced `environment.weather.*` extension paths emitted by
+  `signalk-virtual-weather-sensors`. It is source-agnostic: a real onboard
+  barometer and anemometer feed it just as well as the weather plugin. It
+  degrades gracefully: a canonical-only feed still produces a forecast, and
+  the extension paths enrich the outlook when available.
+- **Severity grading with a 3-level floor.** The model grades each outlook
+  `severe`, `moderate`, `minor`, or `none`. A `severityFloor` config dropdown
+  (Severe only, Moderate and up, Any deterioration; default Moderate and up)
+  sets how bad the prediction must be before the notification raises an
+  alarm. Grades map to Signal K notification states: `severe` to `alarm`,
+  `moderate` to `warn`, `minor` to `alert`. Below the floor the outlook still
+  publishes at `state: normal`, so it is always readable in the Data Browser.
+
+### Changed
+
+- The Companion now ships seven analyzers. The README and the development
+  guide describe it as covering general vessel telemetry, not engine and
+  battery telemetry only.
+
+### Test count
+
+183 -> 209 tests across 21 test files.
+
 ## [0.4.2] - 2026-05-16
 
 Bug-fix release: two low-severity items carried over from the 0.4.1 codebase audit.

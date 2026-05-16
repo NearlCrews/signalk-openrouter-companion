@@ -9,6 +9,7 @@ export const ANALYZER_IDS = [
   'drift',
   'alerts',
   'liveness',
+  'forecast',
 ] as const;
 export type AnalyzerId = (typeof ANALYZER_IDS)[number];
 
@@ -21,6 +22,7 @@ export const ANALYZER_TITLES: Record<AnalyzerId, string> = {
   drift: 'Engine Performance Drift',
   alerts: 'Battery Alerts',
   liveness: 'Sensor Liveness Monitor',
+  forecast: 'Weather Outlook Advisor',
 };
 
 export function isAnalyzerId(s: unknown): s is AnalyzerId {

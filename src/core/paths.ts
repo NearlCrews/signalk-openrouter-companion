@@ -77,3 +77,34 @@ export function bankPaths(bankId: string): {
 }
 
 export const SOG_PATH = 'navigation.speedOverGround';
+
+// Barometric pressure: the headline path for the forecast analyzer's
+// pre-computed 3-hour tendency. Named separately so the tendency math and the
+// canonical path list cannot drift.
+export const WEATHER_PRESSURE_PATH = 'environment.outside.pressure';
+
+// Weather telemetry the forecast ("Weather Outlook Advisor") analyzer reads.
+// Two families. Canonical paths are Signal K 1.8.2 standard leaves any
+// barometer/anemometer or weather plugin can feed. Extension paths are the
+// producer-namespaced `environment.weather.*` leaves emitted by
+// signalk-virtual-weather-sensors. The analyzer degrades gracefully when only
+// the canonical family is present; the extension family enriches the outlook.
+// Fixed canonical strings: no per-instance discovery is needed (unlike engines
+// and battery banks), so the analyzer subscribes this list directly.
+export const WEATHER_CANONICAL_PATHS = [
+  WEATHER_PRESSURE_PATH,
+  'environment.outside.temperature',
+  'environment.outside.dewPointTemperature',
+  'environment.outside.relativeHumidity',
+  'environment.wind.speedOverGround',
+  'environment.wind.directionTrue',
+] as const;
+
+export const WEATHER_EXTENSION_PATHS = [
+  'environment.weather.speedGust',
+  'environment.weather.cloudCover',
+  'environment.weather.cloudCeiling',
+  'environment.weather.visibility',
+  'environment.weather.precipitationLastHour',
+  'environment.weather.temperatureDeparture24h',
+] as const;
