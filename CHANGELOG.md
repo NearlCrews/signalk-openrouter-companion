@@ -2,6 +2,29 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-05-16
+
+Bug-fix release: two low-severity items carried over from the 0.4.1 codebase audit.
+
+### Fixed
+
+- **Budget cap race.** `TriggerRouter.runOne` recorded the OpenRouter call
+  only after awaiting the LLM, so analyzers dispatched concurrently on a
+  shared trigger could all pass the per-day cap check before any of them
+  incremented the counter, overshooting the cap. The call is now recorded
+  immediately after the check, with no `await` between them. A call that
+  fails afterward still counts, the intended conservative behavior for a
+  spend cap.
+- **Config panel enabled-state.** Each analyzer's enabled checkbox keyed off
+  the local edit buffer only. On a fresh install the saved configuration has
+  no analyzers key while the server defaults every analyzer enabled, so all
+  checkboxes showed as disabled. The checkbox now falls back to the live
+  `/api/status` value when the edit buffer has no explicit setting.
+
+### Test count
+
+182 -> 183 tests across 20 test files.
+
 ## [0.4.1] - 2026-05-16
 
 Bug-fix release. A user-reported "Fire now" failure led to a full-codebase
