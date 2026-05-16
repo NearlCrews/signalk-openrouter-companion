@@ -8,8 +8,8 @@ Only the latest release line is supported with security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.3.x   | Yes (current)      |
-| < 0.3   | No                 |
+| 0.4.x   | Yes (current)      |
+| < 0.4   | No                 |
 
 ## Reporting a vulnerability
 
@@ -70,4 +70,4 @@ Out of scope:
 
 ## License
 
-This security policy is covered by the project's [Apache-2.0 License](LICENSE). Copyright 2026 Nearl Crews.
+This security policy is covered by the project's [Apache-2.0 License](../LICENSE). Copyright 2026 Nearl Crews.

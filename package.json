@@ -1,7 +1,7 @@
 {
   "name": "signalk-openrouter-companion",
   "version": "0.4.2",
-  "description": "OpenRouter-powered analyzers for Signal K (maintenance, health, alerts, aging, drift, liveness). Requires a paid OpenRouter API key; LLM calls are billed per token. Per-day call cap enforced.",
+  "description": "OpenRouter-powered LLM analyzers for Signal K: plain-prose engine and battery reports. OpenRouter API key required.",
   "main": "dist/index.js",
   "type": "module",
   "files": [
@@ -19,9 +19,7 @@
     "signalk-category-notifications",
     "openrouter",
     "llm",
-    "ai",
-    "marine",
-    "maintenance"
+    "marine"
   ],
   "signalk-plugin-enabled-by-default": false,
   "signalk": {

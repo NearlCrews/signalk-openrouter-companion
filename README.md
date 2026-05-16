@@ -16,14 +16,15 @@ history before their reports are meaningful._
 
 ## What's new in 0.4.2
 
-- **Budget cap race fixed.** Analyzers dispatched concurrently on a shared
-  schedule could overshoot the per-day OpenRouter call cap; a call is now
-  counted before the request, not after.
-- **Config panel checkbox fixed.** On a fresh install the analyzer enable
-  checkboxes showed as disabled while the analyzers were actually running;
-  they now reflect the live server state.
+0.4.2 is a bug-fix release covering two low-severity items from the 0.4.1
+codebase audit. The per-day OpenRouter call cap could be overshot when
+analyzers were dispatched concurrently on a shared schedule, so a call is now
+counted before the request rather than after. The config panel also showed
+analyzer checkboxes as disabled on a fresh install while the analyzers were in
+fact running, and now reflects the live server state.
 
-See the [changelog](CHANGELOG.md) for earlier releases.
+See the [0.4.2 changelog entry](CHANGELOG.md#042---2026-05-16) and the
+[v0.4.2 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.4.2).
 
 ## Features
 
@@ -111,11 +112,11 @@ can forward to a NMEA 2000 chartplotter.
 
 ## Documentation
 
-- [Development guide](DEVELOPMENT.md): architecture, the analyzer extension
-  point, the REST API, build, and tests
+- [Development guide](docs/DEVELOPMENT.md): architecture, the analyzer
+  extension point, the REST API, build, and tests
 - [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
+- [Contributing](.github/CONTRIBUTING.md)
+- [Security policy](.github/SECURITY.md)
 
 ## License
 
@@ -125,4 +126,4 @@ Apache-2.0: see [LICENSE](LICENSE).
 
 - [Report a bug](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=bug_report.yml)
 - [Request a feature](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=feature_request.yml)
-- [Security issues](SECURITY.md)
+- [Security issues](.github/SECURITY.md)

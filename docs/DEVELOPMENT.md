@@ -1,10 +1,10 @@
 # Development
 
-Technical documentation for working on `signalk-openrouter-companion`. For user-facing install and configuration, see [README.md](README.md). For contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Technical documentation for working on `signalk-openrouter-companion`. For user-facing install and configuration, see [README.md](../README.md). For contribution flow, see [CONTRIBUTING.md](../.github/CONTRIBUTING.md).
 
 ## Architecture
 
-This repo is **one npm package**. New monitoring domains land as `Analyzer` modules under `src/analyzers/`, not as sibling repos or sub-packages. A previous session mistakenly created a sibling repo and had to consolidate; that mistake is documented in [CLAUDE.md](CLAUDE.md) and [CHANGELOG.md](CHANGELOG.md) under 0.2.0.
+This repo is **one npm package**. New monitoring domains land as `Analyzer` modules under `src/analyzers/`, not as sibling repos or sub-packages. A previous session mistakenly created a sibling repo and had to consolidate; that mistake is documented in [CLAUDE.md](../CLAUDE.md) and [CHANGELOG.md](../CHANGELOG.md) under 0.2.0.
 
 ### Layered structure
 
@@ -21,7 +21,8 @@ src/
 │   ├── health.ts             State: daily battery snapshot
 │   ├── alerts.ts             Transition: threshold crossings
 │   ├── aging.ts              Trend: capacity loss per bank from QuestDB
-│   └── drift.ts              Trend: fuel-economy drift per RPM bin from QuestDB
+│   ├── drift.ts              Trend: fuel-economy drift per RPM bin from QuestDB
+│   └── liveness.ts           State: stale-path and multi-source detection
 ├── configpanel/
 │   ├── index.js              Module Federation entry stub (Webpack emits remoteEntry around this)
 │   └── PluginConfigurationPanel.jsx  React 19 panel exposed as `./PluginConfigurationPanel`
@@ -77,7 +78,7 @@ interface AnalyzerTriggerCfg {
 
 Each analyzer constructor calls `buildTriggers(cfg.triggers, eventMapper?)` which returns the `TriggerSpec[]` consumed by the lifecycle in `index.ts`. The lifecycle reads `analyzer.triggers` and wires cron via `CronScheduler`, PUT via `app.registerPutHandler`, and events from `EngineDetector` / `BatteryMonitor`. Adding a new trigger kind means adding a `TriggerSpec` variant in `Analyzer.ts` and a dispatch arm in `TriggerRouter`. The analyzers themselves are decoupled.
 
-Full rules for adding a new analyzer live in [CLAUDE.md](CLAUDE.md) and the project's memory at `~/.claude/projects/-home-dietpi-src-signalk-openrouter-companion/memory/triggers_contract.md`.
+Full rules for adding a new analyzer live in [CLAUDE.md](../CLAUDE.md) and the project's memory at `~/.claude/projects/-home-dietpi-src-signalk-openrouter-companion/memory/triggers_contract.md`.
 
 ### State vs transition vs trend
 
@@ -117,7 +118,7 @@ npm run clean          # rm -rf dist public
 
 Outputs:
 
-- `dist/index.js` (single ESM backend bundle, ~131 KB)
+- `dist/index.js` (single ESM backend bundle, ~138 KB)
 - `dist/*.d.ts` (TypeScript declarations)
 - `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~18 KB total)
 
@@ -131,7 +132,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-156 tests across 19 files cover:
+183 tests across 20 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
@@ -240,16 +241,16 @@ Step by step:
 
 8. Add tests under `tests/myname.test.ts` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`. If your test needs a `PluginRuntime` literal, use `makePluginRuntime`.
 
-9. Document the analyzer in `README.md` (the Analyzers table) and `CHANGELOG.md`.
+9. Document the analyzer in `README.md` (the Analyzers section) and `CHANGELOG.md`.
 
 ## CI
 
 GitHub Actions workflows under `.github/workflows/`:
 
 - `plugin-ci.yml`: reuses the upstream SK plugin CI workflow (type-check + lint + build).
-- `ci.yml`: runs the vitest suite on Node 20.x and 22.x.
+- `ci.yml`: lint, type-check, vitest with coverage, and build on Node 20.x and 22.x.
 - `codeql.yml`: CodeQL static analysis.
-- `publish.yml`: npm publish on a tag.
+- `publish.yml`: npm publish, triggered when a GitHub release is published.
 
 All run on push and pull_request to `main`.
 
@@ -266,4 +267,4 @@ All run on push and pull_request to `main`.
 
 ## License
 
-Apache-2.0. Copyright 2026 Nearl Crews. See [LICENSE](LICENSE).
+Apache-2.0. Copyright 2026 Nearl Crews. See [LICENSE](../LICENSE).

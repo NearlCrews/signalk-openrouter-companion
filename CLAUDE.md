@@ -51,10 +51,24 @@ Project memory for Claude Code. Read at the start of every session.
 - Run `npm run prepublishOnly` (type-check + lint + test + build) before any push or publish. Never push without it being clean.
 - Linked into `~/.signalk/node_modules/signalk-openrouter-companion` for live dev against the local Signal K server at port 3000.
 
+## Documentation layout
+
+Docs are organized by audience; keep the repo root clean (it is the first impression on both npm and GitHub).
+
+- **Root**: `README.md`, `CHANGELOG.md`, `LICENSE`, `CLAUDE.md` (Claude Code loads it from root), plus build/config tooling. Nothing else.
+- **`.github/`**: `CONTRIBUTING.md` and `SECURITY.md` (GitHub auto-surfaces these from `.github/` exactly as from root), plus issue/PR templates and workflows.
+- **`docs/`**: contributor and user reference. `docs/DEVELOPMENT.md` today. If design-decision or release/QA docs appear later, use `docs/decisions/` and `docs/maintainers/`.
+- `README.md` is the npm package page (npm renders only `README.md`): a landing page, not a reference manual. Deep reference lives in `docs/` and is linked. It follows the `signalk-virtual-weather-sensors` README as the style model (badges, intro, Features, Requirements, Installation, a Configuration table, content sections, a Documentation links block, License, Support).
+- After moving any doc, re-verify every relative markdown link: files in a subdirectory reach the root with `../`. A check that resolves each `](path)` link and fails on a missing target must pass.
+
 ## Release process
 
-- Every version push updates three things together: bump `package.json`, add the `CHANGELOG.md` entry, AND refresh the `README.md` `## What's new in <version>` section so it reflects the new release. The README section is **replaced, not appended**: one version's worth of changes, sourced from that release's CHANGELOG entry, kept short. Then run the pre-push gate, push, tag `vX.Y.Z`, and create the GitHub release; the `publish.yml` workflow publishes to npm on the release event.
-- The `README.md` follows the `signalk-virtual-weather-sensors` plugin's README as the doc-style reference (badges, intro, Features, Requirements, Installation, a Configuration table, content sections, a Documentation links block, License, Support).
+Every version push updates four things together, then ships:
+
+1. Bump `package.json` version.
+2. Add the `CHANGELOG.md` entry.
+3. Refresh the `README.md` `## What's new in <version>` section (right after the intro, before Features). It is **replaced, not appended**: only the most recent release, never an accumulating list. Content is a 2-4 sentence prose summary sourced from that release's CHANGELOG lead paragraph, ending with links to the CHANGELOG version anchor and the GitHub release tag.
+4. Run the pre-push gate, push, tag `vX.Y.Z`, and create the GitHub release; the `publish.yml` workflow publishes to npm on the release event.
 
 ## Quick-start commands
 

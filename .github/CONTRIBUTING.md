@@ -33,7 +33,7 @@ Thanks for your interest. This is a beta project; PRs and issues are welcome.
 
 ## Architecture
 
-This repo is **ONE npm package**. New monitoring domains go in as `Analyzer` modules under `src/analyzers/`, not as sibling packages. See [DEVELOPMENT.md](DEVELOPMENT.md) for the full architectural rules and the standardized triggers contract.
+This repo is **ONE npm package**. New monitoring domains go in as `Analyzer` modules under `src/analyzers/`, not as sibling packages. See [DEVELOPMENT.md](../docs/DEVELOPMENT.md) for the full architectural rules and the standardized triggers contract.
 
 Six analyzers ship today: `maintenance`, `health`, `alerts`, `aging`, `drift`, `liveness`. Split by purpose:
 
@@ -80,7 +80,7 @@ Six analyzers ship today: `maintenance`, `health`, `alerts`, `aging`, `drift`, `
 
 ## Adding a new analyzer
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for the full walkthrough. Short version:
+See [DEVELOPMENT.md](../docs/DEVELOPMENT.md) for the full walkthrough. Short version:
 
 1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id` (typed as `AnalyzerId`), `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
 2. Use `buildTriggers(cfg.triggers, eventMapper?)` so the cron + PUT + events block stays uniform.
@@ -98,4 +98,4 @@ Open a [feature request](https://github.com/NearlCrews/signalk-openrouter-compan
 
 ## License
 
-By contributing you agree your contributions are licensed under the Apache-2.0 License. See [LICENSE](LICENSE).
+By contributing you agree your contributions are licensed under the Apache-2.0 License. See [LICENSE](../LICENSE).
