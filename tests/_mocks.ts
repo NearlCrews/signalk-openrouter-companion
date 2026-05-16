@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { vi } from 'vitest';
 import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime } from '../src/core/api.js';
-import type { RollingBuffer } from '../src/core/buffer.js';
+import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
 import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
@@ -137,6 +137,11 @@ export function makeMockApp(dataDir: string): MockApp {
     },
   };
   return app;
+}
+
+// Standard RollingBuffer for analyzer tests: 24h retention, generous cap.
+export function makeBuffer(): RollingBuffer {
+  return new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
 }
 
 export interface MockQuestDB {
