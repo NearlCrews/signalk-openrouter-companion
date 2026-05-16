@@ -2,6 +2,57 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-05-16
+
+Bug-fix release. A user-reported "Fire now" failure led to a full-codebase
+audit (4-agent pass) that surfaced several latent defects, all fixed here.
+173 -> 182 tests across 20 test files.
+
+### Fixed
+
+- **"Fire now" ran no analyzer.** `POST /api/analyzers/:id/fire` dispatched
+  through `TriggerRouter.dispatch('put', ..., { putPath: "manual:<id>" })`,
+  but no analyzer's PUT trigger path equals `manual:<id>` (they are
+  `plugins.openrouter-companion.<id>.run`). Trigger matching is exact-string,
+  so zero analyzers ran: no LLM call, no report, no budget increment, yet the
+  endpoint returned `{ok:true}`. New `TriggerRouter.runById(id, ctx)` runs the
+  named analyzer directly, bypassing trigger matching, so the fire endpoint
+  (and only it) targets one analyzer regardless of its trigger config. Broken
+  since the Fire feature shipped in 0.3.0.
+- **Cron jobs double-fired when analyzers shared a schedule.** `index.ts`
+  registered one cron job per cron trigger. With `health` and `liveness` both
+  defaulting to `0 8 * * *`, two jobs fired and each dispatched by pattern to
+  both analyzers, so each ran twice every morning (doubled LLM spend and
+  duplicate reports). Cron registration now dedupes to one job per unique
+  `(pattern, timezone)` pair.
+- **Per-analyzer cron `timezone` was ignored.** The single `CronScheduler`
+  was built with only `maintenance`'s timezone. `CronScheduler.register` now
+  takes an optional per-job timezone and `index.ts` passes each analyzer's
+  own value.
+- **A stopped plugin's runtime could be resurrected.** If `stop()` ran while
+  the deferred router init (QuestDB probe + budget load) was still in flight,
+  the late `.then` rebuilt `runtime`, so REST routes served live data for a
+  stopped plugin and a restart could be clobbered. The deferred init now
+  bails when the lifecycle `AbortController` has fired.
+- **Maintenance analyzer dropped data on a cron/PUT fire.** Operator-set
+  `extraWatchedPaths` were buffered but never reached the report, and a
+  cron/PUT fire set `engineId='unknown'`, which made the path filter discard
+  every `propulsion.*` path, so the fallback summary contained no engine
+  telemetry. The analyzer now receives `extraWatchedPaths` and recovers the
+  engine id from the buffer when the vessel has exactly one.
+- Panel: a cleanly-unreachable QuestDB now shows "Unreachable" instead of the
+  misleading "HTTP 200" (the `/questdb/test` endpoint returns 200 with
+  `{ok:false}` for that case).
+
+### Changed
+
+- Removed the dead `sk-notification` `TriggerSpec` variant: nothing dispatched
+  it, and `triggerMatches` had no case for it, so its `pathPattern` was
+  silently ignored.
+- `mergeWithDefaults` no longer lets a merged analyzer config alias a
+  `DEFAULT_OPTIONS` array; the defaults base is cloned first.
+- `enginePathPrefix` reuses the `PROPULSION_PREFIX` constant.
+
 ## [0.4.0] - 2026-05-16
 
 Adds a sixth analyzer, `liveness`, and hardens the OpenRouter client
