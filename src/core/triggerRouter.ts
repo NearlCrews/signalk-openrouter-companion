@@ -53,12 +53,12 @@ export class TriggerRouter {
         this.setStatus('Running, budget exhausted for today');
         return;
       }
-      // Record the call before awaiting the LLM: canSpend() and recordCall()
-      // then run as one synchronous block, so analyzers dispatched
-      // concurrently cannot all pass the check before any of them increments
-      // the counter and overshoot the daily cap. A call that fails after this
-      // point still counts, which is the intended conservative behavior for a
-      // spend cap.
+      // Record the call here, not after the LLM await: the canSpend() check
+      // above and the in-memory counter increment inside recordCall() run with
+      // no await between them, so analyzers dispatched concurrently cannot all
+      // pass the check before any of them increments the counter and overshoot
+      // the daily cap. A call that fails after this point still counts, the
+      // intended conservative behavior for a spend cap.
       await this.deps.budget.recordCall();
       const { system, user } = a.buildPrompt(input);
       const { text } = await this.deps.llm.complete({ system, user });

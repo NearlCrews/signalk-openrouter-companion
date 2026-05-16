@@ -57,6 +57,12 @@ export class BudgetTracker {
     return this.state.callsToday;
   }
 
+  // The `callsToday` increment must stay synchronous and run before the
+  // first await. `TriggerRouter.runOne` calls `canSpend()` then `recordCall()`
+  // with no await between them; that gap being await-free is what stops
+  // concurrently dispatched analyzers from overshooting the daily cap. A
+  // read-modify-write of the state file before the increment would reopen
+  // that race.
   async recordCall(): Promise<void> {
     this.rolloverIfNeeded();
     this.state = {
