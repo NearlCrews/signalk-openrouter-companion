@@ -219,7 +219,10 @@ export function registerApiRoutes(
         text: result.text.trim().slice(0, 80),
       });
     } catch (err) {
-      const status = err instanceof OpenRouterError ? err.status : 500;
+      // An OpenRouterError can carry status 0 (transport failure) or 200
+      // (empty completion); neither is a valid HTTP error status to echo, so
+      // anything below 400 collapses to 500.
+      const status = err instanceof OpenRouterError && err.status >= 400 ? err.status : 500;
       const message = err instanceof Error ? err.message : String(err);
       res.status(status).json({ ok: false, status, error: message });
     }
