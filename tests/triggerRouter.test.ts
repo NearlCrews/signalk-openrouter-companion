@@ -1,6 +1,9 @@
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Analyzer, AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { BudgetTracker } from '../src/core/budget.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
+import { cleanupTmpDir, makeTmpDir } from './_mocks.js';
 
 function makeAnalyzer(overrides: Partial<Analyzer> & Pick<Analyzer, 'id' | 'triggers'>): Analyzer {
   return {
@@ -121,6 +124,26 @@ describe('TriggerRouter', () => {
     router = new TriggerRouter([a], deps);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
     expect(setStatus).toHaveBeenCalledWith('Running');
+  });
+
+  it('does not exceed the daily cap when analyzers dispatch concurrently', async () => {
+    const dir = await makeTmpDir();
+    try {
+      const budget = await BudgetTracker.load({
+        maxPerDay: 1,
+        statePath: join(dir, 'budget.json'),
+      });
+      const deps = { ...makeDeps(), budget };
+      const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'cron', pattern: 'p' }] });
+      const b = makeAnalyzer({ id: 'b', triggers: [{ kind: 'cron', pattern: 'p' }] });
+      const router = new TriggerRouter([a, b], deps);
+      await router.dispatch('cron', { kind: 'cron', firedAt: new Date() }, { cronPattern: 'p' });
+      // maxPerDay is 1 and both analyzers match: exactly one LLM call may run.
+      expect(deps.llm.complete).toHaveBeenCalledTimes(1);
+      expect(budget.callsToday()).toBe(1);
+    } finally {
+      await cleanupTmpDir(dir);
+    }
   });
 
   it('does not match put triggers when path differs', async () => {

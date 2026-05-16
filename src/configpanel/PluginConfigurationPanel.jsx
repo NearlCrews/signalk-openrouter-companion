@@ -673,7 +673,11 @@ export default function PluginConfigurationPanel({ configuration, save }) {
           <AnalyzerRow
             key={a.id}
             analyzer={a}
-            enabled={!!cfg.analyzers?.[a.id]?.enabled}
+            // Fall back to the live /api/status value when the edit buffer
+            // has no explicit setting: on a fresh install `configuration` has
+            // no analyzers key, but the server defaults them all enabled, so
+            // keying the checkbox off cfg alone would show them as disabled.
+            enabled={cfg.analyzers?.[a.id]?.enabled ?? a.enabled}
             setEnabled={(id, enabled) => setAnalyzerCfg(id, { enabled })}
             ui={analyzerUi[a.id] ?? {}}
             onFire={fireAnalyzer}
