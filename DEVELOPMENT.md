@@ -89,6 +89,22 @@ The six analyzers are split by purpose so they don't duplicate findings:
 
 Trend analyzers own QuestDB queries; state analyzers don't, so a daily health report stays independent of long-term history and won't duplicate the trend analyzers' findings.
 
+## REST API
+
+Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's `registerWithRouter`. All routes inherit SK admin authentication.
+
+| Verb | Path | Purpose |
+| ---- | ---- | ------- |
+| GET  | `/api/status` | Live status snapshot for the panel |
+| POST | `/api/openrouter/test` | One-token ping with the saved key |
+| GET  | `/api/openrouter/models` | Proxy to the OpenRouter models list, cached 1 h |
+| POST | `/api/questdb/test` | Probe a QuestDB URL |
+| POST | `/api/analyzers/:id/fire` | Manually trigger an analyzer |
+| GET  | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100) |
+| GET  | `/api/analyzers/:id/prompt` | `{ default, current }` for the prompt editor |
+
+Manual fire is also available via the standardized SK PUT trigger paths (`plugins.openrouter-companion.<analyzer>.run`); the REST `fire` endpoint is a panel convenience.
+
 ## Build
 
 ```bash

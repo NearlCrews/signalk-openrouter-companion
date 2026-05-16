@@ -3,61 +3,43 @@
 [![npm](https://img.shields.io/npm/v/signalk-openrouter-companion)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![License](https://img.shields.io/github/license/NearlCrews/signalk-openrouter-companion.svg)](LICENSE)
 
-> **Beta.** Trend analyzers (`aging`, `drift`) need 30+ days of QuestDB history before their reports are useful; smoke tests pass but the prose hasn't been verified across a full season of telemetry yet.
+> **Beta, and requires a paid [OpenRouter](https://openrouter.ai) API key.** LLM calls are billed per token. The plugin enforces a per-day call cap (default 20) that you can raise or lower in the admin panel. Trend analyzers also need a few weeks of history before their reports are useful.
 
-A Signal K plugin that runs LLM analyzers (via OpenRouter) over your vessel's propulsion and electrical telemetry. Six analyzers ship: state ("now"), transition ("threshold crossed"), and trend ("over time"). Each emits a short plain-prose report or alert as a Signal K notification and appends every run to a JSONL log.
+A Signal K plugin that runs LLM analyzers over your vessel's propulsion and electrical telemetry and writes the results back as plain-prose Signal K notifications. Instead of another gauge, you get a short readable summary: how the last engine session went, how your battery banks are doing today, whether capacity is fading over the season.
 
-> **Requires a paid OpenRouter API key.** LLM calls are billed per token. A per-day call cap (default 20) is enforced; raise or lower it in the admin panel. Trend analyzers (`aging`, `drift`) also need a co-installed [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb) for time-series history.
+Each analyzer runs on a schedule, on a Signal K PUT, or on a vessel event. Every run is also appended to a JSONL log on the server for later review.
+
+## Requirements
+
+- A Signal K server with the App Store (any recent Signal K Node server).
+- A paid OpenRouter API key. You set this in the plugin's admin panel.
+- Optional: a co-installed [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb). The two trend analyzers (`aging`, `drift`) read time-series history from it. The other four analyzers work without it.
 
 ## Install
 
-In the Signal K admin UI: **App Store** → **Available** → search for **OpenRouter Companion** → Install. Then enable it under **Server → Plugin Config** and set your OpenRouter API key in the panel that opens.
+In the Signal K admin UI: **App Store** then **Available**, search for **OpenRouter Companion**, and install. Then enable it under **Server**, **Plugin Config**, and set your OpenRouter API key in the panel that opens.
 
-## Analyzers
+## What it does
 
-| Analyzer      | Kind       | Fires on                                       | Notification path                                                                          |
-| ------------- | ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `maintenance` | state      | engine-stop (or cron/PUT)                      | `notifications.openrouter-companion.maintenance.report`                                    |
-| `health`      | state      | cron (default 8am daily) or PUT                | `notifications.openrouter-companion.health.report`                                         |
-| `alerts`      | transition | battery events (low SoC, cell imbalance)       | `notifications.electrical.batteries.<bankId>.{lowSoc,cellImbalance}` (canonical, per-bank) |
-| `aging`       | trend      | cron (default 8am on the 1st) or PUT           | `notifications.openrouter-companion.aging.report`                                          |
-| `drift`       | trend      | cron (default 8am Sunday) or PUT               | `notifications.openrouter-companion.drift.report`                                          |
-| `liveness`    | state      | cron (default 8am daily) or PUT                | `notifications.openrouter-companion.liveness.report`                                       |
+Six analyzers ship, all enabled by default. Disable any you do not want in the admin panel.
 
-Each analyzer is independently enabled and shares the standardized `triggers` config (cron + PUT + events). Reports use SK 1.8.2 `state: nominal` so they don't trip a chartplotter alarm; alerts use `state: alert` with `method: ['visual','sound']` and a stable 16-bit `alertId`, which a co-installed [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) maps cleanly to PGN 126983/126985.
+- **maintenance**: writes a short narrative of each completed engine session. Fires when the engine stops.
+- **health**: a daily snapshot of every battery bank. Fires on a schedule.
+- **alerts**: real-time battery threshold crossings (low state of charge, cell imbalance). Fires on the event, with an alarm-grade Signal K notification.
+- **aging**: a monthly look at battery capacity loss per bank over a trailing window. Fires on a schedule. Reads QuestDB history.
+- **drift**: a weekly look at engine fuel economy and per-RPM drift against a trailing baseline. Fires on a schedule. Reads QuestDB history.
+- **liveness**: a daily check that the data the other analyzers depend on is still flowing. Fires on a schedule.
 
-Every run also appends to `<plugin-config-data>/signalk-openrouter-companion/reports.jsonl`.
+Analyzer reports are published as informational Signal K notifications (`state: nominal`). The `alerts` analyzer is the exception: it publishes a true alert with a stable alert id, which a co-installed [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) can forward to a NMEA 2000 chartplotter.
 
-## The config panel
+## Configuration
 
-OpenRouter Companion ships a custom React panel (Module Federation, React 19) that the SK admin loads in place of the default rjsf form:
+The plugin ships a custom admin panel that replaces the default Signal K plugin form. Use it to set your OpenRouter API key and model, set the per-day call cap, enable or disable analyzers, trigger a run manually, and read recent reports. Advanced settings (engine RPM thresholds, cell-imbalance settle times, trend window lengths, custom cron patterns) are not in the panel; they live in the saved JSON config at `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` and can be edited there directly.
 
-- **Live status grid**: API key configured, calls today / cap, QuestDB reachable, analyzer enabled count.
-- **Per-analyzer rows**: enable toggle, **Fire now** (manual trigger), **View reports** (last 10 from the JSONL log inline), **Edit prompt** (textarea preloaded from the analyzer's default; Reset clears any override).
-- **OpenRouter section**: API key (password), model field with autocomplete from `/api/v1/models`, max calls per day, "Test API key" button.
-- **QuestDB section**: enabled toggle, URL, "Test connection" before saving.
+## Documentation
 
-Advanced fields not surfaced in the panel (engine RPM thresholds, cell-imbalance settle times, trend window days, custom 5-field cron patterns) live in the saved JSON config at `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` and can be edited there directly. The rjsf schema is also kept as a fallback so the legacy form renders if the panel ever fails to load.
-
-## REST API
-
-Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's `registerWithRouter`. All routes inherit SK admin authentication.
-
-| Verb | Path                              | Purpose                                                       |
-| ---- | --------------------------------- | ------------------------------------------------------------- |
-| GET  | `/api/status`                     | Live status snapshot for the panel                            |
-| POST | `/api/openrouter/test`            | One-token ping with saved key                                 |
-| GET  | `/api/openrouter/models`          | Proxy to OpenRouter models list, cached 1 h                   |
-| POST | `/api/questdb/test`               | Probe a QuestDB URL                                           |
-| POST | `/api/analyzers/:id/fire`         | Manually trigger an enabled analyzer                          |
-| GET  | `/api/analyzers/:id/reports?limit=N` | Tail JSONL filtered by analyzer (default 10, max 100)      |
-| GET  | `/api/analyzers/:id/prompt`       | `{ default, current }` for the prompt editor                  |
-
-Manual fire is also available via the standardised SK PUT trigger paths (`plugins.openrouter-companion.<analyzer>.run`); the REST `fire` endpoint is a panel-UX convenience.
-
-## Development and contributing
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, build, tests, and the steps to add a new analyzer. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution flow. Run `npm run prepublishOnly` before any push.
+- [DEVELOPMENT.md](DEVELOPMENT.md): architecture, the analyzer extension point, the REST API, build, and tests.
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution flow and coding standards.
 
 ## License
 

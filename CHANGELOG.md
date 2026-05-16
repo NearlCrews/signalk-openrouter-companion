@@ -53,6 +53,12 @@ audit (4-agent pass) that surfaced several latent defects, all fixed here.
   `DEFAULT_OPTIONS` array; the defaults base is cloned first.
 - `enginePathPrefix` reuses the `PROPULSION_PREFIX` constant.
 
+### Docs
+
+- Trimmed `README.md` to a concise npm and GitHub landing page; the REST
+  API reference moved to `DEVELOPMENT.md`. Removed the internal
+  `docs/superpowers/` design specs and plans.
+
 ## [0.4.0] - 2026-05-16
 
 Adds a sixth analyzer, `liveness`, and hardens the OpenRouter client
