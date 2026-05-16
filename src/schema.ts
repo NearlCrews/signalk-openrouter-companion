@@ -6,6 +6,7 @@ import {
   DEFAULT_OPTIONS,
   DRIFT_SUPPORTED_EVENTS,
   HEALTH_SUPPORTED_EVENTS,
+  LIVENESS_SUPPORTED_EVENTS,
   MAINTENANCE_SUPPORTED_EVENTS,
   type MaintenanceEventKind,
 } from './types.js';
@@ -513,6 +514,35 @@ function buildSchemaInner(): PluginSchema {
               },
             }),
           },
+          liveness: {
+            type: 'object',
+            title: 'Sensor Liveness Monitor',
+            description:
+              'Reports watched Signal K paths that have gone stale or are served by multiple sources.',
+            properties: {
+              enabled: {
+                type: 'boolean',
+                title: 'Enable sensor liveness monitoring',
+                default: DEFAULT_OPTIONS.analyzers.liveness.enabled,
+              },
+            },
+            ...enabledGate({
+              whenEnabled: {
+                triggers: triggerSchema({
+                  defaults: DEFAULT_OPTIONS.analyzers.liveness.triggers,
+                  supportedEvents: LIVENESS_SUPPORTED_EVENTS,
+                }),
+                stalenessThresholdSec: {
+                  type: 'integer',
+                  title: 'Staleness threshold (seconds)',
+                  description:
+                    'A watched path with no sample newer than this is reported as stale. Default 300.',
+                  default: DEFAULT_OPTIONS.analyzers.liveness.stalenessThresholdSec,
+                  minimum: 30,
+                },
+              },
+            }),
+          },
         },
       },
     },
@@ -599,6 +629,10 @@ function buildUiSchemaInner(): PluginUiSchema {
           'imbalanceSettleSec',
         ],
         triggers: triggerUiSchema({ supportedEvents: ALERTS_SUPPORTED_EVENTS }),
+      },
+      liveness: {
+        'ui:order': ['enabled', 'triggers', 'stalenessThresholdSec'],
+        triggers: triggerUiSchema({ supportedEvents: LIVENESS_SUPPORTED_EVENTS }),
       },
     },
   };

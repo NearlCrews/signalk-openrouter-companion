@@ -115,6 +115,17 @@ describe('schema', () => {
     expect(events.default).toEqual(['engine-stop']);
   });
 
+  it('exposes the liveness analyzer with a staleness threshold field', () => {
+    const s = buildSchema();
+    const analyzers = s.properties.analyzers as {
+      properties: Record<string, EnabledGatedNode>;
+    };
+    expect(analyzers.properties.liveness).toBeDefined();
+    const onBranch = enabledTrueBranch(analyzers.properties.liveness);
+    expect(onBranch.properties.triggers).toBeDefined();
+    expect(onBranch.properties.stalenessThresholdSec).toBeDefined();
+  });
+
   it('renders cron.pattern as a clean enum + enumNames dropdown', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
