@@ -205,14 +205,18 @@ function mergeAnalyzerCfg<T extends { triggers: AnalyzerTriggerCfg }>(
   input: WithPartialTriggers<T> | undefined,
 ): T {
   if (!input) return clone(defaults);
+  // Clone the defaults base so the merged result never aliases a
+  // DEFAULT_OPTIONS array (events, extraWatchedPaths). A shared reference
+  // would let one analyzer's config mutate the shipped defaults.
+  const base = clone(defaults);
   const inputTriggers = input.triggers ?? {};
   return {
-    ...defaults,
+    ...base,
     ...input,
     triggers: {
-      cron: { ...defaults.triggers.cron, ...(inputTriggers.cron ?? {}) },
-      put: { ...defaults.triggers.put, ...(inputTriggers.put ?? {}) },
-      events: inputTriggers.events ?? defaults.triggers.events,
+      cron: { ...base.triggers.cron, ...(inputTriggers.cron ?? {}) },
+      put: { ...base.triggers.put, ...(inputTriggers.put ?? {}) },
+      events: inputTriggers.events ?? base.triggers.events,
     },
   };
 }

@@ -41,7 +41,7 @@ export function pluginPutPath(analyzerId: string, verb = 'run'): string {
 }
 
 export function enginePathPrefix(engineId: string): string {
-  return `propulsion.${engineId}.`;
+  return `${PROPULSION_PREFIX}${engineId}.`;
 }
 
 export function engineNotificationsPath(engineId: string): string {

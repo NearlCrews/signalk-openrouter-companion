@@ -107,6 +107,58 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     expect(bank.voltageSession).toMatchObject({ min: 13.6, max: 13.6, count: 1 });
     expect(bank.socSession).toBeNull();
   });
+
+  it('includes extraWatchedPaths telemetry in the session report', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const startMs = new Date('2026-05-10T09:00:00Z').getTime();
+    const endMs = new Date('2026-05-10T10:00:00Z').getTime();
+    // A path outside WATCH_PREFIXES and the engine prefix: it only reaches the
+    // report if the analyzer honors the extraWatchedPaths config.
+    buf.record('environment.water.temperature', 290, startMs + 1000, 'sensor');
+    buf.record('environment.water.temperature', 292, endMs - 1000, 'sensor');
+
+    const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        events: ['engine-stop'],
+      },
+      minSessionSeconds: 60,
+      extraWatchedPaths: ['environment.water.temperature'],
+    });
+    const r = await a.collectContext(engineStopCtx(3600), makeDeps(app, buf));
+    expect(r).not.toBeNull();
+    const telemetry = r?.telemetry as Record<string, { count: number }>;
+    expect(telemetry['environment.water.temperature']).toMatchObject({ count: 2 });
+  });
+
+  it('summarizes engine telemetry on a PUT-triggered fallback', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const firedMs = new Date('2026-05-10T10:00:00Z').getTime();
+    // Two RPM samples inside the 30-minute fallback window.
+    buf.record('propulsion.port.revolutions', 20, firedMs - 600_000, 'n2k');
+    buf.record('propulsion.port.revolutions', 22, firedMs - 300_000, 'n2k');
+
+    const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        events: ['engine-stop'],
+      },
+      minSessionSeconds: 60,
+    });
+    const ctx: TriggerCtx = {
+      kind: 'put',
+      firedAt: new Date(firedMs),
+      put: { value: 'manual' },
+    };
+    const r = await a.collectContext(ctx, makeDeps(app, buf));
+    expect(r).not.toBeNull();
+    // The single discovered engine is named in the fallback session.
+    expect(r?.session.engineId).toBe('port');
+    const telemetry = r?.telemetry as Record<string, { count: number }>;
+    expect(telemetry['propulsion.port.revolutions']).toMatchObject({ count: 2 });
+  });
 });
 
 describe('MaintenanceAnalyzer.buildPrompt', () => {

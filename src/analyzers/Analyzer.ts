@@ -4,7 +4,6 @@ export type TriggerSpec =
   | { kind: 'possible-stop' }
   | { kind: 'put'; path: string }
   | { kind: 'cron'; pattern: string }
-  | { kind: 'sk-notification'; pathPattern: string }
   | { kind: 'battery-event'; subkind: BatteryEventKind };
 
 export type BatteryEventKind =

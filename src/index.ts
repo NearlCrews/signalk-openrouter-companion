@@ -85,7 +85,7 @@ export default function createPlugin(app: ServerApiLike): {
     id: PLUGIN_ID,
     name: PLUGIN_NAME,
     description:
-      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, threshold alerts, battery aging, and engine drift.',
+      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, threshold alerts, battery aging, engine drift, and sensor liveness.',
     enabledByDefault: false,
     schema: () => buildSchema(),
     uiSchema: () => buildUiSchema(),
@@ -103,9 +103,14 @@ export default function createPlugin(app: ServerApiLike): {
           return;
         }
         lifecycleController = new AbortController();
-        scheduler = new CronScheduler({
-          tz: cfg.analyzers.maintenance.triggers.cron.timezone || undefined,
-        });
+        // Capture into a const: stop() nulls the module-scoped
+        // lifecycleController, but the deferred init below still needs a
+        // stable handle to this start()'s abort signal.
+        const lifecycle = lifecycleController;
+        // No scheduler-wide timezone: each analyzer carries its own
+        // triggers.cron.timezone, passed per job at register() time below.
+        scheduler = new CronScheduler();
+        const sched = scheduler;
 
         const dataDir = app.getDataDirPath();
         // SK server is responsible for the dir, but on first plugin install
@@ -146,7 +151,7 @@ export default function createPlugin(app: ServerApiLike): {
           ? new QuestDBClient({ url: cfg.questdb.url })
           : null;
         const probePromise: Promise<QuestDBClient | null> = questdbCandidate
-          ? questdbCandidate.probe(lifecycleController.signal).then((ok) => {
+          ? questdbCandidate.probe(lifecycle.signal).then((ok) => {
               if (!ok) logger.debug('QuestDB unreachable; trend analyzers will skip this run');
               return ok ? questdbCandidate : null;
             })
@@ -173,6 +178,16 @@ export default function createPlugin(app: ServerApiLike): {
         let router: TriggerRouter | null = null;
         void Promise.all([probePromise, budgetPromise])
           .then(([questdbLive, budget]) => {
+            // stop() may have run while probe/budget were still in flight (a
+            // disable, or a restart). The abort signal is the lifecycle
+            // marker: if it fired, this start() is dead. Bail before writing
+            // runtime/router or registering crons, otherwise a late resolve
+            // resurrects a stopped plugin's runtime (routes would serve stale
+            // data) or clobbers a fresh restart's runtime.
+            if (lifecycle.signal.aborted) {
+              signalReady();
+              return;
+            }
             router = new TriggerRouter(analyzers, {
               buffer,
               questdb: questdbLive,
@@ -199,19 +214,35 @@ export default function createPlugin(app: ServerApiLike): {
               router,
               logPath,
             };
+            // Register one Cron job per unique (pattern, timezone) pair.
+            // Several analyzers can share a schedule (health and liveness both
+            // default to '0 8 * * *'). The router dispatches cron by pattern
+            // and already fans out to every analyzer whose cron trigger
+            // matches, so a job per analyzer would run each shared-schedule
+            // analyzer once per duplicate job and double-spend the budget.
+            const cronJobs = new Map<string, { pattern: string; timezone: string }>();
             for (const a of analyzers) {
+              const timezone = cfg.analyzers[a.id].triggers.cron.timezone;
               for (const t of a.triggers) {
-                if (t.kind === 'cron' && scheduler) {
-                  try {
-                    scheduler.register(t.pattern, () => {
-                      if (!router) return;
-                      const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
-                      void router.dispatch('cron', ctx, { cronPattern: t.pattern });
-                    });
-                  } catch (err) {
-                    logger.error(`failed to register cron '${t.pattern}': ${stringify(err)}`);
-                  }
-                }
+                if (t.kind !== 'cron') continue;
+                // Join pattern + timezone with a NUL: cron patterns contain spaces and
+                // IANA timezone names do not, so the pair cannot collide into one key.
+                cronJobs.set(`${t.pattern}\u0000${timezone}`, { pattern: t.pattern, timezone });
+              }
+            }
+            for (const { pattern, timezone } of cronJobs.values()) {
+              try {
+                sched.register(
+                  pattern,
+                  () => {
+                    if (!router) return;
+                    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
+                    void router.dispatch('cron', ctx, { cronPattern: pattern });
+                  },
+                  timezone || undefined,
+                );
+              } catch (err) {
+                logger.error(`failed to register cron '${pattern}': ${stringify(err)}`);
               }
             }
             logger.debug('router ready');

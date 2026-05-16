@@ -60,4 +60,21 @@ describe('CronScheduler', () => {
     expect(cb).toHaveBeenCalledTimes(1);
     scheduler.stopAll();
   });
+
+  it('honors a per-job timezone that overrides the scheduler default', () => {
+    vi.useFakeTimers();
+    // 2026-05-10 14:59:30 UTC is 07:59:30 in Los Angeles. With the scheduler
+    // default tz (UTC) a "0 8 * * *" job would not fire for hours, but the
+    // per-job tz makes 08:00 local imminent, so the callback must run.
+    vi.setSystemTime(new Date('2026-05-10T14:59:30Z'));
+    const onUtc = vi.fn();
+    const onLa = vi.fn();
+    const scheduler = new CronScheduler({ tz: 'UTC' });
+    scheduler.register('0 8 * * *', onUtc);
+    scheduler.register('0 8 * * *', onLa, 'America/Los_Angeles');
+    vi.advanceTimersByTime(60_000);
+    expect(onUtc).not.toHaveBeenCalled();
+    expect(onLa).toHaveBeenCalledTimes(1);
+    scheduler.stopAll();
+  });
 });

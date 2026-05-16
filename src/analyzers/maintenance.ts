@@ -1,5 +1,5 @@
 import { resolveSystemPrompt } from '../core/cfg.js';
-import { WATCH_PREFIXES } from '../core/discovery.js';
+import { discoverEngineIds, WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber } from '../core/format.js';
 import {
   BATTERIES_PARENT_PATH,
@@ -17,6 +17,10 @@ import { ANALYZER_TITLES } from './ids.js';
 export interface MaintenanceCfg {
   triggers: AnalyzerTriggerCfg;
   minSessionSeconds: number;
+  // Operator-configured extra Signal K paths to fold into the session report.
+  // These are buffered by the plugin lifecycle but are not necessarily under
+  // WATCH_PREFIXES, so the analyzer must be told about them explicitly.
+  extraWatchedPaths?: string[];
   customSystemPrompt?: string;
 }
 
@@ -66,11 +70,16 @@ export interface MaintenanceInput extends AnalysisInput {
 // summarizing the last 30 minutes of telemetry as the "session".
 const MAINT_FALLBACK_WINDOW_MS = 30 * 60 * 1000;
 
+// Sentinel engine id used by the cron/PUT fallback when no engine session is
+// available and the buffer does not yield a single unambiguous engine.
+const UNKNOWN_ENGINE = 'unknown';
+
 export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   readonly id = 'maintenance';
   readonly title = ANALYZER_TITLES.maintenance;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   private readonly minSessionSeconds: number;
+  private readonly extraWatchedPaths: ReadonlySet<string>;
   private readonly systemPrompt: string;
 
   constructor(cfg: MaintenanceCfg) {
@@ -78,6 +87,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       sub === 'engine-stop' ? { kind: 'engine-stop' } : null,
     );
     this.minSessionSeconds = cfg.minSessionSeconds;
+    this.extraWatchedPaths = new Set(cfg.extraWatchedPaths ?? []);
     this.systemPrompt = resolveSystemPrompt(
       cfg.customSystemPrompt,
       MAINTENANCE_DEFAULT_SYSTEM_PROMPT,
@@ -97,12 +107,16 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     } else if (ctx.kind === 'put' || ctx.kind === 'cron') {
       endMs = ctx.firedAt.getTime();
       startMs = endMs - MAINT_FALLBACK_WINDOW_MS;
-      engineId = 'unknown';
+      // No engine session is supplied on a cron/PUT fire. Recover the engine
+      // id from the buffer when the vessel has exactly one, so the fallback
+      // report both names the engine and scopes its telemetry correctly.
+      const discovered = discoverEngineIds(Array.from(deps.buffer.pathKeys()));
+      engineId = discovered.length === 1 && discovered[0] ? discovered[0] : UNKNOWN_ENGINE;
     } else {
       return null;
     }
 
-    const watchedPaths = listWatchedPaths(deps, engineId);
+    const watchedPaths = listWatchedPaths(deps, engineId, this.extraWatchedPaths);
     const telemetry: Record<string, TelemetryStats> = {};
     for (const path of watchedPaths) {
       const s = deps.buffer.summarize(path, startMs, endMs);
@@ -159,15 +173,29 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   }
 }
 
-function listWatchedPaths(deps: AnalyzerDeps, engineId: string): string[] {
-  const engPrefix = enginePathPrefix(engineId);
+function listWatchedPaths(
+  deps: AnalyzerDeps,
+  engineId: string,
+  extraWatchedPaths: ReadonlySet<string>,
+): string[] {
+  // A null prefix means no specific engine is in scope (cron/PUT fallback on
+  // a zero- or multi-engine vessel); in that case every propulsion path is
+  // kept rather than scoped to one engine.
+  const engPrefix = engineId === UNKNOWN_ENGINE ? null : enginePathPrefix(engineId);
   const out = new Set<string>();
   for (const path of deps.buffer.pathKeys()) {
-    if (path.startsWith(engPrefix)) {
+    if (extraWatchedPaths.has(path)) {
       out.add(path);
       continue;
     }
-    if (path.startsWith(PROPULSION_PREFIX)) continue;
+    if (engPrefix) {
+      if (path.startsWith(engPrefix)) {
+        out.add(path);
+        continue;
+      }
+      // A definite engine is in scope: drop other engines' propulsion paths.
+      if (path.startsWith(PROPULSION_PREFIX)) continue;
+    }
     if (WATCH_PREFIXES.some((prefix) => path.startsWith(prefix))) out.add(path);
   }
   return Array.from(out).sort();

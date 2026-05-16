@@ -22,6 +22,7 @@ export const ANALYZER_FACTORIES: AnalyzerFactories = {
     new MaintenanceAnalyzer({
       triggers: c.triggers,
       minSessionSeconds: c.minSessionSeconds,
+      extraWatchedPaths: c.extraWatchedPaths,
       customSystemPrompt: c.customSystemPrompt,
     }),
   health: (c) =>

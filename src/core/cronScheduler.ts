@@ -9,8 +9,12 @@ export class CronScheduler {
 
   constructor(private opts: CronSchedulerOptions = {}) {}
 
-  register(pattern: string, cb: () => void): () => void {
-    const job = new Cron(pattern, this.opts.tz ? { timezone: this.opts.tz } : {}, () => {
+  // `tz` overrides the scheduler-wide default for this job only. Each analyzer
+  // carries its own `triggers.cron.timezone`, so a single global tz cannot
+  // honor them all: callers pass the per-analyzer value here.
+  register(pattern: string, cb: () => void, tz?: string): () => void {
+    const timezone = tz || this.opts.tz;
+    const job = new Cron(pattern, timezone ? { timezone } : {}, () => {
       try {
         cb();
       } catch {

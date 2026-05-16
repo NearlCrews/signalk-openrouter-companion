@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
+import { CronScheduler } from '../src/core/cronScheduler.js';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
 
@@ -94,6 +96,98 @@ describe('plugin lifecycle', () => {
     expect(app.registeredPuts.length).toBe(firstPutCount * 2);
     await plugin.stop();
     expect(app.statusMessages.at(-1)).toBe('Stopped');
+  });
+
+  it('does not resurrect the runtime when stop() races the deferred router init', async () => {
+    app.availablePaths = ['propulsion.port.revolutions'];
+    const plugin = createPlugin(app as never);
+
+    // Capture the REST route handlers so the runtime can be probed via the
+    // /api/status route, which is the only externally visible surface of the
+    // module-private `runtime` snapshot.
+    const routes = new Map<string, (req: RouteRequest, res: RouteResponse) => unknown>();
+    const mockRouter: RouterLike = {
+      get: (path, handler) => routes.set(path, handler),
+      post: (path, handler) => routes.set(path, handler),
+    };
+    plugin.registerWithRouter(mockRouter);
+
+    // QuestDB disabled so the probe resolves immediately; the budget load is
+    // the in-flight async work the deferred init awaits. start() returns
+    // synchronously, then stop() runs before that init resolves.
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
+      () => {},
+    );
+    await plugin.stop();
+    // whenReady resolves once the deferred init has run (it calls signalReady
+    // on both the abort-skip path and the normal path).
+    await plugin.whenReady();
+
+    const statusHandler = routes.get('/api/status');
+    expect(statusHandler).toBeDefined();
+    let statusCode = 0;
+    const res: RouteResponse = {
+      status(code) {
+        statusCode = code;
+        return res;
+      },
+      json() {
+        return res;
+      },
+      send() {
+        return res;
+      },
+    };
+    statusHandler?.({}, res);
+    // A plugin stopped mid-startup must report 503, not serve a runtime that a
+    // late deferred-init resolve resurrected.
+    expect(statusCode).toBe(503);
+  });
+
+  it('registers one cron job per unique (pattern, timezone) pair, not per analyzer', async () => {
+    // Defaults: health + liveness both cron '0 8 * * *', aging '0 8 1 * *',
+    // drift '0 8 * * 0'. Four cron-enabled analyzers but only three unique
+    // patterns; the router dispatches cron by pattern and fans out to every
+    // matching analyzer, so a job per analyzer would double-run the shared
+    // schedule.
+    const registerSpy = vi.spyOn(CronScheduler.prototype, 'register');
+    const plugin = createPlugin(app as never);
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
+      () => {},
+    );
+    await plugin.whenReady();
+
+    const patterns = registerSpy.mock.calls.map((c) => c[0]);
+    expect(patterns).toHaveLength(3);
+    expect(new Set(patterns)).toEqual(new Set(['0 8 * * *', '0 8 1 * *', '0 8 * * 0']));
+
+    registerSpy.mockRestore();
+    await plugin.stop();
+  });
+
+  it('passes each analyzer cron timezone through to the scheduler', async () => {
+    const registerSpy = vi.spyOn(CronScheduler.prototype, 'register');
+    const plugin = createPlugin(app as never);
+    plugin.start(
+      {
+        openrouter: { apiKey: 'sk-x' },
+        questdb: { enabled: false },
+        analyzers: { drift: { triggers: { cron: { timezone: 'America/New_York' } } } },
+      } as never,
+      () => {},
+    );
+    await plugin.whenReady();
+
+    const driftCall = registerSpy.mock.calls.find((c) => c[0] === '0 8 * * 0');
+    expect(driftCall?.[2]).toBe('America/New_York');
+    // Analyzers without a configured timezone register with no override.
+    const healthCall = registerSpy.mock.calls.find((c) => c[0] === '0 8 * * *');
+    expect(healthCall?.[2]).toBeUndefined();
+
+    registerSpy.mockRestore();
+    await plugin.stop();
   });
 
   it('invokes the PUT handler callback with state COMPLETED', async () => {

@@ -557,10 +557,17 @@ export default function PluginConfigurationPanel({ configuration, save }) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url: cfg.questdb?.url }),
     });
+    // The /questdb/test endpoint returns HTTP 200 with { ok: false } (and no
+    // `error` field) for a cleanly-unreachable server: only a thrown probe
+    // yields a non-2xx status with an `error`. Fall back to 'Unreachable'
+    // rather than the misleading 'HTTP 200' the generic envelope would show.
     setQdbTest(
       r.body?.ok
         ? { ok: true, url: r.body.url }
-        : { ok: false, text: r.body?.error || r.error || `HTTP ${r.status}` },
+        : {
+            ok: false,
+            text: r.body?.error || (r.ok ? 'Unreachable' : r.error || `HTTP ${r.status}`),
+          },
     );
     setQdbTesting(false);
   };
