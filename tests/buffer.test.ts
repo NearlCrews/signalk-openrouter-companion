@@ -44,6 +44,14 @@ describe('RollingBuffer', () => {
     expect(values.at(-1)).toBe(999);
   });
 
+  it('keeps the newest entry when maxEntriesPerPath is 1', () => {
+    const buf = new RollingBuffer({ maxAgeMs: 60_000, maxEntriesPerPath: 1 });
+    buf.record('a.b', 1, 1000, 's1');
+    buf.record('a.b', 2, 1100, 's1');
+    buf.record('a.b', 3, 1200, 's1');
+    expect(buf.slice('a.b', 0, 10_000)).toEqual([{ value: 3, ts: 1200, source: 's1' }]);
+  });
+
   it('summarizes numeric values in a time range', () => {
     const buf = new RollingBuffer({ maxAgeMs: 60_000, maxEntriesPerPath: 100 });
     buf.record('rpm', 100, 1000, 's1');

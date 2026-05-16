@@ -77,6 +77,25 @@ describe('EngineDetector', () => {
     expect(events).toEqual([{ kind: 'possible-stop', engineId: 'port', ts: 1_037_000 }]);
   });
 
+  it('emits possible-stop once per silent stretch and re-arms after a fresh delta', () => {
+    const { det, events } = makeDetector();
+    det.observe('port', 's1', 10, 1_000_000);
+    det.observe('port', 's1', 10, 1_006_000);
+    events.length = 0;
+    // Three consecutive watchdog ticks while silent emit a single event.
+    det.tickWatchdog(1_037_000);
+    det.tickWatchdog(1_042_000);
+    det.tickWatchdog(1_047_000);
+    expect(events).toEqual([{ kind: 'possible-stop', engineId: 'port', ts: 1_037_000 }]);
+    // A fresh delta re-arms the watchdog: a later dropout emits again.
+    det.observe('port', 's1', 10, 1_050_000);
+    det.tickWatchdog(1_090_000);
+    expect(events).toEqual([
+      { kind: 'possible-stop', engineId: 'port', ts: 1_037_000 },
+      { kind: 'possible-stop', engineId: 'port', ts: 1_090_000 },
+    ]);
+  });
+
   it('tracks engines independently', () => {
     const { det, events } = makeDetector();
     det.observe('port', 's1', 10, 1_000_000);

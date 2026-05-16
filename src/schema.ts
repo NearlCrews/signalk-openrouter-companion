@@ -251,7 +251,7 @@ function buildSchemaInner(): PluginSchema {
     type: 'object',
     title: 'OpenRouter Companion',
     description:
-      'OpenRouter-powered analyzers for Signal K: engine maintenance reports, daily battery health summaries, battery threshold alerts, monthly battery aging trends, weekly engine performance drift, and sensor-liveness monitoring. Each analyzer can be independently enabled and configured below. The only required field is your OpenRouter API key.',
+      'OpenRouter-powered analyzers for Signal K: engine maintenance reports, daily battery health summaries, battery threshold alerts, monthly battery aging trends, weekly engine performance drift, sensor-liveness monitoring, and short-term weather outlooks. Each analyzer can be independently enabled and configured below. The only required field is your OpenRouter API key.',
     properties: {
       openrouter: {
         type: 'object',

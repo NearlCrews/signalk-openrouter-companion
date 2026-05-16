@@ -14,7 +14,9 @@ export class RollingBuffer {
   private readonly trimTo: number;
 
   constructor(private opts: BufferOptions) {
-    this.trimTo = opts.maxEntriesPerPath - Math.ceil(opts.maxEntriesPerPath / 10);
+    // Keep at least 1: a maxEntriesPerPath of 1 would otherwise yield trimTo 0,
+    // and the over-cap splice would drop the entry that was just recorded.
+    this.trimTo = Math.max(1, opts.maxEntriesPerPath - Math.ceil(opts.maxEntriesPerPath / 10));
   }
 
   record(path: string, value: unknown, ts: number, source: string): void {

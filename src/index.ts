@@ -80,22 +80,25 @@ export default function createPlugin(app: ServerApiLike): {
   // Populated in the start() then-handler once async init resolves; cleared
   // in stop(). Routes return 503 while null.
   let runtime: PluginRuntime | null = null;
-  // Reset on every start() so a restart hands out a fresh promise.
-  let signalReady: () => void = () => {};
-  let readyPromise: Promise<void> = new Promise<void>((resolve) => {
-    signalReady = resolve;
-  });
+  // Resolved when a start()'s deferred init settles. Replaced on every
+  // start() so a restart hands out a fresh promise; each start() owns its own
+  // resolver (a module-scoped resolver would let a stale start() resolve a
+  // newer start()'s promise).
+  let readyPromise: Promise<void> = new Promise<void>(() => {});
 
   return {
     id: PLUGIN_ID,
     name: PLUGIN_NAME,
     description:
-      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, threshold alerts, battery aging, engine drift, and sensor liveness.',
+      'OpenRouter-powered analyzers for Signal K: engine maintenance, battery health, threshold alerts, battery aging, engine drift, sensor liveness, and weather outlook.',
     enabledByDefault: false,
     schema: () => buildSchema(),
     uiSchema: () => buildUiSchema(),
 
     start: (rawSettings, _restart) => {
+      // Per-start resolver: the deferred init resolves THIS start()'s
+      // readyPromise, even after a later start() has replaced it.
+      let signalReady: () => void = () => {};
       try {
         app.setPluginStatus('Starting');
         readyPromise = new Promise<void>((resolve) => {
@@ -219,30 +222,38 @@ export default function createPlugin(app: ServerApiLike): {
               router,
               logPath,
             };
-            // Register one Cron job per unique (pattern, timezone) pair.
-            // Several analyzers can share a schedule (health and liveness both
-            // default to '0 8 * * *'). The router dispatches cron by pattern
-            // and already fans out to every analyzer whose cron trigger
-            // matches, so a job per analyzer would run each shared-schedule
-            // analyzer once per duplicate job and double-spend the budget.
-            const cronJobs = new Map<string, { pattern: string; timezone: string }>();
+            // Register one Cron job per unique (pattern, timezone) pair, each
+            // carrying the analyzers that share it. Several analyzers can share
+            // a schedule (health and liveness both default to '0 8 * * *'), so
+            // a job per analyzer would double-spend the budget. The job fires
+            // its members by id via runById, not router.dispatch: dispatch
+            // matches cron by pattern alone, so two analyzers on the same
+            // pattern but different timezones would each run on both jobs.
+            // Naming the members keeps every job bound to exactly its pair.
+            const cronJobs = new Map<
+              string,
+              { pattern: string; timezone: string; analyzerIds: string[] }
+            >();
             for (const a of analyzers) {
               const timezone = cfg.analyzers[a.id].triggers.cron.timezone;
               for (const t of a.triggers) {
                 if (t.kind !== 'cron') continue;
                 // Join pattern + timezone with a NUL: cron patterns contain spaces and
                 // IANA timezone names do not, so the pair cannot collide into one key.
-                cronJobs.set(`${t.pattern}\u0000${timezone}`, { pattern: t.pattern, timezone });
+                const key = `${t.pattern}\u0000${timezone}`;
+                const existing = cronJobs.get(key);
+                if (existing) existing.analyzerIds.push(a.id);
+                else cronJobs.set(key, { pattern: t.pattern, timezone, analyzerIds: [a.id] });
               }
             }
-            for (const { pattern, timezone } of cronJobs.values()) {
+            for (const { pattern, timezone, analyzerIds } of cronJobs.values()) {
               try {
                 sched.register(
                   pattern,
                   () => {
                     if (!router) return;
                     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
-                    void router.dispatch('cron', ctx, { cronPattern: pattern });
+                    for (const id of analyzerIds) void router.runById(id, ctx);
                   },
                   timezone || undefined,
                 );
@@ -441,6 +452,7 @@ export default function createPlugin(app: ServerApiLike): {
         }
       } catch (err) {
         app.setPluginError(stringify(err));
+        signalReady();
       }
     },
 

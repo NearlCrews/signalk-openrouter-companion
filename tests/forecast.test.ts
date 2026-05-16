@@ -230,6 +230,23 @@ describe('ForecastAnalyzer', () => {
       for (const t of input.trends) expect(t.baselineMean).toBeNull();
     });
 
+    it('falls back to a buffer-only forecast when the QuestDB query throws', async () => {
+      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
+      const stub = makeQuestDBStub(() => {
+        throw new Error('questdb unreachable');
+      });
+      const a = new ForecastAnalyzer(makeCfg());
+      const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf, { questdb: stub }));
+      expect(r).not.toBeNull();
+      const input = r as ForecastInput;
+      // queryBaseline swallows the failure: the analyzer still runs on the buffer.
+      expect(input.hasQuestdbBaseline).toBe(false);
+      for (const t of input.trends) expect(t.baselineMean).toBeNull();
+      expect(stub.calls).toHaveLength(1);
+    });
+
     it('attaches the QuestDB 24-72h baseline mean per path when QuestDB is reachable', async () => {
       const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
       buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');

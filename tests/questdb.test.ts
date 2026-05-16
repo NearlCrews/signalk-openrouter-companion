@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { QuestDBClient } from '../src/core/questdb.js';
+import { escapeSqlLiteral, indexColumns, QuestDBClient } from '../src/core/questdb.js';
 
 function ok(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -60,5 +60,33 @@ describe('QuestDBClient', () => {
     fetchMock.mockResolvedValueOnce(new Response('boom', { status: 500 }));
     const q = new QuestDBClient({ url: 'http://localhost:9000' });
     await expect(q.query('SELECT 1')).rejects.toThrow(/HTTP 500/);
+  });
+});
+
+describe('escapeSqlLiteral', () => {
+  it('doubles single quotes and leaves other text untouched', () => {
+    expect(escapeSqlLiteral("O'Brien")).toBe("O''Brien");
+    expect(escapeSqlLiteral("a'b'c")).toBe("a''b''c");
+    expect(escapeSqlLiteral('environment.outside.pressure')).toBe('environment.outside.pressure');
+    expect(escapeSqlLiteral('')).toBe('');
+  });
+});
+
+describe('indexColumns', () => {
+  it('maps column names to their dataset index', () => {
+    const idx = indexColumns({
+      columns: [
+        { name: 'path', type: 'STRING' },
+        { name: 'mean_value', type: 'DOUBLE' },
+      ],
+      dataset: [],
+    });
+    expect(idx.get('path')).toBe(0);
+    expect(idx.get('mean_value')).toBe(1);
+    expect(idx.get('missing')).toBeUndefined();
+  });
+
+  it('returns an empty map for a result with no columns', () => {
+    expect(indexColumns({ columns: [], dataset: [] }).size).toBe(0);
   });
 });

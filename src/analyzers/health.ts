@@ -63,7 +63,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     if (banksRaw.length === 0) return null;
 
     const endMs = ctx.firedAt.getTime();
-    const startMs = endMs - 24 * 3600_000;
+    const startMs = endMs - 24 * 3_600_000;
 
     const banks: BankSnapshot[] = banksRaw.map(([id, node]) => {
       const cells = collectCells(node);

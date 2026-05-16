@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
 import { CronScheduler } from '../src/core/cronScheduler.js';
+import { TriggerRouter } from '../src/core/triggerRouter.js';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
 
@@ -188,6 +189,58 @@ describe('plugin lifecycle', () => {
 
     registerSpy.mockRestore();
     await plugin.stop();
+  });
+
+  it('binds each cron job to only its own (pattern, timezone) analyzers', async () => {
+    // health and liveness both default to cron '0 8 * * *'. Give them
+    // distinct timezones so the (pattern, timezone) dedup yields two jobs on
+    // the same pattern. Each job must fire only its own analyzer; a job that
+    // dispatched by pattern would fan out to both and double-spend the budget.
+    const registerSpy = vi.spyOn(CronScheduler.prototype, 'register');
+    const runByIdSpy = vi.spyOn(TriggerRouter.prototype, 'runById').mockResolvedValue(undefined);
+    const plugin = createPlugin(app as never);
+    plugin.start(
+      {
+        openrouter: { apiKey: 'sk-x' },
+        questdb: { enabled: false },
+        analyzers: {
+          health: { triggers: { cron: { timezone: 'UTC' } } },
+          liveness: { triggers: { cron: { timezone: 'America/New_York' } } },
+        },
+      } as never,
+      () => {},
+    );
+    await plugin.whenReady();
+
+    const dailyJobs = registerSpy.mock.calls.filter((c) => c[0] === '0 8 * * *');
+    expect(dailyJobs).toHaveLength(2);
+    const utcJob = dailyJobs.find((c) => c[2] === 'UTC');
+    const nyJob = dailyJobs.find((c) => c[2] === 'America/New_York');
+    expect(utcJob).toBeDefined();
+    expect(nyJob).toBeDefined();
+
+    (utcJob?.[1] as () => void)();
+    expect(runByIdSpy.mock.calls.map((c) => c[0])).toEqual(['health']);
+
+    runByIdSpy.mockClear();
+    (nyJob?.[1] as () => void)();
+    expect(runByIdSpy.mock.calls.map((c) => c[0])).toEqual(['liveness']);
+
+    registerSpy.mockRestore();
+    runByIdSpy.mockRestore();
+    await plugin.stop();
+  });
+
+  it('resolves whenReady and reports an error when start() throws synchronously', async () => {
+    app.streambundle.getAvailablePaths = () => {
+      throw new Error('discovery boom');
+    };
+    const plugin = createPlugin(app as never);
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    // The synchronous failure must still resolve readyPromise; otherwise
+    // whenReady() hangs forever.
+    await plugin.whenReady();
+    expect(app.errorMessages.some((m) => m.includes('discovery boom'))).toBe(true);
   });
 
   it('invokes the PUT handler callback with state COMPLETED', async () => {

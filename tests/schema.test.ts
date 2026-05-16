@@ -156,9 +156,9 @@ describe('schema', () => {
     }
   });
 
-  it('preserves a custom (non-preset) cron pattern from defaults by widening the enum', () => {
+  it('keeps a preset cron default in the enum without widening', () => {
     // Health analyzer ships with '0 8 * * *' which IS a preset, so the enum
-    // is the unmodified preset list.
+    // is the unmodified preset list and no 'Custom:' entry is added.
     const s = buildSchema();
     const health = s.properties.analyzers as { properties: { health: EnabledGatedNode } };
     const healthOn = enabledTrueBranch(health.properties.health);
@@ -170,9 +170,54 @@ describe('schema', () => {
       default: string;
     };
     expect(healthPattern.default).toBe('0 8 * * *');
-    // Asserts presence of the default in the enum (regardless of custom-widening).
     expect(healthPattern.enum).toContain('0 8 * * *');
     expect(healthPattern.enumNames.length).toBe(healthPattern.enum.length);
+    expect(healthPattern.enumNames.some((n) => n.startsWith('Custom:'))).toBe(false);
+  });
+
+  it('widens the cron enum to include a non-preset analyzer default pattern', () => {
+    // Forecast analyzer ships with '0 */3 * * *' which is NOT a preset, so
+    // cronPatternSchema appends it with a 'Custom:' label.
+    const s = buildSchema();
+    const analyzers = s.properties.analyzers as {
+      properties: Record<string, EnabledGatedNode>;
+    };
+    const onBranch = enabledTrueBranch(analyzers.properties.forecast);
+    const triggers = onBranch.properties.triggers as unknown as TriggerSchemaNode;
+    const cronOn = enabledTrueBranch(triggers.properties.cron);
+    const pattern = cronOn.properties.pattern as {
+      enum: string[];
+      enumNames: string[];
+      default: string;
+    };
+    expect(pattern.default).toBe('0 */3 * * *');
+    expect(pattern.enum).toContain('0 */3 * * *');
+    expect(pattern.enumNames[pattern.enum.indexOf('0 */3 * * *')]).toBe('Custom: 0 */3 * * *');
+    expect(pattern.enumNames.length).toBe(pattern.enum.length);
+  });
+
+  it('exposes the forecast analyzer with a severity-floor enum dropdown', () => {
+    const s = buildSchema();
+    const analyzers = s.properties.analyzers as {
+      properties: Record<string, EnabledGatedNode>;
+    };
+    expect(analyzers.properties.forecast).toBeDefined();
+    const onBranch = enabledTrueBranch(analyzers.properties.forecast);
+    expect(onBranch.properties.triggers).toBeDefined();
+    const severityFloor = onBranch.properties.severityFloor as {
+      type: string;
+      enum: string[];
+      enumNames: string[];
+      default: string;
+    };
+    expect(severityFloor.type).toBe('string');
+    expect(severityFloor.enum).toEqual(['severe', 'moderate', 'minor']);
+    expect(severityFloor.enumNames).toEqual([
+      'Severe only',
+      'Moderate and up',
+      'Any deterioration',
+    ]);
+    expect(severityFloor.default).toBe('moderate');
   });
 
   it('uiSchema marks apiKey as password and drops the advanced-fields list entirely', () => {
@@ -268,6 +313,20 @@ describe('mergeWithDefaults', () => {
       'plugins.openrouter-companion.maintenance.run',
     );
     expect(r.analyzers.maintenance.triggers.events).toEqual(['engine-stop']);
+  });
+
+  it('merges the forecast analyzer including its severityFloor', () => {
+    const r = mergeWithDefaults(undefined);
+    expect(r.analyzers.forecast.enabled).toBe(false);
+    expect(r.analyzers.forecast.severityFloor).toBe('moderate');
+    expect(r.analyzers.forecast.triggers.cron.pattern).toBe('0 */3 * * *');
+
+    const overridden = mergeWithDefaults({
+      analyzers: { forecast: { severityFloor: 'severe' } },
+    } as never);
+    expect(overridden.analyzers.forecast.severityFloor).toBe('severe');
+    // Untouched trigger fields fall back to defaults.
+    expect(overridden.analyzers.forecast.triggers.cron.enabled).toBe(true);
   });
 
   it('preserves user-provided events and other fields', () => {

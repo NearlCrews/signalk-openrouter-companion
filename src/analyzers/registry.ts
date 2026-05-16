@@ -13,7 +13,7 @@ import { MaintenanceAnalyzer } from './maintenance.js';
 // (DEFAULT_OPTIONS.analyzers[id] in types.ts) and returns the live Analyzer
 // instance. Keeping these here (rather than in ids.ts, which must stay free
 // of analyzer-class imports to break the circular dep) lets index.ts loop
-// `ANALYZER_IDS` once instead of repeating five hand-rolled if-blocks.
+// `ANALYZER_IDS` once instead of a hand-rolled if-block per analyzer.
 type AnalyzerFactories = {
   [K in AnalyzerId]: (cfg: PluginOptions['analyzers'][K]) => Analyzer;
 };

@@ -37,6 +37,10 @@ interface EngineState {
   belowSinceWhileStarting: number | null;
   sessionStartTs: number | null;
   lastDeltaTs: number;
+  // True once the watchdog has emitted possible-stop for the current silent
+  // stretch. Reset by observe() so a later dropout re-emits; without it the
+  // watchdog would re-emit every tick for a permanently silent engine.
+  possibleStopEmitted: boolean;
   recentBySource: Map<string, PerSourceReading>;
 }
 
@@ -64,6 +68,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
         belowSinceWhileStarting: null,
         sessionStartTs: null,
         lastDeltaTs: 0,
+        possibleStopEmitted: false,
         recentBySource: new Map(),
       };
       this.states.set(engineId, s);
@@ -74,6 +79,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
   observe(engineId: string, source: string, hz: number, ts: number): void {
     const s = this.getState(engineId);
     s.lastDeltaTs = ts;
+    s.possibleStopEmitted = false;
     s.recentBySource.set(source, { hz, ts });
     const cutoff = ts - this.opts.sourceWindowMs;
     let effectiveHz = Number.NEGATIVE_INFINITY;
@@ -129,7 +135,8 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
 
   tickWatchdog(now: number): void {
     for (const s of this.states.values()) {
-      if (s.running && now - s.lastDeltaTs > this.watchdogMs) {
+      if (s.running && !s.possibleStopEmitted && now - s.lastDeltaTs > this.watchdogMs) {
+        s.possibleStopEmitted = true;
         this.emit({ kind: 'possible-stop', engineId: s.engineId, ts: now });
       }
     }
