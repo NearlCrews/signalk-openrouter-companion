@@ -138,6 +138,26 @@ describe('TriggerRouter', () => {
     expect(a.collectContext).not.toHaveBeenCalled();
   });
 
+  it('runById runs the named analyzer through the full path', async () => {
+    const a = makeAnalyzer({ id: 'health', triggers: [] });
+    const b = makeAnalyzer({ id: 'drift', triggers: [] });
+    const deps = makeDeps();
+    const router = new TriggerRouter([a, b], deps);
+    await router.runById('health', { kind: 'put', firedAt: new Date(), put: { value: 'manual' } });
+    expect(a.collectContext).toHaveBeenCalledOnce();
+    expect(deps.budget.recordCall).toHaveBeenCalledOnce();
+    expect(a.publishOutput).toHaveBeenCalledOnce();
+    expect(b.collectContext).not.toHaveBeenCalled();
+  });
+
+  it('runById is a no-op for an unknown analyzer id', async () => {
+    const a = makeAnalyzer({ id: 'health', triggers: [] });
+    const deps = makeDeps();
+    const router = new TriggerRouter([a], deps);
+    await router.runById('nope', { kind: 'put', firedAt: new Date(), put: { value: 'manual' } });
+    expect(a.collectContext).not.toHaveBeenCalled();
+  });
+
   it('matches cron triggers by pattern', async () => {
     const a = makeAnalyzer({
       id: 'a',

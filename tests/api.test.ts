@@ -1,11 +1,12 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Analyzer } from '../src/analyzers/Analyzer.js';
+import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { AnalyzerId } from '../src/analyzers/ids.js';
 import type { PluginRuntime, RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
 import { _resetOpenRouterModelsCache, registerApiRoutes } from '../src/core/api.js';
 import { OpenRouterError } from '../src/core/openrouter.js';
+import { TriggerRouter } from '../src/core/triggerRouter.js';
 import createPlugin from '../src/index.js';
 import {
   cleanupTmpDir,
@@ -210,17 +211,17 @@ describe('plugin REST API', () => {
   describe('/api/analyzers/:id/fire handler', () => {
     function makeRuntimeWithRouter(opts: {
       enabledIds: string[];
-      dispatch?: (kind: string, ctx: unknown) => Promise<void>;
-    }): { rt: PluginRuntime; calls: Array<{ kind: string; ctx: unknown }> } {
-      const calls: Array<{ kind: string; ctx: unknown }> = [];
-      const dispatch =
-        opts.dispatch ??
-        (async (kind: string, ctx: unknown): Promise<void> => {
-          calls.push({ kind, ctx });
+      runById?: (id: string, ctx: unknown) => Promise<void>;
+    }): { rt: PluginRuntime; calls: Array<{ id: string; ctx: unknown }> } {
+      const calls: Array<{ id: string; ctx: unknown }> = [];
+      const runById =
+        opts.runById ??
+        (async (id: string, ctx: unknown): Promise<void> => {
+          calls.push({ id, ctx });
         });
       const rt = makePluginRuntime({
         analyzers: opts.enabledIds.map(fakeAnalyzer),
-        router: { dispatch } as never,
+        router: { runById } as never,
       });
       return { rt, calls };
     }
@@ -255,7 +256,7 @@ describe('plugin REST API', () => {
       expect(r.body).toMatchObject({ ok: false });
     });
 
-    it('dispatches a put-kind ctx via the router on success', async () => {
+    it('runs the named analyzer with a put-kind ctx on success', async () => {
       const { rt, calls } = makeRuntimeWithRouter({ enabledIds: ['health'] });
       const { router, routes } = makeRecordingRouter();
       registerApiRoutes(router, () => rt);
@@ -266,14 +267,14 @@ describe('plugin REST API', () => {
       expect(r.body).toEqual({ ok: true, analyzer: 'health' });
       expect(calls).toHaveLength(1);
       const first = calls[0];
-      expect(first?.kind).toBe('put');
+      expect(first?.id).toBe('health');
       expect((first?.ctx as { kind: string }).kind).toBe('put');
     });
 
-    it('returns 500 when the router dispatch throws', async () => {
+    it('returns 500 when the router run throws', async () => {
       const { rt } = makeRuntimeWithRouter({
         enabledIds: ['health'],
-        dispatch: async () => {
+        runById: async () => {
           throw new Error('boom');
         },
       });
@@ -284,6 +285,50 @@ describe('plugin REST API', () => {
       });
       expect(r.status).toBe(500);
       expect(r.body).toMatchObject({ ok: false, error: 'boom' });
+    });
+
+    it('actually runs the named analyzer through a real TriggerRouter', async () => {
+      // Regression: the fire endpoint must run the named analyzer end to end.
+      // It previously dispatched a synthetic put path that matched no
+      // analyzer's trigger, so nothing ran and no LLM call was recorded.
+      const collectContext = vi.fn(async () => ({ ok: true }));
+      const recordCall = vi.fn(async () => {});
+      const complete = vi.fn(async () => ({
+        text: 'report',
+        model: 'm',
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        raw: {},
+      }));
+      const analyzer = {
+        id: 'health',
+        title: 'health',
+        triggers: [],
+        collectContext,
+        buildPrompt: () => ({ system: 's', user: 'u' }),
+        publishOutput: vi.fn(async () => {}),
+      } as unknown as Analyzer;
+      const deps = {
+        buffer: {},
+        questdb: null,
+        publisher: { publishReport: vi.fn(async () => {}), publishFailure: vi.fn(async () => {}) },
+        budget: { canSpend: () => true, recordCall },
+        llm: { complete },
+        logger: { debug: vi.fn(), error: vi.fn() },
+        app: { getSelfPath: () => undefined },
+      } as unknown as AnalyzerDeps;
+      const rt = makePluginRuntime({
+        analyzers: [analyzer],
+        router: new TriggerRouter([analyzer], deps),
+      });
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+        params: { id: 'health' },
+      });
+      expect(r.status).toBe(200);
+      expect(collectContext).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+      expect(recordCall).toHaveBeenCalledOnce();
     });
   });
 

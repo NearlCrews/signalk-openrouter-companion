@@ -36,6 +36,14 @@ export class TriggerRouter {
     await Promise.allSettled(matches.map((a) => this.runOne(a, ctx)));
   }
 
+  // Run a single analyzer by id, bypassing trigger matching. The REST fire
+  // endpoint names the analyzer directly, so it must run regardless of which
+  // triggers the analyzer has enabled.
+  async runById(id: string, ctx: TriggerCtx): Promise<void> {
+    const a = this.analyzers.find((x) => x.id === id);
+    if (a) await this.runOne(a, ctx);
+  }
+
   private async runOne(a: Analyzer, ctx: TriggerCtx): Promise<void> {
     try {
       const input = await a.collectContext(ctx, this.deps);

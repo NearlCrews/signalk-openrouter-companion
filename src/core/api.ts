@@ -241,12 +241,11 @@ export function registerApiRoutes(
       res.status(409).json({ ok: false, error: 'analyzer not enabled' });
       return;
     }
-    // Maintenance/health/aging/drift treat 'put' as "report on current state
-    // in the fallback window"; alerts requires a battery-event so a manual
-    // fire there will collectContext-return null and the router skips the
-    // LLM call.
+    // Run the named analyzer directly. A manual fire uses a put-kind ctx; an
+    // analyzer with nothing to report (alerts has no pending battery event)
+    // returns null from collectContext and the router skips the LLM call.
     try {
-      await rt.router.dispatch('put', manualPutCtx(), { putPath: `manual:${id}` });
+      await rt.router.runById(id, manualPutCtx());
       res.json({ ok: true, analyzer: id });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
