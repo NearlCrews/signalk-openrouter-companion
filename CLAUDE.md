@@ -51,6 +51,11 @@ Project memory for Claude Code. Read at the start of every session.
 - Run `npm run prepublishOnly` (type-check + lint + test + build) before any push or publish. Never push without it being clean.
 - Linked into `~/.signalk/node_modules/signalk-openrouter-companion` for live dev against the local Signal K server at port 3000.
 
+## Release process
+
+- Every version push updates three things together: bump `package.json`, add the `CHANGELOG.md` entry, AND refresh the `README.md` `## What's new in <version>` section so it reflects the new release. The README section is **replaced, not appended**: one version's worth of changes, sourced from that release's CHANGELOG entry, kept short. Then run the pre-push gate, push, tag `vX.Y.Z`, and create the GitHub release; the `publish.yml` workflow publishes to npm on the release event.
+- The `README.md` follows the `signalk-virtual-weather-sensors` plugin's README as the doc-style reference (badges, intro, Features, Requirements, Installation, a Configuration table, content sections, a Documentation links block, License, Support).
+
 ## Quick-start commands
 
 - Get a local SK login token (admin creds via env; do not echo from user memory):
