@@ -151,7 +151,7 @@ describe('plugin REST API', () => {
       // default off. Assert via the union to stay resilient to default flips.
       const enabled = new Set(body.analyzers.filter((a) => a.enabled).map((a) => a.id));
       expect(enabled.has('maintenance')).toBe(true);
-      expect(body.analyzers).toHaveLength(5);
+      expect(body.analyzers).toHaveLength(6);
 
       vi.unstubAllGlobals();
       await plugin.stop();
