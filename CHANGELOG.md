@@ -2,10 +2,14 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.5.0] - unreleased
+## [0.5.0] - 2026-05-16
 
-Adds a seventh analyzer, `forecast` (the Weather Outlook Advisor), broadening
-the Companion from engine and battery telemetry to vessel weather telemetry.
+Adds the Weather Outlook Advisor, a seventh analyzer, broadening the Companion
+from engine and battery telemetry to vessel weather telemetry. It also hardens
+the OpenRouter request path against transient failures, fixes a QuestDB
+context mismatch that had left the three history-backed analyzers silent,
+shortens every notification so it fits a chartplotter alert, and reworks the
+config panel into collapsible sections with a per-analyzer schedule control.
 
 ### Added
 
@@ -31,17 +35,52 @@ the Companion from engine and battery telemetry to vessel weather telemetry.
   sets how bad the prediction must be before the notification raises an
   alarm. Grades map to Signal K notification states: `severe` to `alarm`,
   `moderate` to `warn`, `minor` to `alert`. Below the floor the outlook still
-  publishes at `state: normal`, so it is always readable in the Data Browser.
+  publishes at `state: nominal`, so it is always readable in the Data Browser.
+- **Per-analyzer schedule control.** Each analyzer in the config panel now has
+  a Frequency dropdown (Hourly, Every 3/6/12 hours, Daily, Weekly, Monthly).
+  Event-driven analyzers (`maintenance`, `alerts`) show their trigger as
+  read-only text since they have no schedule.
 
 ### Changed
 
+- **Notifications are now short enough for a chartplotter alert.** Every
+  analyzer report leads with a one-line headline. The Signal K notification,
+  which `signalk-nmea2000-emitter-cannon` bridges onto the NMEA 2000 bus as a
+  chartplotter alert, now carries only that headline. The full multi-paragraph
+  report is kept in the JSONL log and shown in the config panel's report
+  drawer.
+- **Hardened OpenRouter request handling.** The client retries transient
+  failures (HTTP 429, 500, 502, 503, 504, transport errors, and truncated or
+  malformed response bodies) up to three times with exponential backoff and
+  jitter, honoring `Retry-After` and aborting the backoff immediately on
+  shutdown. An empty completion is treated as a failure rather than published
+  as a blank report.
+- **Config panel reorganized.** The OpenRouter, QuestDB, and Analyzers
+  sections are collapsible and collapsed by default, so the panel opens
+  compact. Each analyzer is its own collapsible card: the enable checkbox and
+  status pill stay visible, the controls expand on demand. Panel styles were
+  tokenized into a shared design-token module, and an accessibility pass fixed
+  focus order, contrast, and labelling across the panel.
 - The Companion now ships seven analyzers. The README and the development
   guide describe it as covering general vessel telemetry, not engine and
   battery telemetry only.
 
+### Fixed
+
+- **QuestDB context mismatch silenced the trend analyzers.** The `aging`,
+  `drift`, and `forecast` analyzers queried QuestDB filtering `context` on the
+  vessel's full `vessels.urn:mrn:...` identifier, but `signalk-questdb` stores
+  every row with `context` set to `self`. The filter matched no rows, so all
+  three analyzers silently produced no report. They now query the correct
+  context.
+- **"Plugin restarting" notice never cleared.** After a save, the config panel
+  showed "Plugin restarting..." regardless of the actual restart. It now
+  detects when the plugin has come back up, via a new `startedAt` field on
+  `/api/status`, and updates the notice to "restarted".
+
 ### Test count
 
-183 -> 209 tests across 21 test files.
+183 -> 228 tests across 21 test files.
 
 ## [0.4.2] - 2026-05-16
 

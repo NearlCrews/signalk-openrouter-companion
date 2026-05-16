@@ -8,24 +8,25 @@
 Runs LLM analyzers over your vessel's propulsion, electrical, and weather
 telemetry and writes the results back as plain-prose Signal K notifications:
 how the last engine session went, how the battery banks are doing, whether
-capacity is fading over the season, and where the local weather is heading. A
-paid [OpenRouter](https://openrouter.ai) API key is required; calls are billed
-per token and capped per day.
+capacity is fading over the season, and where the local weather is heading.
+Requires an [OpenRouter](https://openrouter.ai) API key.
 
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
 
-## What's new in 0.4.2
+## What's new in 0.5.0
 
-0.4.2 is a bug-fix release covering two low-severity items from the 0.4.1
-codebase audit. The per-day OpenRouter call cap could be overshot when
-analyzers were dispatched concurrently on a shared schedule, so a call is now
-counted before the request rather than after. The config panel also showed
-analyzer checkboxes as disabled on a fresh install while the analyzers were in
-fact running, and now reflects the live server state.
+0.5.0 adds the Weather Outlook Advisor, a seventh analyzer that turns
+barometric tendency, wind shift, and temperature trends into a short-term
+weather outlook. It hardens the OpenRouter request path with retries and
+backoff, and fixes a QuestDB context mismatch that had silently stopped the
+`aging`, `drift`, and `forecast` analyzers from producing reports. Every
+notification is now a short headline that fits a chartplotter alert, with the
+full report kept in the log, and the config panel is reorganized into
+collapsible sections with a per-analyzer schedule control.
 
-See the [0.4.2 changelog entry](CHANGELOG.md#042---2026-05-16) and the
-[v0.4.2 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.4.2).
+See the [0.5.0 changelog entry](CHANGELOG.md#050---2026-05-16) and the
+[v0.5.0 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.0).
 
 ## Features
 
