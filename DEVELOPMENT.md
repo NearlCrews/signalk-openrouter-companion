@@ -81,9 +81,9 @@ Full rules for adding a new analyzer live in [CLAUDE.md](CLAUDE.md) and the proj
 
 ### State vs transition vs trend
 
-The five analyzers are split by purpose so they don't duplicate findings:
+The six analyzers are split by purpose so they don't duplicate findings:
 
-- **State** (`maintenance`, `health`): describe "now". Read from the in-memory `RollingBuffer` and the live SK tree via `app.getSelfPath(...)`. No QuestDB.
+- **State** (`maintenance`, `health`, `liveness`): describe "now". Read from the in-memory `RollingBuffer` (`maintenance` and `health` also read the live SK tree via `app.getSelfPath(...)`; `liveness` reads the buffer only). No QuestDB.
 - **Transition** (`alerts`): describe a threshold crossing. Triggered by `battery-event` subkinds from `BatteryMonitor`. Reads a one-shot snapshot.
 - **Trend** (`aging`, `drift`): describe gradual change over a configurable window. Read history from QuestDB; the buffer is only used to discover which banks and engines exist.
 

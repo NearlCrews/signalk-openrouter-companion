@@ -147,8 +147,8 @@ describe('plugin REST API', () => {
       };
       expect(body.openrouter.apiKeySet).toBe(true);
       expect(body.openrouter.callsToday).toBe(0);
-      // The default config enables maintenance + alerts; aging/drift/health
-      // default off. Assert via the union to stay resilient to default flips.
+      // All analyzers default enabled. Assert one is present plus the count,
+      // rather than the full set, to stay resilient to default flips.
       const enabled = new Set(body.analyzers.filter((a) => a.enabled).map((a) => a.id));
       expect(enabled.has('maintenance')).toBe(true);
       expect(body.analyzers).toHaveLength(6);

@@ -11,12 +11,13 @@ Project memory for Claude Code. Read at the start of every session.
 - Standardized triggers block per analyzer: `{ cron: { enabled, pattern, timezone }, put: { enabled, path }, events: string[] }`. Same shape for every analyzer; the events array's enum is per-analyzer.
 - Per-analyzer system prompts are overridable via `customSystemPrompt?: string` on each `*Cfg`. Constructor calls `resolveSystemPrompt(cfg.customSystemPrompt, <NAME>_DEFAULT_SYSTEM_PROMPT)`. The default is exported from each analyzer file so `core/api.ts::DEFAULT_SYSTEM_PROMPTS` can serve it via `GET /api/analyzers/:id/prompt`.
 - Shared infra in `src/core/`: `logger`, `buffer`, `budget`, `engineDetector`, `batteryMonitor`, `cronScheduler`, `triggerRouter`, `openrouter`, `questdb`, `publisher`, `discovery`, `skNode` (incl. `asTreeMap` + `readBankSnapshot`), `emitter` (TypedEmitter base for batteryMonitor/engineDetector), `format`, `paths`, `triggers` (incl. `buildTriggers` and `manualPutCtx`), `cfg` (incl. `clampPositiveInt` and `resolveSystemPrompt`), `api` (REST routes + PluginRuntime).
-- Five analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
+- Six analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
   - `maintenance` (state): per-engine-session narrative, fires on engine-stop. No QuestDB.
   - `health` (state): daily snapshot of every battery bank, fires on cron. No QuestDB.
   - `alerts` (transition): real-time threshold crossings (low SoC, cell imbalance), fires on battery events.
   - `aging` (trend): monthly capacity-loss trend per bank over two configurable windows (default 30 and 90 days), fires on cron. Reads QuestDB.
   - `drift` (trend): weekly engine fuel-economy and per-RPM drift vs a configurable trailing baseline (default 30 days), fires on cron. Reads QuestDB.
+  - `liveness` (state): reports which watched SignalK paths have gone stale or are served by multiple sources, fires on cron. Reads the `RollingBuffer` only (`pathKeys` + `slice`); no QuestDB.
 - Trend analyzers own QuestDB queries; state analyzers don't, to keep their reports independent of long-term history and avoid duplicating the trend findings.
 
 ## Conventions

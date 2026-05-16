@@ -5,7 +5,7 @@
 
 > **Beta.** Trend analyzers (`aging`, `drift`) need 30+ days of QuestDB history before their reports are useful; smoke tests pass but the prose hasn't been verified across a full season of telemetry yet.
 
-A Signal K plugin that runs LLM analyzers (via OpenRouter) over your vessel's propulsion and electrical telemetry. Five analyzers ship: state ("now"), transition ("threshold crossed"), and trend ("over time"). Each emits a short plain-prose report or alert as a Signal K notification and appends every run to a JSONL log.
+A Signal K plugin that runs LLM analyzers (via OpenRouter) over your vessel's propulsion and electrical telemetry. Six analyzers ship: state ("now"), transition ("threshold crossed"), and trend ("over time"). Each emits a short plain-prose report or alert as a Signal K notification and appends every run to a JSONL log.
 
 > **Requires a paid OpenRouter API key.** LLM calls are billed per token. A per-day call cap (default 20) is enforced; raise or lower it in the admin panel. Trend analyzers (`aging`, `drift`) also need a co-installed [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb) for time-series history.
 
@@ -22,6 +22,7 @@ In the Signal K admin UI: **App Store** → **Available** → search for **OpenR
 | `alerts`      | transition | battery events (low SoC, cell imbalance)       | `notifications.electrical.batteries.<bankId>.{lowSoc,cellImbalance}` (canonical, per-bank) |
 | `aging`       | trend      | cron (default 8am on the 1st) or PUT           | `notifications.openrouter-companion.aging.report`                                          |
 | `drift`       | trend      | cron (default 8am Sunday) or PUT               | `notifications.openrouter-companion.drift.report`                                          |
+| `liveness`    | state      | cron (default 8am daily) or PUT                | `notifications.openrouter-companion.liveness.report`                                       |
 
 Each analyzer is independently enabled and shares the standardized `triggers` config (cron + PUT + events). Reports use SK 1.8.2 `state: nominal` so they don't trip a chartplotter alarm; alerts use `state: alert` with `method: ['visual','sound']` and a stable 16-bit `alertId`, which a co-installed [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) maps cleanly to PGN 126983/126985.
 

@@ -35,9 +35,9 @@ Thanks for your interest. This is a beta project; PRs and issues are welcome.
 
 This repo is **ONE npm package**. New monitoring domains go in as `Analyzer` modules under `src/analyzers/`, not as sibling packages. See [DEVELOPMENT.md](DEVELOPMENT.md) for the full architectural rules and the standardized triggers contract.
 
-Five analyzers ship today: `maintenance`, `health`, `alerts`, `aging`, `drift`. Split by purpose:
+Six analyzers ship today: `maintenance`, `health`, `alerts`, `aging`, `drift`, `liveness`. Split by purpose:
 
-- **State** analyzers describe "now" (`maintenance`, `health`).
+- **State** analyzers describe "now" (`maintenance`, `health`, `liveness`).
 - **Transition** analyzers describe a threshold crossing (`alerts`).
 - **Trend** analyzers describe gradual change over a configurable window from QuestDB history (`aging`, `drift`).
 

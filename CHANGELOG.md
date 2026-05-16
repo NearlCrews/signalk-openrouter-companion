@@ -2,6 +2,61 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-05-16
+
+Adds a sixth analyzer, `liveness`, and hardens the OpenRouter client
+against transport-level failures. 173 tests pass across 20 test files.
+
+### Added (sensor-liveness analyzer)
+
+- `LivenessAnalyzer` (`src/analyzers/liveness.ts`): a state analyzer that
+  reports which watched Signal K paths have gone stale or are served by
+  more than one source. It reads the `RollingBuffer` only (`pathKeys()`
+  plus `slice()`): no new subscriptions, no QuestDB. A path is stale when
+  its newest buffered sample is older than `stalenessThresholdSec`
+  (default 300); a path is multi-source when two or more `$source` labels
+  served it within the retained window. The system prompt tells the LLM
+  that intermittently-powered gear going silent (engine `propulsion.*`
+  paths) and intentional sensor redundancy (multi-source) are normal, so
+  only genuine faults get flagged. Default trigger: cron `0 8 * * *` plus
+  on-demand PUT to `plugins.openrouter-companion.liveness.run`. Publishes
+  on `notifications.openrouter-companion.liveness.report` with
+  `state: nominal`.
+- The `liveness` id, title, factory, config shape, default options, rjsf
+  schema block, and default system prompt are wired through `ids.ts`,
+  `registry.ts`, `types.ts`, `schema.ts`, and `core/api.ts`.
+  `LIVENESS_DEFAULT_STALENESS_SEC` and `LIVENESS_SUPPORTED_EVENTS` join
+  the per-analyzer constants block in `types.ts`.
+- `tests/_mocks.ts::makeBuffer()`: shared `RollingBuffer` factory for
+  analyzer tests.
+
+### Added (LLM-path resilience)
+
+- `OpenRouterClient` now retries transport-level failures (connection
+  reset, DNS failure, the internal request-timeout abort), not just HTTP
+  status codes. A caller-supplied `AbortSignal` abort still propagates
+  immediately without a retry.
+- `504 Gateway Timeout` joins the transient-status set.
+- Backoff applies equal jitter to the ladder base
+  (`base * (0.5 + random * 0.5)`); `OpenRouterCfg.random` is an
+  injectable source so tests stay deterministic. A larger `Retry-After`
+  header still wins.
+- An HTTP 200 carrying empty completion text now throws an
+  `OpenRouterError`, so the `TriggerRouter` publishes a failure rather
+  than an empty report.
+- `OpenRouterClient.retryOrThrow` centralizes the back-off-and-recurse
+  tail shared by the transient-HTTP and transport-failure paths.
+
+### Changed
+
+- `/api/openrouter/test` maps an `OpenRouterError` whose status is below
+  400 (transport status 0, empty-completion status 200) to HTTP 500,
+  since neither is a valid HTTP error status to echo to the client.
+
+### Test count
+
+156 -> 173 tests across 20 test files. dist 130.9 kB -> 136.5 kB.
+
 ## [0.3.2] - 2026-05-13
 
 Codebase-wide simplify pass driven by a 5-agent review across reuse,
