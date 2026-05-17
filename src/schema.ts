@@ -1,4 +1,5 @@
 import type { BatteryEventKind } from './analyzers/Analyzer.js';
+import { CRON_PRESETS } from './cronPresets.js';
 import {
   AGING_SUPPORTED_EVENTS,
   ALERTS_SUPPORTED_EVENTS,
@@ -34,8 +35,10 @@ function eventTitlesFor(events: ReadonlyArray<string>): string[] {
 }
 
 /**
- * Cron presets exposed in the admin form. Kept as parallel `values` and
- * `titles` arrays so the schema renders a clean `enum + enumNames` dropdown
+ * Cron presets exposed in the admin form. The list itself lives in
+ * `src/cronPresets.ts` as the single source of truth shared with the custom
+ * config panel; here it is split into the parallel `values` and `titles`
+ * arrays the schema needs so it renders a clean `enum + enumNames` dropdown
  * in the SK admin UI (rjsf 5 + raw `@rjsf/core`).
  *
  * Why not `anyOf` with a freeform fallback?
@@ -50,34 +53,18 @@ function eventTitlesFor(events: ReadonlyArray<string>): string[] {
  * select. Users who need a custom 5-field cron pattern can set it directly
  * in the plugin's saved JSON config (`~/.signalk/plugin-config-data/<id>.json`).
  */
-const CRON_PRESET_VALUES = [
-  '0 8 * * *',
-  '0 7 * * *',
-  '0 12 * * *',
-  '30 17 * * *',
-  '0 18 * * *',
-  '0 0 * * 0',
-  '0 0 1 * *',
-] as const;
-
-const CRON_PRESET_TITLES = [
-  '8:00 AM daily',
-  '7:00 AM daily',
-  'Noon daily',
-  '5:30 PM daily',
-  '6:00 PM daily',
-  'Midnight Sunday',
-  'Midnight on the 1st',
-] as const;
+const CRON_PRESET_VALUES = CRON_PRESETS.map((p) => p.value);
+const CRON_PRESET_TITLES = CRON_PRESETS.map((p) => p.label);
 
 const CRON_HELP =
   'Pick a preset. Custom 5-field cron patterns can be set by editing the ' +
   "plugin's JSON config file directly.";
 
-function cronPatternSchema(defaultPattern: string): Record<string, unknown> {
+export function cronPatternSchema(defaultPattern: string): Record<string, unknown> {
   // If the saved default is not a preset (e.g. a custom pattern persisted in
-  // the JSON config), include it in the enum so rjsf keeps the dropdown
-  // selection consistent rather than blanking it.
+  // the JSON config, or a future analyzer shipping a non-preset default),
+  // include it in the enum so rjsf keeps the dropdown selection consistent
+  // rather than blanking it.
   const presets = [...CRON_PRESET_VALUES] as string[];
   const titles = [...CRON_PRESET_TITLES] as string[];
   if (defaultPattern && !presets.includes(defaultPattern)) {

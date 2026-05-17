@@ -39,9 +39,25 @@ module.exports = {
         // JSX runs and the panel fails to mount.
         options: { loader: 'jsx', target: 'es2022', jsx: 'automatic' },
       },
+      {
+        // The panel is plain JS, but it imports a few `.ts` modules shared
+        // with the type-checked backend (e.g. src/cronPresets.ts, the single
+        // source of truth for the schedule presets). esbuild-loader strips
+        // the type annotations; no separate tsc pass runs for the panel.
+        test: /\.ts$/,
+        exclude: /node_modules/,
+        loader: 'esbuild-loader',
+        options: { loader: 'ts', target: 'es2022' },
+      },
     ],
   },
-  resolve: { extensions: ['.js', '.jsx'] },
+  // extensionAlias lets a `.js` import specifier resolve to a `.ts` file, so
+  // a module shared with the backend can keep its `.ts` source while the
+  // panel imports it with the `.js` specifier the backend also uses.
+  resolve: {
+    extensions: ['.js', '.jsx', '.ts'],
+    extensionAlias: { '.js': ['.js', '.ts'] },
+  },
   plugins: [
     new ModuleFederationPlugin({
       name: containerName,

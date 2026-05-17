@@ -1,3 +1,4 @@
+import { CRON_PRESETS } from '../../cronPresets.js';
 import { btn, btnClass, S } from '../styles.js';
 import { T } from '../tokens.js';
 import { PromptDrawer } from './PromptDrawer.jsx';
@@ -12,18 +13,10 @@ const SEVERITY_FLOOR_OPTIONS = [
 ];
 export const DEFAULT_SEVERITY_FLOOR = 'moderate';
 
-// How often a scheduled analyzer runs. Values are 5-field cron patterns. A
-// saved pattern outside this list (a hand-edited cron) is surfaced as a
-// non-selectable "Custom" entry so the dropdown never blanks.
-const FREQUENCY_OPTIONS = [
-  { value: '0 * * * *', label: 'Hourly' },
-  { value: '0 */3 * * *', label: 'Every 3 hours' },
-  { value: '0 */6 * * *', label: 'Every 6 hours' },
-  { value: '0 */12 * * *', label: 'Every 12 hours' },
-  { value: '0 8 * * *', label: 'Daily (8 AM)' },
-  { value: '0 8 * * 0', label: 'Weekly (Sun 8 AM)' },
-  { value: '0 8 1 * *', label: 'Monthly (1st, 8 AM)' },
-];
+// How often a scheduled analyzer runs. Values are 5-field cron patterns. The
+// preset list is CRON_PRESETS (src/cronPresets.ts), shared with the rjsf
+// schema. A saved pattern outside the list (a hand-edited cron) is surfaced
+// as a non-selectable "Custom" entry so the dropdown never blanks.
 
 export function AnalyzerRow({
   analyzer,
@@ -50,9 +43,9 @@ export function AnalyzerRow({
   // it has no schedule, so the frequency dropdown is shown disabled.
   const cronEnabled = !!analyzer.cron?.enabled;
   const scheduleOptions =
-    !schedule || FREQUENCY_OPTIONS.some((o) => o.value === schedule)
-      ? FREQUENCY_OPTIONS
-      : [...FREQUENCY_OPTIONS, { value: schedule, label: `Custom: ${schedule}` }];
+    !schedule || CRON_PRESETS.some((o) => o.value === schedule)
+      ? CRON_PRESETS
+      : [...CRON_PRESETS, { value: schedule, label: `Custom: ${schedule}` }];
 
   return (
     <div style={S.analyzerPanel}>

@@ -49,6 +49,12 @@ const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 const MAX_RETRIES = 3;
 
+// Upper bound on a single completion. Analyzer reports are short (a headline
+// plus a few sentences), so this is generous headroom for the longest
+// narrative while still bounding a pathological runaway completion. The
+// per-day call cap in BudgetTracker bounds total spend; this bounds one call.
+const MAX_COMPLETION_TOKENS = 2000;
+
 // One attempt's terminal outcome: either a usable result, or a retry signal
 // carrying the error to throw once the retry budget is exhausted.
 type Attempt =
@@ -99,6 +105,7 @@ export class OpenRouterClient {
           },
           body: JSON.stringify({
             model: this.cfg.model,
+            max_tokens: MAX_COMPLETION_TOKENS,
             messages: [
               { role: 'system', content: args.system },
               { role: 'user', content: args.user },

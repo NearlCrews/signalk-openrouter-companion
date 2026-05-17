@@ -89,7 +89,11 @@ const BIN_CASE_SQL = ((): string => {
 })();
 
 export interface BinStats {
-  count: number;
+  // Count of RPM samples in this bin that had a fresh fuel.rate / SOG pair
+  // within RPM_JOIN_WINDOW_US. Tracked per metric: fuel.rate and SOG join
+  // independently, so one can be well-covered while the other is sparse.
+  fuelCount: number;
+  sogCount: number;
   meanFuelRate: number | null;
   meanSog: number | null;
 }
@@ -175,7 +179,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     for (const eng of input.engines) {
       lines.push(`### Engine ${eng.engineId}`);
       lines.push(
-        '| Band | Week n | Base n | Fuel.rate wk (m^3/s) | Fuel.rate base | Δ% | SOG wk (m/s) | SOG base | Δ% |',
+        '| Band | Wk n (fuel/sog) | Base n (fuel/sog) | Fuel.rate wk (m^3/s) | Fuel.rate base | Δ% | SOG wk (m/s) | SOG base | Δ% |',
       );
       lines.push('|---|---|---|---|---|---|---|---|---|');
       for (const bin of BIN_ORDER) {
@@ -185,7 +189,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
         const d = eng.deltas[bin];
         const range = `${def.label} [${def.min}, ${def.max === Number.POSITIVE_INFINITY ? '∞' : def.max}) Hz`;
         lines.push(
-          `| ${range} | ${w.count} | ${b.count} | ${fmtNumber(w.meanFuelRate, { digits: 5 })} | ${fmtNumber(b.meanFuelRate, { digits: 5 })} | ${fmtPct(d.fuelRateDeltaPct)} | ${fmtNumber(w.meanSog, { digits: 5 })} | ${fmtNumber(b.meanSog, { digits: 5 })} | ${fmtPct(d.sogDeltaPct)} |`,
+          `| ${range} | ${w.fuelCount}/${w.sogCount} | ${b.fuelCount}/${b.sogCount} | ${fmtNumber(w.meanFuelRate, { digits: 5 })} | ${fmtNumber(b.meanFuelRate, { digits: 5 })} | ${fmtPct(d.fuelRateDeltaPct)} | ${fmtNumber(w.meanSog, { digits: 5 })} | ${fmtNumber(b.meanSog, { digits: 5 })} | ${fmtPct(d.sogDeltaPct)} |`,
         );
       }
       lines.push('');
@@ -196,8 +200,14 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 
 // Issues one QuestDB query per (engine, window) that does the per-RPM-band
 // aggregation server-side. ASOF JOIN pairs each RPM sample with the most
-// recent preceding fuel.rate and SOG sample. The 5-second join tolerance
-// keeps stale fuel/sog readings from dragging the mean.
+// recent preceding fuel.rate and SOG sample. ASOF JOIN has no time bound, so
+// it will pair an RPM sample with a fuel/SOG reading from hours earlier across
+// an engine-off gap. The RPM_JOIN_WINDOW_US guard in the CASE expressions
+// drops those stale pairs from both the mean AND the sample count, so n_fuel /
+// n_sog reflect only RPM samples that had a fresh pair, not every RPM row.
+// fuel.rate and SOG are joined independently, so each carries its own count:
+// a bin with dense fuel coverage but sparse SOG must not pass the SOG gate on
+// fuel-sample density.
 async function binEngineWindow(
   questdb: NonNullable<AnalyzerDeps['questdb']>,
   context: string,
@@ -237,7 +247,8 @@ async function binEngineWindow(
     )
     SELECT
       ${BIN_CASE_SQL} AS bin,
-      count() AS n,
+      count(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_fuel,
+      count(CASE WHEN r.ts - s.ts <= ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_sog,
       avg(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
       avg(CASE WHEN r.ts - s.ts <= ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog
     FROM r ASOF JOIN f ASOF JOIN s
@@ -250,17 +261,19 @@ async function binEngineWindow(
     const res = await questdb.query(sql);
     const cols = indexColumns(res);
     const binIdx = cols.get('bin') ?? -1;
-    const nIdx = cols.get('n') ?? -1;
+    const nFuelIdx = cols.get('n_fuel') ?? -1;
+    const nSogIdx = cols.get('n_sog') ?? -1;
     const fuelIdx = cols.get('mean_fuel') ?? -1;
     const sogIdx = cols.get('mean_sog') ?? -1;
-    if (binIdx < 0 || nIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
+    if (binIdx < 0 || nFuelIdx < 0 || nSogIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
     if (res.dataset.length === 0) return null;
     const out = emptyBins();
     for (const row of res.dataset) {
       const binRaw = row[binIdx];
       if (typeof binRaw !== 'string' || !isBinKey(binRaw)) continue;
       out[binRaw] = {
-        count: asFiniteNumber(row[nIdx]) ?? 0,
+        fuelCount: asFiniteNumber(row[nFuelIdx]) ?? 0,
+        sogCount: asFiniteNumber(row[nSogIdx]) ?? 0,
         meanFuelRate: asFiniteNumber(row[fuelIdx]),
         meanSog: asFiniteNumber(row[sogIdx]),
       };
@@ -277,7 +290,7 @@ function isBinKey(k: string): k is BinKey {
 
 function emptyBins(): Record<BinKey, BinStats> {
   return Object.fromEntries(
-    BIN_ORDER.map((k) => [k, { count: 0, meanFuelRate: null, meanSog: null }]),
+    BIN_ORDER.map((k) => [k, { fuelCount: 0, sogCount: 0, meanFuelRate: null, meanSog: null }]),
   ) as Record<BinKey, BinStats>;
 }
 
@@ -292,12 +305,13 @@ function computeDeltas(
 }
 
 function deltaForBin(w: BinStats, b: BinStats): BinDelta {
-  if (w.count < MIN_BIN_SAMPLES || b.count < MIN_BIN_SAMPLES) {
-    return { fuelRateDeltaPct: null, sogDeltaPct: null };
-  }
+  // Gate each metric on its own fresh-pair count: a SOG delta must not pass
+  // on fuel-sample density and vice versa.
+  const fuelOk = w.fuelCount >= MIN_BIN_SAMPLES && b.fuelCount >= MIN_BIN_SAMPLES;
+  const sogOk = w.sogCount >= MIN_BIN_SAMPLES && b.sogCount >= MIN_BIN_SAMPLES;
   return {
-    fuelRateDeltaPct: pctDelta(w.meanFuelRate, b.meanFuelRate),
-    sogDeltaPct: pctDelta(w.meanSog, b.meanSog),
+    fuelRateDeltaPct: fuelOk ? pctDelta(w.meanFuelRate, b.meanFuelRate) : null,
+    sogDeltaPct: sogOk ? pctDelta(w.meanSog, b.meanSog) : null,
   };
 }
 
@@ -309,6 +323,6 @@ function pctDelta(a: number | null, b: number | null): number | null {
 
 function totalBinCount(bins: Record<BinKey, BinStats>): number {
   let n = 0;
-  for (const k of BIN_ORDER) n += bins[k].count;
+  for (const k of BIN_ORDER) n += bins[k].fuelCount + bins[k].sogCount;
   return n;
 }

@@ -13,6 +13,7 @@ src/
 ├── index.ts                  Plugin entry: lifecycle, subscriptions, PUT + REST registration
 ├── schema.ts                 rjsf JSON Schema (storage shape; fallback admin UI)
 ├── types.ts                  Plugin options + DEFAULT_OPTIONS + mergeWithDefaults
+├── cronPresets.ts             CRON_PRESETS: schedule-dropdown presets shared by schema + panel
 ├── analyzers/
 │   ├── Analyzer.ts           Shared interface, TriggerSpec union, AnalyzerDeps
 │   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
@@ -112,7 +113,7 @@ Both lists live as static `WEATHER_CANONICAL_PATHS` / `WEATHER_EXTENSION_PATHS` 
 | Moderate and up   | `moderate`   | `severe`, `moderate`              |
 | Any deterioration | `minor`      | `severe`, `moderate`, `minor`     |
 
-The default is `moderate`. When the grade meets or exceeds the floor the notification publishes with a mapped Signal K state: `severe` to `alarm`, `moderate` to `warn`, `minor` to `alert`. When the grade is below the floor, or is `none`, the outlook is still published with `state: normal` so it stays readable in the Data Browser; it simply raises no alarm.
+The default is `moderate`. When the grade meets or exceeds the floor the notification publishes with a mapped Signal K state: `severe` to `alarm`, `moderate` to `warn`, `minor` to `alert`. When the grade is below the floor, or is `none`, the outlook is still published with `state: nominal` so it stays readable in the Data Browser; it simply raises no alarm.
 
 **Output path.** The outlook publishes on the single stable path `notifications.openrouter-companion.forecast.report`. It deliberately stays in the Companion namespace and does not use `notifications.environment.weather.*`: that branch belongs to `signalk-virtual-weather-sensors` for its current-condition alerts, and keeping the prediction under the Companion's own namespace keeps provenance unambiguous.
 
@@ -148,7 +149,7 @@ Outputs:
 - `dist/*.d.ts` (TypeScript declarations)
 - `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~18 KB total)
 
-esbuild externalizes `@signalk/server-api` and `croner`; everything else in the backend is bundled. The panel bundle shares `react` / `react-dom` 19 as Module Federation `singleton: true` so it reuses the SK admin UI's React runtime. The panel is built with `experiments.outputModule: true` and `library: { type: 'module' }` because this package's `"type": "module"` makes SK admin inject `<script type="module">`; legacy `library: 'var'` doesn't work under that loader.
+esbuild externalizes `@signalk/server-api` and `croner`; everything else in the backend is bundled. The panel bundle shares `react` 19 as a Module Federation `singleton: true` so it reuses the SK admin UI's React runtime. The panel is built with `experiments.outputModule: true` and `library: { type: 'module' }` because this package's `"type": "module"` makes SK admin inject `<script type="module">`; legacy `library: 'var'` doesn't work under that loader.
 
 ## Tests
 
@@ -158,7 +159,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-209 tests across 21 files cover:
+228 tests across 21 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).

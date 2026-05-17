@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
-import { ANALYZER_IDS } from './analyzers/ids.js';
+import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
 import { ANALYZER_FACTORIES } from './analyzers/registry.js';
 import { type PluginRuntime, type RouterLike, registerApiRoutes } from './core/api.js';
 import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
@@ -228,7 +228,7 @@ export default function createPlugin(app: ServerApiLike): {
             // Naming the members keeps every job bound to exactly its pair.
             const cronJobs = new Map<
               string,
-              { pattern: string; timezone: string; analyzerIds: string[] }
+              { pattern: string; timezone: string; analyzerIds: AnalyzerId[] }
             >();
             for (const a of analyzers) {
               const timezone = cfg.analyzers[a.id].triggers.cron.timezone;
@@ -276,6 +276,10 @@ export default function createPlugin(app: ServerApiLike): {
             app.setPluginError(`Startup failed: ${stringify(err)}`);
           });
 
+        // The detector emits engine-start, engine-stop, and possible-stop.
+        // Only engine-stop drives an analyzer: maintenance narrates the
+        // completed session. engine-start has no consumer today, so it is
+        // intentionally not subscribed here.
         unsubs.push(
           detector.on('engine-stop', (e: EngineEvent) => {
             if (!router) return;

@@ -28,11 +28,14 @@ function makeDeps(app: MockApp, buffer: RollingBuffer, questdb: MockQuestDB | nu
 }
 
 // drift.ts pushes per-bin aggregation into QuestDB and reads back rows of
-// {bin, n, mean_fuel, mean_sog}. Test stubs return pre-binned rows in that
-// exact shape rather than raw timeseries.
+// {bin, n_fuel, n_sog, mean_fuel, mean_sog}. Test stubs return pre-binned rows
+// in that exact shape rather than raw timeseries. n_fuel and n_sog are the
+// per-metric fresh-pair counts (RPM samples with a fuel.rate / SOG join inside
+// the tolerance window).
 interface BinRow {
   bin: 'idle' | 'lowCruise' | 'highCruise' | 'topEnd' | 'wot';
-  n: number;
+  n_fuel: number;
+  n_sog: number;
   mean_fuel: number | null;
   mean_sog: number | null;
 }
@@ -41,11 +44,12 @@ function binResult(rows: BinRow[]) {
   return {
     columns: [
       { name: 'bin', type: 'STRING' },
-      { name: 'n', type: 'LONG' },
+      { name: 'n_fuel', type: 'LONG' },
+      { name: 'n_sog', type: 'LONG' },
       { name: 'mean_fuel', type: 'DOUBLE' },
       { name: 'mean_sog', type: 'DOUBLE' },
     ],
-    dataset: rows.map((r) => [r.bin, r.n, r.mean_fuel, r.mean_sog]),
+    dataset: rows.map((r) => [r.bin, r.n_fuel, r.n_sog, r.mean_fuel, r.mean_sog]),
   };
 }
 
@@ -122,16 +126,16 @@ describe('DriftAnalyzer', () => {
 
       // Week burns 10% more fuel per bin than baseline; SOG identical.
       const weekRows: BinRow[] = [
-        { bin: 'idle', n: 50, mean_fuel: 0.000055, mean_sog: 0 },
-        { bin: 'lowCruise', n: 50, mean_fuel: 0.000132, mean_sog: 2.5 },
-        { bin: 'highCruise', n: 50, mean_fuel: 0.000308, mean_sog: 4.6 },
-        { bin: 'topEnd', n: 50, mean_fuel: 0.000484, mean_sog: 5.5 },
+        { bin: 'idle', n_fuel: 50, n_sog: 50, mean_fuel: 0.000055, mean_sog: 0 },
+        { bin: 'lowCruise', n_fuel: 50, n_sog: 50, mean_fuel: 0.000132, mean_sog: 2.5 },
+        { bin: 'highCruise', n_fuel: 50, n_sog: 50, mean_fuel: 0.000308, mean_sog: 4.6 },
+        { bin: 'topEnd', n_fuel: 50, n_sog: 50, mean_fuel: 0.000484, mean_sog: 5.5 },
       ];
       const baseRows: BinRow[] = [
-        { bin: 'idle', n: 200, mean_fuel: 0.00005, mean_sog: 0 },
-        { bin: 'lowCruise', n: 200, mean_fuel: 0.00012, mean_sog: 2.5 },
-        { bin: 'highCruise', n: 200, mean_fuel: 0.00028, mean_sog: 4.6 },
-        { bin: 'topEnd', n: 200, mean_fuel: 0.00044, mean_sog: 5.5 },
+        { bin: 'idle', n_fuel: 200, n_sog: 200, mean_fuel: 0.00005, mean_sog: 0 },
+        { bin: 'lowCruise', n_fuel: 200, n_sog: 200, mean_fuel: 0.00012, mean_sog: 2.5 },
+        { bin: 'highCruise', n_fuel: 200, n_sog: 200, mean_fuel: 0.00028, mean_sog: 4.6 },
+        { bin: 'topEnd', n_fuel: 200, n_sog: 200, mean_fuel: 0.00044, mean_sog: 5.5 },
       ];
 
       const stub = makeQuestDBStub((sql) =>
@@ -149,8 +153,10 @@ describe('DriftAnalyzer', () => {
       if (!eng) throw new Error('expected one engine');
       expect(eng.engineId).toBe('port');
       for (const bin of ['idle', 'lowCruise', 'highCruise', 'topEnd'] as const) {
-        expect(eng.thisWeek[bin].count).toBe(50);
-        expect(eng.baseline[bin].count).toBe(200);
+        expect(eng.thisWeek[bin].fuelCount).toBe(50);
+        expect(eng.thisWeek[bin].sogCount).toBe(50);
+        expect(eng.baseline[bin].fuelCount).toBe(200);
+        expect(eng.baseline[bin].sogCount).toBe(200);
         const fuel = eng.deltas[bin].fuelRateDeltaPct;
         if (fuel == null) throw new Error(`null fuel delta in bin ${bin}`);
         expect(fuel).toBeCloseTo(10, 0);
@@ -184,8 +190,12 @@ describe('DriftAnalyzer', () => {
       const thisWeekFromIso = new Date(firedMs - 7 * 86_400_000).toISOString();
 
       // Only 5 samples in low cruise: below MIN_BIN_SAMPLES (30).
-      const week: BinRow[] = [{ bin: 'lowCruise', n: 5, mean_fuel: 0.0001, mean_sog: 2.5 }];
-      const base: BinRow[] = [{ bin: 'lowCruise', n: 5, mean_fuel: 0.0001, mean_sog: 2.5 }];
+      const week: BinRow[] = [
+        { bin: 'lowCruise', n_fuel: 5, n_sog: 5, mean_fuel: 0.0001, mean_sog: 2.5 },
+      ];
+      const base: BinRow[] = [
+        { bin: 'lowCruise', n_fuel: 5, n_sog: 5, mean_fuel: 0.0001, mean_sog: 2.5 },
+      ];
 
       const stub = makeQuestDBStub((sql) =>
         sql.includes(`ts >= '${thisWeekFromIso}'`) ? binResult(week) : binResult(base),
@@ -198,7 +208,8 @@ describe('DriftAnalyzer', () => {
       const input = r as DriftInput;
       const eng = input.engines[0];
       if (!eng) throw new Error('expected one engine');
-      expect(eng.thisWeek.lowCruise.count).toBe(5);
+      expect(eng.thisWeek.lowCruise.fuelCount).toBe(5);
+      expect(eng.thisWeek.lowCruise.sogCount).toBe(5);
       expect(eng.deltas.lowCruise.fuelRateDeltaPct).toBeNull();
       expect(eng.deltas.lowCruise.sogDeltaPct).toBeNull();
     });
@@ -213,7 +224,9 @@ describe('DriftAnalyzer', () => {
       // baselineDays=14 means the baseline runs from -21d to -7d.
       const baselineFromIso = new Date(firedMs - (7 + 14) * 86_400_000).toISOString();
 
-      const rows: BinRow[] = [{ bin: 'idle', n: 50, mean_fuel: 0.00005, mean_sog: 0 }];
+      const rows: BinRow[] = [
+        { bin: 'idle', n_fuel: 50, n_sog: 50, mean_fuel: 0.00005, mean_sog: 0 },
+      ];
       const stub = makeQuestDBStub(() => binResult(rows));
 
       const a = new DriftAnalyzer(makeCfg({ baselineDays: 14 }));
@@ -247,18 +260,18 @@ describe('DriftAnalyzer', () => {
           {
             engineId: 'port',
             thisWeek: {
-              idle: { count: 60, meanFuelRate: 0.00005, meanSog: 0.0 },
-              lowCruise: { count: 80, meanFuelRate: 0.00012, meanSog: 2.5 },
-              highCruise: { count: 120, meanFuelRate: 0.00031, meanSog: 4.6 },
-              topEnd: { count: 5, meanFuelRate: 0.00044, meanSog: 5.4 },
-              wot: { count: 0, meanFuelRate: null, meanSog: null },
+              idle: { fuelCount: 60, sogCount: 60, meanFuelRate: 0.00005, meanSog: 0.0 },
+              lowCruise: { fuelCount: 80, sogCount: 80, meanFuelRate: 0.00012, meanSog: 2.5 },
+              highCruise: { fuelCount: 120, sogCount: 120, meanFuelRate: 0.00031, meanSog: 4.6 },
+              topEnd: { fuelCount: 5, sogCount: 5, meanFuelRate: 0.00044, meanSog: 5.4 },
+              wot: { fuelCount: 0, sogCount: 0, meanFuelRate: null, meanSog: null },
             },
             baseline: {
-              idle: { count: 200, meanFuelRate: 0.00005, meanSog: 0.0 },
-              lowCruise: { count: 300, meanFuelRate: 0.00012, meanSog: 2.5 },
-              highCruise: { count: 400, meanFuelRate: 0.00028, meanSog: 4.6 },
-              topEnd: { count: 20, meanFuelRate: 0.00043, meanSog: 5.5 },
-              wot: { count: 0, meanFuelRate: null, meanSog: null },
+              idle: { fuelCount: 200, sogCount: 200, meanFuelRate: 0.00005, meanSog: 0.0 },
+              lowCruise: { fuelCount: 300, sogCount: 300, meanFuelRate: 0.00012, meanSog: 2.5 },
+              highCruise: { fuelCount: 400, sogCount: 400, meanFuelRate: 0.00028, meanSog: 4.6 },
+              topEnd: { fuelCount: 20, sogCount: 20, meanFuelRate: 0.00043, meanSog: 5.5 },
+              wot: { fuelCount: 0, sogCount: 0, meanFuelRate: null, meanSog: null },
             },
             deltas: {
               idle: { fuelRateDeltaPct: 0, sogDeltaPct: 0 },

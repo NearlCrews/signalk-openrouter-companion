@@ -6,6 +6,7 @@ import type {
   TriggerKind,
   TriggerSpec,
 } from '../analyzers/Analyzer.js';
+import type { AnalyzerId } from '../analyzers/ids.js';
 import { stringify } from './logger.js';
 
 export interface DispatchExtras {
@@ -39,7 +40,7 @@ export class TriggerRouter {
   // Run a single analyzer by id, bypassing trigger matching. The REST fire
   // endpoint names the analyzer directly, so it must run regardless of which
   // triggers the analyzer has enabled.
-  async runById(id: string, ctx: TriggerCtx): Promise<void> {
+  async runById(id: AnalyzerId, ctx: TriggerCtx): Promise<void> {
     const a = this.analyzers.find((x) => x.id === id);
     if (a) await this.runOne(a, ctx);
   }

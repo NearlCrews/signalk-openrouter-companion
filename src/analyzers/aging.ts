@@ -31,6 +31,7 @@ export const AGING_DEFAULT_SYSTEM_PROMPT = [
   'All numeric values are in Signal K SI base units: capacity in J, cycles unitless. Deltas are expressed as percentages and as percent capacity loss per 100 cycles.',
   'Focus only on the aging trend. Do not restate the snapshot for today; the daily health analyzer covers that.',
   "For each bank, comment on each configured window's capacity trajectory and the loss per 100 cycles when cycles increased over the window.",
+  'Each window delta is computed from the first and last sample in that window, not a fitted regression line, so a single BMS capacity recalibration (common after a full charge) can show up as a spurious jump in one window. Weigh a trend that appears in both windows more heavily than one that shows in only one.',
   'Rank banks by capacity loss per 100 cycles, worst first. Flag any bank degrading 3 to 4 times the median rate as an outlier worth investigating.',
   "When the longest window has at least two samples on both capacity and cycles and a positive cycles delta, project months to replacement assuming linear degradation reaches 80 percent of original nominal capacity at end of life. Skip the projection where data is insufficient. Note that this is a linear-fit approximation; LiFePO4 capacity typically holds steady for most of the pack's life and then drops past a knee, so the projection will run optimistic late in life.",
   'Stay with the numbers in the data. If a bank is degrading within normal LiFePO4 expectations, say so plainly.',

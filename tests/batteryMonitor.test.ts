@@ -48,12 +48,18 @@ describe('BatteryMonitor low-soc', () => {
     expect(events[1]?.soc).toBe(0.36);
   });
 
-  it('aggregates SoC across sources (max wins)', () => {
+  it('aggregates SoC across sources (min wins: conservative for a safety alarm)', () => {
     const { monitor, events } = makeMonitor();
     monitor.observeSoc('house', 'bms-a', 0.5, 1_000_000);
     monitor.observeSoc('house', 'bms-b', 0.4, 1_000_500);
-    monitor.observeSoc('house', 'bms-a', 0.2, 1_001_000);
+    // min(0.5, 0.4) = 0.4, still above the 0.3 threshold.
     expect(events).toEqual([]);
+    // bms-a drops to 0.2 while the optimistic bms-b still reads 0.4. Min
+    // fusion must still fire: an optimistic sensor cannot suppress the alarm.
+    monitor.observeSoc('house', 'bms-a', 0.2, 1_001_000);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe('low-soc-enter');
+    expect(events[0]?.soc).toBe(0.2);
   });
 
   it('tracks banks independently', () => {

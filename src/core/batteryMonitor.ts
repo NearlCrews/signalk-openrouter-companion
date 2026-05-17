@@ -68,14 +68,20 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
     const b = this.getBank(bankId);
     b.recentSoc.set(source, { soc, ts });
 
+    // Fuse multiple SoC sources with the MINIMUM, not the maximum. This is a
+    // low-battery safety alarm: a single pessimistic sensor should still warn
+    // the operator, and a single optimistic sensor must not suppress the
+    // alarm or clear it early. (The engine detector fuses RPM with the max,
+    // which is the conservative direction there: harder to falsely cut a
+    // session short. The conservative direction differs per alarm.)
     const cutoff = ts - this.opts.sourceWindowMs;
-    let effective = Number.NEGATIVE_INFINITY;
+    let effective = Number.POSITIVE_INFINITY;
     for (const [src, r] of b.recentSoc) {
       if (r.ts < cutoff) {
         b.recentSoc.delete(src);
         continue;
       }
-      if (r.soc > effective) effective = r.soc;
+      if (r.soc < effective) effective = r.soc;
     }
     if (!Number.isFinite(effective)) return;
 

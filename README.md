@@ -119,7 +119,7 @@ Reports publish as informational notifications (`state: nominal`). The
 co-installed
 [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon)
 can forward to a NMEA 2000 chartplotter. The `forecast` analyzer publishes its
-outlook at `state: normal` and escalates to an alert state when the predicted
+outlook at `state: nominal` and escalates to an alert state when the predicted
 severity meets the configured floor.
 
 ## Documentation

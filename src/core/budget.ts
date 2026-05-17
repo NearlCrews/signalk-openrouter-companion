@@ -70,6 +70,14 @@ export class BudgetTracker {
       callsToday: this.state.callsToday + 1,
       lastCallTs: this.opts.now().toISOString(),
     };
-    await writeFile(this.opts.statePath, JSON.stringify(this.state));
+    try {
+      await writeFile(this.opts.statePath, JSON.stringify(this.state));
+    } catch {
+      // Best-effort persist. The in-memory counter is already incremented, so
+      // a failed write only loses the count across a server restart. It must
+      // not reject: recordCall runs inside the analyzer's try block, and a
+      // rejection here would surface as a spurious analyzer-failure report
+      // even though the LLM call has not been attempted yet.
+    }
   }
 }

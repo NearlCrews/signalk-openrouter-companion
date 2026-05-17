@@ -29,6 +29,10 @@ export class RollingBuffer {
     this.evict(arr, ts);
   }
 
+  // A path's entries are appended in arrival order with each delta's own
+  // timestamp, and one path interleaves multiple sources, so the array is
+  // not strictly ts-sorted. The window filter must stay order-agnostic: a
+  // binary search would silently miss entries past a timestamp inversion.
   slice(path: string, fromTs: number, toTs: number): BufferEntry[] {
     const arr = this.store.get(path);
     if (!arr) return [];

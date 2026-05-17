@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSchema,
   buildUiSchema,
+  cronPatternSchema,
   type EnabledGatedNode,
   type TriggerSchemaNode,
 } from '../src/schema.js';
@@ -148,9 +149,9 @@ describe('schema', () => {
       expect(pattern.type).toBe('string');
       expect(Array.isArray(pattern.enum)).toBe(true);
       expect(pattern.enum.length).toBeGreaterThanOrEqual(7);
-      expect(pattern.enum).toEqual(expect.arrayContaining(['0 8 * * *', '0 12 * * *']));
+      expect(pattern.enum).toEqual(expect.arrayContaining(['0 8 * * *', '0 */3 * * *']));
       expect(pattern.enumNames.length).toBe(pattern.enum.length);
-      expect(pattern.enumNames[0]).toBe('8:00 AM daily');
+      expect(pattern.enumNames[0]).toBe('Hourly');
       // No `anyOf`: that's the whole point of this refactor.
       expect((cronOn.properties.pattern as { anyOf?: unknown }).anyOf).toBeUndefined();
     }
@@ -175,24 +176,20 @@ describe('schema', () => {
     expect(healthPattern.enumNames.some((n) => n.startsWith('Custom:'))).toBe(false);
   });
 
-  it('widens the cron enum to include a non-preset analyzer default pattern', () => {
-    // Forecast analyzer ships with '0 */3 * * *' which is NOT a preset, so
-    // cronPatternSchema appends it with a 'Custom:' label.
-    const s = buildSchema();
-    const analyzers = s.properties.analyzers as {
-      properties: Record<string, EnabledGatedNode>;
-    };
-    const onBranch = enabledTrueBranch(analyzers.properties.forecast);
-    const triggers = onBranch.properties.triggers as unknown as TriggerSchemaNode;
-    const cronOn = enabledTrueBranch(triggers.properties.cron);
-    const pattern = cronOn.properties.pattern as {
+  it('widens the cron enum to include a non-preset default pattern', () => {
+    // Every shipped analyzer default is a preset, so the widening branch is
+    // exercised directly: cronPatternSchema appends a default that is not in
+    // the shared preset list (e.g. a hand-edited cron persisted in the JSON
+    // config) with a 'Custom:' label so the rjsf dropdown never blanks.
+    const custom = '15 3 */2 * *';
+    const pattern = cronPatternSchema(custom) as {
       enum: string[];
       enumNames: string[];
       default: string;
     };
-    expect(pattern.default).toBe('0 */3 * * *');
-    expect(pattern.enum).toContain('0 */3 * * *');
-    expect(pattern.enumNames[pattern.enum.indexOf('0 */3 * * *')]).toBe('Custom: 0 */3 * * *');
+    expect(pattern.default).toBe(custom);
+    expect(pattern.enum).toContain(custom);
+    expect(pattern.enumNames[pattern.enum.indexOf(custom)]).toBe(`Custom: ${custom}`);
     expect(pattern.enumNames.length).toBe(pattern.enum.length);
   });
 
