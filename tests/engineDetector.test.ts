@@ -150,6 +150,23 @@ describe('EngineDetector', () => {
     expect(restarted.det.snapshot()).toEqual([]);
   });
 
+  it('restore coerces a non-numeric sessionStartTs to null rather than trusting it', () => {
+    const { det, events } = makeDetector();
+    // A hand-corrupted engine-detector.json: sessionStartTs is a string.
+    // restore must not store it, or it would later feed NaN into the
+    // durationSec arithmetic.
+    det.restore(
+      [{ engineId: 'port', lastDeltaTs: 1_000_000, sessionStartTs: 'garbage' }],
+      1_010_000,
+      3_600_000,
+    );
+    det.observe('port', 's1', 0, 1_020_000);
+    det.observe('port', 's1', 0, 1_031_000);
+    const stop = events.find((e) => e.kind === 'engine-stop');
+    if (!stop) throw new Error('expected engine-stop');
+    expect(Number.isFinite(stop.session?.durationSec)).toBe(true);
+  });
+
   it('tracks engines independently', () => {
     const { det, events } = makeDetector();
     det.observe('port', 's1', 10, 1_000_000);
