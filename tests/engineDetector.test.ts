@@ -9,6 +9,7 @@ function makeDetector() {
     startRpmHz: 5.0,
     startSettleSec: 5,
     watchdogSec: 30,
+    silenceStopSec: 300,
     sourceWindowMs: 1000,
   });
   det.on('engine-start', (e) => events.push(e));
@@ -94,6 +95,59 @@ describe('EngineDetector', () => {
       { kind: 'possible-stop', engineId: 'port', ts: 1_037_000 },
       { kind: 'possible-stop', engineId: 'port', ts: 1_090_000 },
     ]);
+  });
+
+  it('ends the session via the watchdog when a running engine goes silent', () => {
+    const { det, events } = makeDetector();
+    det.observe('port', 's1', 10, 1_000_000);
+    det.observe('port', 's1', 10, 1_006_000);
+    expect(events.map((e) => e.kind)).toEqual(['engine-start']);
+    events.length = 0;
+    // No further deltas: a switched-off N2K engine stops broadcasting. At
+    // 200s silent only possible-stop fires; the session is still open.
+    det.tickWatchdog(1_206_000);
+    expect(events.map((e) => e.kind)).toEqual(['possible-stop']);
+    // Past silenceStopSec (300s) the watchdog ends the session. The session
+    // end is the last delta actually seen, not the watchdog tick time.
+    det.tickWatchdog(1_307_000);
+    const stop = events.find((e) => e.kind === 'engine-stop');
+    if (!stop) throw new Error('expected engine-stop from the watchdog');
+    expect(stop.session?.sessionStart).toBe(1_000_000);
+    expect(stop.session?.sessionEnd).toBe(1_006_000);
+  });
+
+  it('snapshot and restore preserve a running session across a restart', () => {
+    const first = makeDetector();
+    first.det.observe('port', 's1', 10, 1_000_000);
+    first.det.observe('port', 's1', 10, 1_006_000);
+    const snap = first.det.snapshot();
+    expect(snap).toHaveLength(1);
+    expect(snap[0]?.sessionStartTs).toBe(1_000_000);
+
+    // A fresh detector (a restarted plugin) restores the open session, then
+    // sees the engine shut down. The stop must report the original start.
+    const restarted = makeDetector();
+    restarted.det.restore(snap, 1_010_000, 3_600_000);
+    restarted.det.observe('port', 's1', 0, 1_020_000);
+    restarted.det.observe('port', 's1', 0, 1_031_000);
+    const stop = restarted.events.find((e) => e.kind === 'engine-stop');
+    if (!stop) throw new Error('expected engine-stop after restore');
+    expect(stop.session?.sessionStart).toBe(1_000_000);
+  });
+
+  it('restore discards a session older than the max resume age', () => {
+    const first = makeDetector();
+    first.det.observe('port', 's1', 10, 1_000_000);
+    first.det.observe('port', 's1', 10, 1_006_000);
+    const snap = first.det.snapshot();
+
+    // Signal K was down for two hours: the last delta is well past the
+    // one-hour resume guard, so the stale session must not be resurrected.
+    const restarted = makeDetector();
+    restarted.det.restore(snap, 1_006_000 + 7_200_000, 3_600_000);
+    restarted.det.tickWatchdog(1_006_000 + 7_200_000 + 400_000);
+    expect(restarted.events).toEqual([]);
+    expect(restarted.det.snapshot()).toEqual([]);
   });
 
   it('tracks engines independently', () => {

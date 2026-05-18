@@ -327,6 +327,14 @@ function buildSchemaInner(): PluginSchema {
                   default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
                   minimum: 0,
                 },
+                engineSilenceStopSeconds: {
+                  type: 'integer',
+                  title: 'Engine-silent stop time (seconds)',
+                  description:
+                    'How long the RPM feed can go fully silent before the session is treated as ended. A switched-off NMEA 2000 engine stops broadcasting entirely rather than reporting RPM 0. Default 300s.',
+                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineSilenceStopSeconds,
+                  minimum: 0,
+                },
                 engineStartRpmHzThreshold: {
                   type: 'number',
                   title: 'Engine-on RPM threshold (Hz)',
@@ -616,6 +624,7 @@ function buildUiSchemaInner(): PluginUiSchema {
           'triggers',
           'engineStopRpmHzThreshold',
           'engineStopSettleSeconds',
+          'engineSilenceStopSeconds',
           'engineStartRpmHzThreshold',
           'engineStartSettleSeconds',
           'minSessionSeconds',

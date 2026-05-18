@@ -1,4 +1,5 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
@@ -37,6 +38,12 @@ const MONITOR_TICK_MS = 5000;
 const WATCHDOG_TICK_MS = 5000;
 const WATCHDOG_SEC = 30;
 const RESCAN_INTERVAL_MS = 60_000;
+// On restart, a persisted engine session whose last delta is older than this
+// is discarded rather than resumed (the engine stopped during the downtime).
+const ENGINE_STATE_MAX_RESUME_SEC = 3600;
+// How often the in-progress engine session is persisted to disk so a restart
+// mid-session can resume it.
+const DETECTOR_SAVE_INTERVAL_MS = 60_000;
 
 interface ServerApiLike {
   streambundle: {
@@ -122,6 +129,7 @@ export default function createPlugin(app: ServerApiLike): {
         mkdirSync(dataDir, { recursive: true });
         const logPath = join(dataDir, cfg.output.logFilename);
         const budgetPath = join(dataDir, 'budget.json');
+        const detectorStatePath = join(dataDir, 'engine-detector.json');
 
         const buffer = new RollingBuffer({
           maxAgeMs: BUFFER_MAX_AGE_MS,
@@ -133,8 +141,31 @@ export default function createPlugin(app: ServerApiLike): {
           startRpmHz: cfg.analyzers.maintenance.engineStartRpmHzThreshold,
           startSettleSec: cfg.analyzers.maintenance.engineStartSettleSeconds,
           watchdogSec: WATCHDOG_SEC,
+          silenceStopSec: cfg.analyzers.maintenance.engineSilenceStopSeconds,
           sourceWindowMs: ENGINE_SOURCE_WINDOW_MS,
         });
+        // Resume an engine session that was in progress when the plugin last
+        // stopped, so a restart mid-trip neither splits nor loses the session.
+        try {
+          const parsed: unknown = JSON.parse(readFileSync(detectorStatePath, 'utf-8'));
+          if (Array.isArray(parsed)) {
+            detector.restore(parsed, Date.now(), ENGINE_STATE_MAX_RESUME_SEC * 1000);
+          }
+        } catch {
+          // No persisted state, or unreadable: start with a clean detector.
+        }
+        // Persist only when the snapshot actually changed: the engine is off
+        // most of the time, so an unconditional periodic write would rewrite
+        // the same empty state to the SD card every interval.
+        let lastDetectorState = '';
+        const saveDetectorState = (): void => {
+          const serialized = JSON.stringify(detector.snapshot());
+          if (serialized === lastDetectorState) return;
+          lastDetectorState = serialized;
+          void writeFile(detectorStatePath, serialized).catch((err) => {
+            logger.debug(`engine-detector state save failed: ${stringify(err)}`);
+          });
+        };
         const monitor = new BatteryMonitor({
           lowSocPercent: cfg.analyzers.alerts.lowSocPercent,
           socExitHysteresis: cfg.analyzers.alerts.socExitHysteresis,
@@ -277,11 +308,13 @@ export default function createPlugin(app: ServerApiLike): {
           });
 
         // The detector emits engine-start, engine-stop, and possible-stop.
-        // Only engine-stop drives an analyzer: maintenance narrates the
-        // completed session. engine-start has no consumer today, so it is
-        // intentionally not subscribed here.
+        // engine-start and engine-stop persist detector state so a restart
+        // mid-session can resume it. engine-stop additionally drives the
+        // maintenance analyzer, which narrates the completed session.
+        unsubs.push(detector.on('engine-start', () => saveDetectorState()));
         unsubs.push(
           detector.on('engine-stop', (e: EngineEvent) => {
+            saveDetectorState();
             if (!router) return;
             const sess = e.session;
             if (!sess) return;
@@ -410,6 +443,10 @@ export default function createPlugin(app: ServerApiLike): {
         intervalHandles.push(
           setInterval(() => detector.tickWatchdog(Date.now()), WATCHDOG_TICK_MS),
         );
+        // Persist the in-progress engine session periodically so the
+        // restart-resume window stays current between engine-start and the
+        // next event (see saveDetectorState and detector.restore above).
+        intervalHandles.push(setInterval(saveDetectorState, DETECTOR_SAVE_INTERVAL_MS));
         intervalHandles.push(setInterval(() => monitor.tick(Date.now()), MONITOR_TICK_MS));
         intervalHandles.push(
           setInterval(() => {

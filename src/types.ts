@@ -74,6 +74,7 @@ export interface PluginOptions {
       triggers: AnalyzerTriggerCfg;
       engineStopRpmHzThreshold: number;
       engineStopSettleSeconds: number;
+      engineSilenceStopSeconds: number;
       engineStartRpmHzThreshold: number;
       engineStartSettleSeconds: number;
       minSessionSeconds: number;
@@ -144,6 +145,10 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       },
       engineStopRpmHzThreshold: 1.0,
       engineStopSettleSeconds: 10,
+      // A switched-off NMEA 2000 engine stops broadcasting RPM entirely
+      // rather than reporting 0, so a real shutdown is detected as silence.
+      // 300s is far past any bus dropout, so it never false-fires.
+      engineSilenceStopSeconds: 300,
       // 8 Hz (~480 RPM) sits comfortably above cold-cranking RPM (3-7 Hz on
       // a diesel) and well below any marine idle (10+ Hz). A lower threshold
       // can falsely fire engine-start during a long crank.
