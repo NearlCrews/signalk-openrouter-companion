@@ -32,7 +32,7 @@ src/
     ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime; DEFAULT_SYSTEM_PROMPTS
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
-    ├── engineDetector.ts     Per-engine RPM state machine for session detection
+    ├── engineDetector.ts     Per-engine RPM session state machine, persisted across restarts
     ├── emitter.ts            TypedEmitter base used by batteryMonitor and engineDetector
     ├── triggerRouter.ts      Routes cron + put + event triggers to analyzers
     ├── cronScheduler.ts      Wraps croner for cron-driven triggers
@@ -159,7 +159,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-228 tests across 21 files cover:
+231 tests across 21 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
