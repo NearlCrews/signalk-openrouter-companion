@@ -74,15 +74,21 @@ export class RollingBuffer {
     };
   }
 
+  // A path's entries interleave multiple sources, each carrying its own
+  // delta timestamp, so the array is not strictly ts-sorted. A forward scan
+  // that stops at the first fresh entry would miss stale entries stranded
+  // behind a timestamp inversion. Compact in place over every entry instead.
   private evict(arr: BufferEntry[], now: number): void {
     const cutoff = now - this.opts.maxAgeMs;
-    let firstFresh = 0;
-    while (firstFresh < arr.length) {
-      const e = arr[firstFresh];
-      if (!e || e.ts >= cutoff) break;
-      firstFresh += 1;
+    let write = 0;
+    for (let read = 0; read < arr.length; read += 1) {
+      const e = arr[read];
+      if (e && e.ts >= cutoff) {
+        arr[write] = e;
+        write += 1;
+      }
     }
-    if (firstFresh > 0) arr.splice(0, firstFresh);
+    if (write < arr.length) arr.length = write;
     if (arr.length > this.opts.maxEntriesPerPath) {
       arr.splice(0, arr.length - this.trimTo);
     }

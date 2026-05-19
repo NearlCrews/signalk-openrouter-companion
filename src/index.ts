@@ -82,6 +82,10 @@ export default function createPlugin(app: ServerApiLike): {
   // Populated in the start() then-handler once async init resolves; cleared
   // in stop(). Routes return 503 while null.
   let runtime: PluginRuntime | null = null;
+  // Module-scoped handle to the live router. The PUT handlers capture this
+  // via the getRouter callback; stop() nulls it so a PUT after stop() cannot
+  // reach a router from a dead start() and charge the budget.
+  let activeRouter: TriggerRouter | null = null;
   // Resolved when a start()'s deferred init settles. Replaced on every
   // start() so a restart hands out a fresh promise; each start() owns its own
   // resolver (a module-scoped resolver would let a stale start() resolve a
@@ -249,6 +253,7 @@ export default function createPlugin(app: ServerApiLike): {
               logPath,
               startedAt: Date.now(),
             };
+            activeRouter = router;
             // Register one Cron job per unique (pattern, timezone) pair, each
             // carrying the analyzers that share it. Several analyzers can share
             // a schedule (health and liveness both default to '0 8 * * *'), so
@@ -437,7 +442,7 @@ export default function createPlugin(app: ServerApiLike): {
         }
 
         for (const section of Object.values(cfg.analyzers)) {
-          registerAnalyzerPut(app, section, () => router, PLUGIN_ID);
+          registerAnalyzerPut(app, section, () => activeRouter, PLUGIN_ID);
         }
 
         intervalHandles.push(
@@ -513,6 +518,7 @@ export default function createPlugin(app: ServerApiLike): {
       for (const h of intervalHandles) clearInterval(h);
       intervalHandles.length = 0;
       runtime = null;
+      activeRouter = null;
       app.setPluginStatus('Stopped');
     },
 

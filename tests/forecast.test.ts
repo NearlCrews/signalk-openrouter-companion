@@ -215,6 +215,19 @@ describe('ForecastAnalyzer', () => {
       expect(r).not.toBeNull();
       expect((r as ForecastInput).pressureTendencyHpa).toBeNull();
     });
+
+    it('reports a null tendency when the latest pressure bucket is stale', async () => {
+      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      // Pressure stopped 4.5h ago: buckets 4 and 7 populated, current bucket
+      // 11 empty. The prompt labels the tendency "last 3h", so an old delta
+      // must not be surfaced as current.
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 7.5 * HOUR, 'accuweather');
+      buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 4.5 * HOUR, 'accuweather');
+      const a = new ForecastAnalyzer(makeCfg());
+      const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
+      expect(r).not.toBeNull();
+      expect((r as ForecastInput).pressureTendencyHpa).toBeNull();
+    });
   });
 
   describe('collectContext buffer-only vs QuestDB baseline', () => {

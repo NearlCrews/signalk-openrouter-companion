@@ -34,8 +34,18 @@ function makeCfg(overrides: Partial<{ shortWindowDays: number; longWindowDays: n
   };
 }
 
-// Aging issues one batched query per window with a `dateadd('d', -<days>, ...)`
-// boundary. Dispatch by parsing the days back out of the SQL.
+const DAY_MS = 86_400_000;
+
+// Aging issues one batched query per window with explicit ISO `ts > '...'` and
+// `ts <= '...'` bounds. Recover the window length in days from the span
+// between the two timestamps.
+function windowDaysFromSql(sql: string): number {
+  const lower = sql.match(/ts > '([^']+)'/);
+  const upper = sql.match(/ts <= '([^']+)'/);
+  if (!lower?.[1] || !upper?.[1]) return 0;
+  return Math.round((Date.parse(upper[1]) - Date.parse(lower[1])) / DAY_MS);
+}
+
 function windowStats<B extends { windows: { days: number; stats: S }[] }, S>(
   bank: B,
   days: number,
@@ -47,8 +57,7 @@ function windowStats<B extends { windows: { days: number; stats: S }[] }, S>(
 
 function stubQuestDB(perWindow: Partial<Record<number, QuerySpec[]>>): MockQuestDB {
   return makeQuestDBStub((sql) => {
-    const m = sql.match(/dateadd\('d', -(\d+),/);
-    const days = m?.[1] ? Number.parseInt(m[1], 10) : 0;
+    const days = windowDaysFromSql(sql);
     const rows = perWindow[days] ?? [];
     return {
       columns: [
@@ -207,14 +216,51 @@ describe('AgingAnalyzer', () => {
 
     // One batched query per window, regardless of how many banks were discovered.
     expect(stub.calls.length).toBe(2);
-    expect(stub.calls.some((q) => q.includes('-30,'))).toBe(true);
-    expect(stub.calls.some((q) => q.includes('-90,'))).toBe(true);
+    expect(stub.calls.map(windowDaysFromSql).sort((x, y) => x - y)).toEqual([30, 90]);
     // Each window query must include all discovered banks' paths.
     for (const sql of stub.calls) {
       expect(sql).toContain("'electrical.batteries.house.capacity.actual'");
       expect(sql).toContain("'electrical.batteries.house.cycles'");
       expect(sql).toContain("'electrical.batteries.starter.capacity.actual'");
       expect(sql).toContain("'electrical.batteries.starter.cycles'");
+    }
+  });
+
+  it('bounds each window query with explicit ts > and ts <= timestamps anchored to firedAt', async () => {
+    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
+    const stub = stubQuestDB({
+      30: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_500_000,
+          last: 5_400_000,
+          n: 60,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 95, last: 100, n: 60 },
+      ],
+      90: [
+        {
+          path: 'electrical.batteries.house.capacity.actual',
+          first: 5_700_000,
+          last: 5_400_000,
+          n: 180,
+        },
+        { path: 'electrical.batteries.house.cycles', first: 80, last: 100, n: 180 },
+      ],
+    });
+    const firedAt = new Date('2026-05-11T08:00:00Z');
+    const a = new AgingAnalyzer(makeCfg());
+    await a.collectContext({ kind: 'cron', firedAt }, makeDeps(app, buf, stub));
+    expect(stub.calls).toHaveLength(2);
+    for (const sql of stub.calls) {
+      // No server-side now(): the upper bound is pinned to firedAt so samples
+      // arriving after the trigger cannot leak into last(value).
+      expect(sql).not.toContain('now()');
+      expect(sql).toContain(`ts <= '${firedAt.toISOString()}'`);
+      const days = windowDaysFromSql(sql);
+      const expectedFrom = new Date(firedAt.getTime() - days * DAY_MS).toISOString();
+      expect(sql).toContain(`ts > '${expectedFrom}'`);
     }
   });
 
@@ -280,8 +326,7 @@ describe('AgingAnalyzer', () => {
     const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
     expect(r).not.toBeNull();
     expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([14, 60]);
-    expect(stub.calls.some((q) => q.includes('-14,'))).toBe(true);
-    expect(stub.calls.some((q) => q.includes('-60,'))).toBe(true);
+    expect(stub.calls.map(windowDaysFromSql).sort((x, y) => x - y)).toEqual([14, 60]);
   });
 
   it('sorts windows ascending when user inverts short/long days', async () => {

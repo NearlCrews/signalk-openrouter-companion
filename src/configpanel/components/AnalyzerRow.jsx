@@ -171,9 +171,16 @@ export function AnalyzerRow({
                   Loading reports...
                 </div>
               )}
-              {!ui.reportsLoading && (!ui.reports || ui.reports.length === 0) && (
-                <div style={S.empty}>No reports yet for this analyzer.</div>
+              {!ui.reportsLoading && ui.reportsError && (
+                <div style={S.reportFailure} role="status" aria-live="polite">
+                  Failed to load reports: {ui.reportsError}
+                </div>
               )}
+              {!ui.reportsLoading &&
+                !ui.reportsError &&
+                (!ui.reports || ui.reports.length === 0) && (
+                  <div style={S.empty}>No reports yet for this analyzer.</div>
+                )}
               {!ui.reportsLoading &&
                 ui.reports?.map((r) => (
                   <div key={r.ts} style={S.reportEntry}>

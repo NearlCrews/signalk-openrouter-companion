@@ -61,6 +61,8 @@ interface BatterySnapshot {
   current: number | null;
   stateOfCharge: number | null;
   nominalCapacityJ: number | null;
+  cycles: number | null;
+  temperatureK: number | null;
   voltageSession: TelemetryStats | null;
   socSession: TelemetryStats | null;
 }
@@ -226,13 +228,16 @@ function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): 
   if (!tree) return [];
   return Object.entries(tree).map(([id, node]) => {
     const paths = bankPaths(id);
-    const { voltage, current, stateOfCharge, nominalCapacityJ } = readBankSnapshot(node);
+    const { voltage, current, stateOfCharge, nominalCapacityJ, cycles, temperatureK } =
+      readBankSnapshot(node);
     return {
       id,
       voltage,
       current,
       stateOfCharge,
       nominalCapacityJ,
+      cycles,
+      temperatureK,
       voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
       socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
     };

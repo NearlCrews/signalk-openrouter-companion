@@ -86,17 +86,30 @@ describe('BatteryMonitor low-soc', () => {
   });
 });
 
+// Post both cell readings for `trolling` at a given timestamp. A live BMS
+// reports its cells on a steady cadence; the test mirrors that so the
+// readings stay fresh within sourceWindowMs across the settle window.
+function observePair(monitor: BatteryMonitor, cell0: number, cell1: number, ts: number): void {
+  monitor.observeCellV('trolling', 0, cell0, ts);
+  monitor.observeCellV('trolling', 1, cell1, ts);
+}
+
 describe('BatteryMonitor cell-imbalance', () => {
   it('does not emit imbalance until sustained beyond imbalanceSettleSec', () => {
     const { monitor, events } = makeMonitor();
-    monitor.observeCellV('trolling', 0, 3.5, 1_000_000);
-    monitor.observeCellV('trolling', 1, 3.55, 1_000_000);
+    // Balanced readings: no imbalance to settle.
+    observePair(monitor, 3.5, 3.55, 1_000_000);
     monitor.tick(1_001_000);
     expect(events).toEqual([]);
-    monitor.observeCellV('trolling', 0, 3.5, 1_002_000);
-    monitor.observeCellV('trolling', 1, 3.7, 1_002_000);
+    // Imbalance appears at t=1_002_000. The BMS keeps reporting both cells
+    // every 2s so they stay fresh inside the 5s source window. The settle
+    // window is 60s, so a tick a few seconds in must not fire yet.
+    observePair(monitor, 3.5, 3.7, 1_002_000);
     monitor.tick(1_003_000);
     expect(events).toEqual([]);
+    for (let ts = 1_004_000; ts <= 1_062_000; ts += 2_000) {
+      observePair(monitor, 3.5, 3.7, ts);
+    }
     monitor.tick(1_063_000);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('cell-imbalance-enter');
@@ -105,8 +118,9 @@ describe('BatteryMonitor cell-imbalance', () => {
 
   it('emits exit when imbalance drops back below threshold', () => {
     const { monitor, events } = makeMonitor();
-    monitor.observeCellV('trolling', 0, 3.5, 1_000_000);
-    monitor.observeCellV('trolling', 1, 3.7, 1_000_000);
+    for (let ts = 1_000_000; ts <= 1_064_000; ts += 2_000) {
+      observePair(monitor, 3.5, 3.7, ts);
+    }
     monitor.tick(1_065_000);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('cell-imbalance-enter');
@@ -114,5 +128,17 @@ describe('BatteryMonitor cell-imbalance', () => {
     monitor.tick(1_070_000);
     expect(events).toHaveLength(2);
     expect(events[1]?.kind).toBe('cell-imbalance-exit');
+  });
+
+  it('does not fire a false imbalance-enter on stale cell data', () => {
+    const { monitor, events } = makeMonitor();
+    // An imbalanced reading arrives once, then the BMS goes silent. The
+    // settle timer would elapse, but the cell readings are well past the 5s
+    // source window, so the eviction pass clears them and no alarm fires.
+    observePair(monitor, 3.5, 3.7, 1_000_000);
+    monitor.tick(1_010_000);
+    expect(events).toEqual([]);
+    monitor.tick(1_070_000);
+    expect(events).toEqual([]);
   });
 });

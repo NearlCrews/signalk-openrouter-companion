@@ -134,6 +134,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
           s.running = false;
           s.sessionStartTs = null;
           s.aboveSince = null;
+          s.belowSinceWhileStarting = null;
           this.emit({
             kind: 'engine-stop',
             engineId,
@@ -155,20 +156,22 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
     for (const s of this.states.values()) {
       if (!s.running) continue;
       const silentFor = now - s.lastDeltaTs;
-      if (!s.possibleStopEmitted && silentFor > this.watchdogMs) {
-        s.possibleStopEmitted = true;
-        this.emit({ kind: 'possible-stop', engineId: s.engineId, ts: now });
-      }
       if (silentFor > this.silenceStopMs) {
         // A switched-off N2K engine goes silent rather than reporting RPM 0,
         // so the below-threshold stop path in observe() never fires for a
         // real shutdown. The last delta seen is the end of the session.
+        // Skip possible-stop here: when the silence already exceeds
+        // silenceStopMs (a SK restart after a long downtime), emitting a
+        // possible-stop in the same tick that ends the session would only
+        // produce a stale "engine may have stopped" event for a session
+        // that is being closed anyway.
         const sessionStart = s.sessionStartTs ?? s.lastDeltaTs;
         const sessionEnd = s.lastDeltaTs;
         s.running = false;
         s.sessionStartTs = null;
         s.aboveSince = null;
         s.belowSince = null;
+        s.belowSinceWhileStarting = null;
         s.possibleStopEmitted = false;
         this.emit({
           kind: 'engine-stop',
@@ -180,6 +183,9 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
             durationSec: Math.round((sessionEnd - sessionStart) / 1000),
           },
         });
+      } else if (!s.possibleStopEmitted && silentFor > this.watchdogMs) {
+        s.possibleStopEmitted = true;
+        this.emit({ kind: 'possible-stop', engineId: s.engineId, ts: now });
       }
     }
   }

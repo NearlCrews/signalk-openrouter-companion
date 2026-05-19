@@ -146,6 +146,12 @@ async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
       const res = await fetch(OPENROUTER_MODELS_URL);
       if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
       const body = (await res.json()) as OpenRouterModelsResponse;
+      // Validate the shape before caching: a malformed-but-valid-JSON
+      // response with a non-array `data` field would otherwise poison the
+      // 1-hour module cache and break the model picker until the TTL lapses.
+      if (!Array.isArray(body?.data)) {
+        throw new Error('upstream returned an unexpected models payload');
+      }
       modelsCache = { fetchedAt: Date.now(), body };
       return body;
     } finally {
@@ -168,7 +174,7 @@ async function tailReports(
   try {
     const fh = await open(logPath, 'r');
     try {
-      raw = await fh.readFile('utf-8');
+      raw = await fh.readFile({ encoding: 'utf-8' });
     } finally {
       await fh.close();
     }

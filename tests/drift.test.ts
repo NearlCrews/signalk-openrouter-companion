@@ -178,6 +178,10 @@ describe('DriftAnalyzer', () => {
         expect(sql).toContain("WHEN r.value < 15 THEN 'idle'");
         expect(sql).toContain("WHEN r.value < 75 THEN 'topEnd'");
         expect(sql).toContain("ELSE 'wot'");
+        // The ASOF freshness guard is BETWEEN 0 AND the window, so inverted
+        // pairs from N2K clock skew (negative delta) are rejected.
+        expect(sql).toContain('r.ts - f.ts BETWEEN 0 AND 5000000');
+        expect(sql).toContain('r.ts - s.ts BETWEEN 0 AND 5000000');
       }
     });
 

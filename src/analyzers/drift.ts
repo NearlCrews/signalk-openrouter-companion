@@ -202,9 +202,11 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 // aggregation server-side. ASOF JOIN pairs each RPM sample with the most
 // recent preceding fuel.rate and SOG sample. ASOF JOIN has no time bound, so
 // it will pair an RPM sample with a fuel/SOG reading from hours earlier across
-// an engine-off gap. The RPM_JOIN_WINDOW_US guard in the CASE expressions
-// drops those stale pairs from both the mean AND the sample count, so n_fuel /
-// n_sog reflect only RPM samples that had a fresh pair, not every RPM row.
+// an engine-off gap. The BETWEEN 0 AND RPM_JOIN_WINDOW_US guard in the CASE
+// expressions drops those stale pairs from both the mean AND the sample count,
+// so n_fuel / n_sog reflect only RPM samples that had a fresh pair, not every
+// RPM row. The lower bound of 0 also rejects inverted pairs from N2K clock
+// skew, where the joined sample carries a timestamp after the RPM sample.
 // fuel.rate and SOG are joined independently, so each carries its own count:
 // a bin with dense fuel coverage but sparse SOG must not pass the SOG gate on
 // fuel-sample density.
@@ -247,10 +249,10 @@ async function binEngineWindow(
     )
     SELECT
       ${BIN_CASE_SQL} AS bin,
-      count(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_fuel,
-      count(CASE WHEN r.ts - s.ts <= ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_sog,
-      avg(CASE WHEN r.ts - f.ts <= ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
-      avg(CASE WHEN r.ts - s.ts <= ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog
+      count(CASE WHEN r.ts - f.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_fuel,
+      count(CASE WHEN r.ts - s.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_sog,
+      avg(CASE WHEN r.ts - f.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
+      avg(CASE WHEN r.ts - s.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog
     FROM r ASOF JOIN f ASOF JOIN s
     GROUP BY bin
   `

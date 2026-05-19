@@ -73,6 +73,8 @@ export interface AgingInput extends AnalysisInput {
   banks: BankAging[];
 }
 
+const DAY_MS = 86_400_000;
+
 function resolveWindowDays(cfg: AgingCfg): readonly number[] {
   const short = clampPositiveInt(cfg.shortWindowDays, AGING_DEFAULT_SHORT_DAYS);
   const long = clampPositiveInt(cfg.longWindowDays, AGING_DEFAULT_LONG_DAYS);
@@ -108,10 +110,11 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
       allPaths.push(cap, cyc);
     }
 
+    const firedMs = ctx.firedAt.getTime();
     const summariesByWindow = await Promise.all(
       this.windowDays.map(async (days) => ({
         days,
-        summaries: await queryWindow(questdb, QUESTDB_SELF_CONTEXT, allPaths, days),
+        summaries: await queryWindow(questdb, QUESTDB_SELF_CONTEXT, allPaths, days, firedMs),
       })),
     );
 
@@ -208,15 +211,22 @@ async function queryWindow(
   context: string,
   paths: string[],
   days: number,
+  firedMs: number,
 ): Promise<Map<string, PathSummary>> {
   const escapedCtx = escapeSqlLiteral(context);
   const escapedPaths = paths.map((p) => `'${escapeSqlLiteral(p)}'`).join(', ');
+  // Explicit ISO bounds anchored to the trigger time. A server-side now()
+  // upper bound would let BMS samples that arrive between the trigger and the
+  // query execution leak into last(value); pinning ts <= firedAt prevents it.
+  const fromIso = new Date(firedMs - days * DAY_MS).toISOString();
+  const toIso = new Date(firedMs).toISOString();
   const sql = `
     SELECT path, first(value) AS first_val, last(value) AS last_val, count() AS n
     FROM signalk
     WHERE context = '${escapedCtx}'
       AND path IN (${escapedPaths})
-      AND ts > dateadd('d', -${days}, now())
+      AND ts > '${fromIso}'
+      AND ts <= '${toIso}'
     GROUP BY path
   `
     .trim()

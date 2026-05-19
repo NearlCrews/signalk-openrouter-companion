@@ -333,6 +333,10 @@ function pressureTendency(trends: ReadonlyArray<PathTrend>): number | null {
     }
   }
   if (latestIdx < 0) return null;
+  // The prompt labels the tendency as "the last 3h". If the most recent
+  // populated bucket is not the current bucket, the pressure data is stale and
+  // an old tendency would be presented as current. Report null instead.
+  if (latestIdx !== TREND_WINDOW_HOURS - 1) return null;
   const priorIdx = latestIdx - TENDENCY_HOURS;
   if (priorIdx < 0) return null;
   const latest = buckets[latestIdx];

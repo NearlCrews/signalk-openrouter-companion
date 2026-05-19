@@ -133,7 +133,12 @@ export default function PluginConfigurationPanel({ configuration, save }) {
 
   const onSave = () => {
     save(cfg);
-    restartWatchRef.current = { prior: status?.startedAt };
+    // Arm the restart watcher only when a startedAt is known. With status null
+    // (plugin not yet running) prior would be undefined and the first poll
+    // with any startedAt would falsely flip "restarting" to "restarted"; leave
+    // it disarmed and let the auto-clear retire the notice instead.
+    restartWatchRef.current =
+      typeof status?.startedAt === 'number' ? { prior: status.startedAt } : null;
     setSavedNotice({ at: new Date().toLocaleTimeString(), phase: NOTICE_RESTARTING });
   };
 
@@ -187,7 +192,20 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const loadReports = async (id) => {
     patchUi(id, { reportsLoading: true });
     const r = await fetchJson(`/analyzers/${id}/reports?limit=${REPORT_LIMIT}`);
-    patchUi(id, { reports: r.body?.reports || [], reportsLoading: false });
+    if (r.ok) {
+      patchUi(id, {
+        reports: r.body?.reports || [],
+        reportsLoading: false,
+        reportsError: null,
+      });
+    } else {
+      // Keep any previously loaded reports rather than clobbering them with an
+      // empty list, which would render a false "No reports yet".
+      patchUi(id, {
+        reportsLoading: false,
+        reportsError: r.body?.error || r.error || `HTTP ${r.status}`,
+      });
+    }
   };
 
   const fireAnalyzer = async (id) => {
@@ -199,8 +217,13 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         : { ok: false, text: r.body?.error || r.error || `HTTP ${r.status}` },
     });
     // Refresh the open drawer so the new report shows up after the LLM
-    // returns. 800 ms is a heuristic; a real boat round-trip is 1-3 s.
-    if (analyzerUi[id]?.reportsOpen) setTimeout(() => loadReports(id), 800);
+    // returns. 800 ms is a heuristic; a real boat round-trip is 1-3 s. Read
+    // the live drawer state via a functional updater: the multi-second fire
+    // means the closed-over analyzerUi is stale by the time it resolves.
+    setAnalyzerUi((current) => {
+      if (current[id]?.reportsOpen) setTimeout(() => loadReports(id), 800);
+      return current;
+    });
   };
 
   const toggleExpand = (id) => patchUi(id, { expanded: !analyzerUi[id]?.expanded });
@@ -325,8 +348,8 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             onPromptReset={onPromptReset}
             schedule={cfg.analyzers?.[a.id]?.triggers?.cron?.pattern ?? a.cron?.pattern ?? ''}
             onScheduleChange={setSchedule}
-            severityFloor={cfg.analyzers?.forecast?.severityFloor ?? DEFAULT_SEVERITY_FLOOR}
-            onSeverityFloorChange={(value) => setAnalyzerCfg('forecast', { severityFloor: value })}
+            severityFloor={cfg.analyzers?.[a.id]?.severityFloor ?? DEFAULT_SEVERITY_FLOOR}
+            onSeverityFloorChange={(value) => setAnalyzerCfg(a.id, { severityFloor: value })}
           />
         ))}
       </CollapsibleSection>
