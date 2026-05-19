@@ -1,6 +1,6 @@
 import type { BufferEntry } from '../core/buffer.js';
 import { resolveSystemPrompt } from '../core/cfg.js';
-import { asFiniteNumber, fmtNumber } from '../core/format.js';
+import { asFiniteNumber, fmtNumber, HOUR_MS } from '../core/format.js';
 import {
   notificationReportPath,
   WEATHER_CANONICAL_PATHS,
@@ -12,6 +12,7 @@ import {
   indexColumns,
   QUESTDB_SELF_CONTEXT,
   type QuestDBClient,
+  quotedPathList,
 } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import {
@@ -23,7 +24,6 @@ import {
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
-const HOUR_MS = 3_600_000;
 // Hourly-mean trend buckets span the last 12h of the rolling buffer.
 const TREND_WINDOW_HOURS = 12;
 // Cold-start floor: with less buffered history than this and no QuestDB
@@ -377,7 +377,7 @@ async function queryBaseline(
   const escapedCtx = escapeSqlLiteral(context);
   const fromIso = new Date(firedMs - BASELINE_FROM_HOURS * HOUR_MS).toISOString();
   const toIso = new Date(firedMs - BASELINE_TO_HOURS * HOUR_MS).toISOString();
-  const pathList = ALL_WEATHER_PATHS.map((p) => `'${escapeSqlLiteral(p)}'`).join(', ');
+  const pathList = quotedPathList(ALL_WEATHER_PATHS);
   const sql = `
     SELECT path, avg(value) AS mean_value FROM signalk
     WHERE path IN (${pathList})

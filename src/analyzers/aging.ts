@@ -5,9 +5,14 @@ import {
   resolveSystemPrompt,
 } from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
-import { asFiniteNumber, fmtNumber } from '../core/format.js';
+import { asFiniteNumber, DAY_MS, fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
-import { escapeSqlLiteral, indexColumns, QUESTDB_SELF_CONTEXT } from '../core/questdb.js';
+import {
+  escapeSqlLiteral,
+  indexColumns,
+  QUESTDB_SELF_CONTEXT,
+  quotedPathList,
+} from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import {
   AGING_DEFAULT_LONG_DAYS,
@@ -72,8 +77,6 @@ export interface AgingInput extends AnalysisInput {
   generatedAt: string;
   banks: BankAging[];
 }
-
-const DAY_MS = 86_400_000;
 
 function resolveWindowDays(cfg: AgingCfg): readonly number[] {
   const short = clampPositiveInt(cfg.shortWindowDays, AGING_DEFAULT_SHORT_DAYS);
@@ -214,7 +217,7 @@ async function queryWindow(
   firedMs: number,
 ): Promise<Map<string, PathSummary>> {
   const escapedCtx = escapeSqlLiteral(context);
-  const escapedPaths = paths.map((p) => `'${escapeSqlLiteral(p)}'`).join(', ');
+  const escapedPaths = quotedPathList(paths);
   // Explicit ISO bounds anchored to the trigger time. A server-side now()
   // upper bound would let BMS samples that arrive between the trigger and the
   // query execution leak into last(value); pinning ts <= firedAt prevents it.

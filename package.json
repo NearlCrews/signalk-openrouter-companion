@@ -1,6 +1,6 @@
 {
   "name": "signalk-openrouter-companion",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "OpenRouter-powered LLM analyzers for Signal K: plain-prose engine and battery reports. OpenRouter API key required.",
   "main": "dist/index.js",
   "type": "module",

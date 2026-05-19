@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { AgingAnalyzer } from '../src/analyzers/aging.js';
 import { RollingBuffer } from '../src/core/buffer.js';
+import { DAY_MS } from '../src/core/format.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
   cleanupTmpDir,
@@ -33,8 +34,6 @@ function makeCfg(overrides: Partial<{ shortWindowDays: number; longWindowDays: n
     longWindowDays: overrides.longWindowDays ?? 90,
   };
 }
-
-const DAY_MS = 86_400_000;
 
 // Aging issues one batched query per window with explicit ISO `ts > '...'` and
 // `ts <= '...'` bounds. Recover the window length in days from the span

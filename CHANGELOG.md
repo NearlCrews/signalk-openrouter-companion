@@ -2,6 +2,78 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-05-19
+
+Makes the maintenance analyzer fire reliably and resolves a large batch of
+audit-identified defects. A switched-off NMEA 2000 engine stops broadcasting
+RPM entirely rather than reporting zero, so the detector's stop path never ran
+for a real shutdown and the per-trip maintenance report never fired; the
+detector now ends a session on sustained silence and survives a Signal K
+restart mid-trip. A three-lane code audit fixed 15 further bugs across the
+plugin lifecycle, core infra, the analyzers, and the config panel.
+
+### Added
+
+- **Engine sessions survive N2K shutoffs and Signal K restarts.** The engine
+  detector's watchdog ends a running session when `propulsion.*.revolutions`
+  has been silent past `engineSilenceStopSeconds` (default 300s), using the
+  last delta seen as the session end. The in-progress session is persisted to
+  `engine-detector.json` and restored on restart, so a restart mid-trip
+  resumes the session instead of splitting or losing it; a session whose last
+  delta predates a one-hour resume guard is discarded. `engineSilenceStopSeconds`
+  is a configurable maintenance setting alongside the existing start/stop
+  tuning knobs.
+
+### Fixed
+
+- **A stopped-plugin PUT no longer charges budget.** A PUT arriving after
+  `stop()` could reach a router from a dead `start()`, run the LLM, and spend
+  budget. PUT handlers now resolve the live router and no-op when the plugin
+  is stopped.
+- **No false cell-imbalance alarm from a disconnected BMS.** A disconnected
+  BMS keeps its last cell reading forever; the monitor now evicts cell
+  readings older than the source window before measuring imbalance, so a
+  stale reading cannot raise a false alarm.
+- **The low-SoC alarm fuses multi-source SoC with the minimum**, not the
+  maximum, so one optimistic sensor can no longer suppress or prematurely
+  clear a safety alarm.
+- **Aging window bounds.** Each QuestDB window query is bounded by explicit
+  ISO timestamps anchored to the trigger time instead of an unbounded
+  server-side `now()`, so samples arriving mid-query cannot leak into the
+  capacity reading.
+- **Drift ASOF-join freshness.** The join freshness guard rejects inverted
+  (negative-delta) pairs from N2K clock skew and counts only fresh fuel/SOG
+  pairs per metric, so the sample-count gate no longer passes on phantom
+  density.
+- **Forecast pressure tendency** reports null when the latest pressure bucket
+  is stale rather than presenting an old 3h tendency as current.
+- **Config panel report drawer.** It surfaces a fetch error instead of a
+  false "No reports yet", keeps previously loaded reports on a failed
+  refresh, and reads live drawer state through a functional updater so a
+  multi-second "Fire now" no longer refreshes against a stale closure.
+  `severityFloor` is derived per analyzer.
+- **Buffer eviction** compacts over every entry instead of stopping at the
+  first fresh one, so stale entries stranded behind a multi-source timestamp
+  inversion are evicted.
+- **OpenRouter completions are capped** with `max_tokens`, and the models
+  cache rejects a malformed payload instead of poisoning the 1-hour cache.
+- **Cron preset list consolidated.** The rjsf schema and the React panel had
+  diverged into two preset lists; both now consume `src/cronPresets.ts`, and
+  every analyzer's default schedule appears in the dropdown instead of
+  rendering as a non-selectable "Custom" entry.
+- **Budget persistence is best-effort**: a state-file write failure no longer
+  rejects inside the analyzer and surfaces as a spurious analyzer-failure
+  report.
+- Engine-detector state leaks and watchdog double-emission, and a dropped
+  maintenance battery temperature field.
+
+### Changed
+
+- Internal cleanup from a code-review pass: shared `HOUR_MS` / `DAY_MS` time
+  constants and a `quotedPathList` SQL helper replace per-file duplicates, and
+  the engine detector's two session-end blocks are unified into one
+  `endSession` helper. No behavior change.
+
 ## [0.5.0] - 2026-05-16
 
 Adds the Weather Outlook Advisor, a seventh analyzer, broadening the Companion

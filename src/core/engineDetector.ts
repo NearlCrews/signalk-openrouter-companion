@@ -94,6 +94,28 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
     return s;
   }
 
+  // Close the running session: clear all per-session state and emit
+  // engine-stop. Shared by the below-threshold path in observe() and the
+  // silence path in tickWatchdog().
+  private endSession(s: EngineState, sessionStart: number, sessionEnd: number): void {
+    s.running = false;
+    s.sessionStartTs = null;
+    s.aboveSince = null;
+    s.belowSince = null;
+    s.belowSinceWhileStarting = null;
+    s.possibleStopEmitted = false;
+    this.emit({
+      kind: 'engine-stop',
+      engineId: s.engineId,
+      ts: sessionEnd,
+      session: {
+        sessionStart,
+        sessionEnd,
+        durationSec: Math.round((sessionEnd - sessionStart) / 1000),
+      },
+    });
+  }
+
   observe(engineId: string, source: string, hz: number, ts: number): void {
     const s = this.getState(engineId);
     s.lastDeltaTs = ts;
@@ -129,22 +151,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
       if (effectiveHz < this.opts.stopRpmHz) {
         if (s.belowSince === null) s.belowSince = ts;
         if (ts - s.belowSince >= this.stopSettleMs) {
-          const sessionStart = s.sessionStartTs ?? s.belowSince;
-          const sessionEnd = s.belowSince;
-          s.running = false;
-          s.sessionStartTs = null;
-          s.aboveSince = null;
-          s.belowSinceWhileStarting = null;
-          this.emit({
-            kind: 'engine-stop',
-            engineId,
-            ts: sessionEnd,
-            session: {
-              sessionStart,
-              sessionEnd,
-              durationSec: Math.round((sessionEnd - sessionStart) / 1000),
-            },
-          });
+          this.endSession(s, s.sessionStartTs ?? s.belowSince, s.belowSince);
         }
       } else {
         s.belowSince = null;
@@ -165,24 +172,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
         // possible-stop in the same tick that ends the session would only
         // produce a stale "engine may have stopped" event for a session
         // that is being closed anyway.
-        const sessionStart = s.sessionStartTs ?? s.lastDeltaTs;
-        const sessionEnd = s.lastDeltaTs;
-        s.running = false;
-        s.sessionStartTs = null;
-        s.aboveSince = null;
-        s.belowSince = null;
-        s.belowSinceWhileStarting = null;
-        s.possibleStopEmitted = false;
-        this.emit({
-          kind: 'engine-stop',
-          engineId: s.engineId,
-          ts: sessionEnd,
-          session: {
-            sessionStart,
-            sessionEnd,
-            durationSec: Math.round((sessionEnd - sessionStart) / 1000),
-          },
-        });
+        this.endSession(s, s.sessionStartTs ?? s.lastDeltaTs, s.lastDeltaTs);
       } else if (!s.possibleStopEmitted && silentFor > this.watchdogMs) {
         s.possibleStopEmitted = true;
         this.emit({ kind: 'possible-stop', engineId: s.engineId, ts: now });

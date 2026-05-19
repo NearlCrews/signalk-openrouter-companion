@@ -1,3 +1,9 @@
+// Shared time-unit constants in milliseconds. Kept here so the trend
+// analyzers (aging, drift, forecast) share one definition instead of each
+// redeclaring the same literal.
+export const HOUR_MS = 3_600_000;
+export const DAY_MS = 86_400_000;
+
 export interface FmtOpts {
   digits?: number;
   nan?: string;

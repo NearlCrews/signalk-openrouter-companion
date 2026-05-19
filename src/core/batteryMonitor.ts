@@ -116,10 +116,9 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
 
   tick(now: number): void {
     for (const b of this.banks.values()) {
-      // Evict cell readings older than the source window before measuring.
-      // A disconnected BMS keeps its last reading forever; without eviction
-      // the settle timer would fire a false cell-imbalance-enter on data
-      // that has not been refreshed for hours.
+      // A disconnected BMS keeps its last cell reading forever; without
+      // evicting readings older than the source window, the settle timer
+      // would fire a false cell-imbalance-enter on hours-old data.
       const cutoff = now - this.opts.sourceWindowMs;
       for (const [idx, r] of b.recentCells) {
         if (r.ts < cutoff) b.recentCells.delete(idx);

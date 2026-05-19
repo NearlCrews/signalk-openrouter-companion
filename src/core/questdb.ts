@@ -11,6 +11,12 @@ export function escapeSqlLiteral(s: string): string {
   return s.replace(/'/g, "''");
 }
 
+// Quote and escape a set of SignalK paths into a comma-separated list for a
+// SQL `path IN (...)` clause.
+export function quotedPathList(paths: readonly string[]): string {
+  return paths.map((p) => `'${escapeSqlLiteral(p)}'`).join(', ');
+}
+
 // signalk-questdb writes the self vessel's rows with the literal context
 // 'self', not the full `vessels.urn:mrn:...` value that app.selfContext
 // returns. Analyzer queries must filter on this or they match no rows.

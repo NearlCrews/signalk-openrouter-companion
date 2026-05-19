@@ -14,19 +14,18 @@ Requires an [OpenRouter](https://openrouter.ai) API key.
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
 
-## What's new in 0.5.0
+## What's new in 0.5.1
 
-0.5.0 adds the Weather Outlook Advisor, a seventh analyzer that turns
-barometric tendency, wind shift, and temperature trends into a short-term
-weather outlook. It hardens the OpenRouter request path with retries and
-backoff, and fixes a QuestDB context mismatch that had silently stopped the
-`aging`, `drift`, and `forecast` analyzers from producing reports. Every
-notification is now a short headline that fits a chartplotter alert, with the
-full report kept in the log, and the config panel is reorganized into
-collapsible sections with a per-analyzer schedule control.
+0.5.1 makes the maintenance analyzer fire reliably. A switched-off NMEA 2000
+engine stops broadcasting RPM entirely rather than reporting zero, so the
+detector's stop path never ran for a real shutdown; the detector now ends a
+session on sustained silence and persists the in-progress session so a Signal
+K restart mid-trip resumes it instead of losing it. A three-lane code audit
+also resolved 15 further bugs across the plugin lifecycle, core infra, the
+analyzers, and the config panel.
 
-See the [0.5.0 changelog entry](CHANGELOG.md#050---2026-05-16) and the
-[v0.5.0 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.0).
+See the [0.5.1 changelog entry](CHANGELOG.md#051---2026-05-19) and the
+[v0.5.1 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.1).
 
 ## Features
 

@@ -5,7 +5,7 @@ import {
   resolveSystemPrompt,
 } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
-import { asFiniteNumber, fmtNumber, fmtPct } from '../core/format.js';
+import { asFiniteNumber, DAY_MS, fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
 import { escapeSqlLiteral, indexColumns, QUESTDB_SELF_CONTEXT } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
@@ -13,7 +13,6 @@ import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.j
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
-const DAY_MS = 86_400_000;
 const PAST_WEEK_DAYS = 7;
 // A bin must have at least this many RPM samples in both windows before its
 // delta is meaningful. Reported as null otherwise.
