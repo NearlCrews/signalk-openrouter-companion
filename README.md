@@ -14,18 +14,18 @@ Requires an [OpenRouter](https://openrouter.ai) API key.
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
 
-## What's new in 0.5.1
+## What's new in 0.5.2
 
-0.5.1 makes the maintenance analyzer fire reliably. A switched-off NMEA 2000
-engine stops broadcasting RPM entirely rather than reporting zero, so the
-detector's stop path never ran for a real shutdown; the detector now ends a
-session on sustained silence and persists the in-progress session so a Signal
-K restart mid-trip resumes it instead of losing it. A three-lane code audit
-also resolved 15 further bugs across the plugin lifecycle, core infra, the
-analyzers, and the config panel.
+0.5.2 is a six-agent full-codebase review pass with no feature changes. The
+headline fix is in the engine detector: a settle anchor left stale across a
+long gap in the RPM feed could backdate a session and report a multi-hour trip
+that never happened. The pass also stops trend-analyzer QuestDB query faults
+from being silently swallowed, re-probes QuestDB so a database that starts
+after the plugin is picked up without a restart, and clears a batch of
+analyzer, config-panel, and dead-code findings.
 
-See the [0.5.1 changelog entry](CHANGELOG.md#051---2026-05-19) and the
-[v0.5.1 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.1).
+See the [0.5.2 changelog entry](CHANGELOG.md#052---2026-05-21) and the
+[v0.5.2 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.2).
 
 ## Features
 

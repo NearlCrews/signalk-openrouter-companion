@@ -2,6 +2,64 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.2] - 2026-05-21
+
+A six-agent full-codebase review pass with no feature changes. The headline fix
+is in the engine detector: a start or stop settle anchor left stale across a
+long gap in the RPM feed could satisfy its settle check on the first delta
+after the gap and backdate a session by the whole gap, reporting a multi-hour
+trip that never happened. The pass also stops trend-analyzer QuestDB query
+faults from being swallowed, where the scheduled report would silently never
+appear, re-probes QuestDB so a database that starts after the plugin is picked
+up without a restart, and clears a batch of analyzer, config-panel, and
+dead-code findings.
+
+### Fixed
+
+- **Engine sessions are no longer backdated across an RPM dropout.** A stale
+  start/stop settle anchor carried across a delta gap longer than the watchdog
+  window is now discarded, so the first delta after a long silence cannot
+  instantly satisfy a settle check and report a phantom multi-hour session.
+- **A disconnected BMS no longer leaves a cell-imbalance alarm stuck on.** When
+  every cell reading ages out, the monitor now clears an active imbalance and
+  emits `cell-imbalance-exit` instead of waiting for a reconnect that may never
+  come.
+- **Trend-analyzer QuestDB faults surface instead of vanishing.** `aging` and
+  `drift` now report a failure when a QuestDB query errors rather than silently
+  producing nothing; `forecast` logs the fault and continues buffer-only.
+  QuestDB is re-probed periodically, so a database that was unreachable at
+  plugin start is picked up without a restart.
+- **The Weather Outlook Advisor reads its trends correctly.** It no longer
+  assumes the rolling buffer is timestamp-ordered (multi-source paths
+  interleave), and wind-direction hourly means use a circular mean so a trend
+  across the 0/2pi wrap is not averaged into a meaningless mid-value. A missing
+  `SEVERITY:` line in the model reply is now logged.
+- **Engine drift fuel figures are legible.** Mean fuel rate (m^3/s, order
+  1e-6) was formatted to `0.00000`; it now uses exponential notation.
+- **A malformed delta timestamp** is replaced with the current time instead of
+  `NaN`, which had silently broken buffer eviction and detector arithmetic.
+- **The config panel** shows an error instead of an editable empty box when a
+  prompt fails to load (which had let an edit overwrite the saved prompt), no
+  longer discards unsaved edits when the host re-renders with an equal config,
+  and survives a malformed status payload.
+- A plugin that throws partway through `start()` now releases its
+  subscriptions and timers; corrupt or unwritable budget state, a failed
+  failure-notification publish, and the `Retry-After` HTTP-date form are all
+  handled rather than silently swallowed.
+
+### Changed
+
+- The `/fire` endpoint and config panel report the run outcome (report
+  generated, nothing to report, budget exhausted, or failed) instead of a
+  blanket "Dispatched".
+- The plugin shutdown signal is threaded into the LLM call, so a stop cancels
+  an in-flight request.
+- Internal cleanup from the review: a shared `BufferSummary` type and the core
+  `BankSnapshot` replace re-declared shapes, the seven repeated analyzer schema
+  skeletons collapse into one helper, schema config bounds are enforced at
+  runtime, and several unused exports, fields, and styles were removed. No
+  behavior change.
+
 ## [0.5.1] - 2026-05-19
 
 Makes the maintenance analyzer fire reliably and resolves a large batch of
