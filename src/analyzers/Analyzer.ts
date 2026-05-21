@@ -51,6 +51,10 @@ export interface AnalyzerDeps {
   // budget-exhausted state. index.ts populates with the analyzer-count aware
   // banner so recovery matches the startup message.
   okStatus?: string;
+  // The plugin lifecycle abort signal. The router bails before spending budget
+  // if it has fired, and passes it to the LLM call so a shutdown cancels an
+  // in-flight request.
+  signal?: AbortSignal;
 }
 
 export interface Analyzer<I extends AnalysisInput = AnalysisInput> {

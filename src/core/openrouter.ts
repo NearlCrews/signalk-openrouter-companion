@@ -18,7 +18,6 @@ export interface CompleteResult {
   text: string;
   model: string;
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
-  raw: unknown;
 }
 
 export class OpenRouterError extends Error {
@@ -26,7 +25,6 @@ export class OpenRouterError extends Error {
     public readonly status: number,
     message: string,
     public readonly metadata?: unknown,
-    public readonly retryable: boolean = false,
   ) {
     super(message);
     this.name = 'OpenRouterError';
@@ -127,7 +125,7 @@ export class OpenRouterClient {
         }
         const text = body.choices?.[0]?.message?.content ?? '';
         if (text.trim() === '') {
-          throw new OpenRouterError(200, 'empty completion', body, false);
+          throw new OpenRouterError(200, 'empty completion', body);
         }
         const u = body.usage ?? {};
         return {
@@ -140,7 +138,6 @@ export class OpenRouterClient {
               completionTokens: u.completion_tokens ?? 0,
               totalTokens: u.total_tokens ?? 0,
             },
-            raw: body,
           },
         };
       }
@@ -151,11 +148,11 @@ export class OpenRouterClient {
       if (TRANSIENT_STATUSES.has(res.status)) {
         return {
           kind: 'retry',
-          error: new OpenRouterError(res.status, message, metadata, true),
+          error: new OpenRouterError(res.status, message, metadata),
           retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
         };
       }
-      throw new OpenRouterError(res.status, message, metadata, false);
+      throw new OpenRouterError(res.status, message, metadata);
     } finally {
       clearTimeout(timeout);
       args.abortSignal?.removeEventListener('abort', onCallerAbort);
@@ -171,7 +168,7 @@ function transportRetry(args: CompleteArgs, err: unknown): Attempt {
   const message = err instanceof Error ? err.message : String(err);
   return {
     kind: 'retry',
-    error: new OpenRouterError(0, message, undefined, true),
+    error: new OpenRouterError(0, message),
     retryAfterMs: null,
   };
 }
@@ -184,10 +181,13 @@ async function safeJson(res: Response): Promise<ApiErrorBody | null> {
   }
 }
 
+// `Retry-After` is either a number of seconds or an HTTP-date (RFC 9110).
 function parseRetryAfter(h: string | null): number | null {
   if (!h) return null;
   const sec = Number.parseInt(h, 10);
-  return Number.isFinite(sec) ? sec * 1000 : null;
+  if (Number.isFinite(sec)) return sec * 1000;
+  const date = Date.parse(h);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
 const BACKOFF_LADDER = [500, 1500, 4500] as const;

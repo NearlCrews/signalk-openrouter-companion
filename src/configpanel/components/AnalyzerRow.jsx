@@ -42,8 +42,11 @@ export function AnalyzerRow({
   // cron.enabled false marks an event-driven analyzer (maintenance, alerts):
   // it has no schedule, so the frequency dropdown is shown disabled.
   const cronEnabled = !!analyzer.cron?.enabled;
-  const scheduleOptions =
-    !schedule || CRON_PRESETS.some((o) => o.value === schedule)
+  // Keep the controlled select's value in its option set: a saved non-preset
+  // pattern gets a "Custom" entry, and an unset pattern gets a "Not set" entry.
+  const scheduleOptions = !schedule
+    ? [{ value: '', label: 'Not set' }, ...CRON_PRESETS]
+    : CRON_PRESETS.some((o) => o.value === schedule)
       ? CRON_PRESETS
       : [...CRON_PRESETS, { value: schedule, label: `Custom: ${schedule}` }];
 
@@ -183,7 +186,7 @@ export function AnalyzerRow({
                 )}
               {!ui.reportsLoading &&
                 ui.reports?.map((r) => (
-                  <div key={r.ts} style={S.reportEntry}>
+                  <div key={`${r.ts}-${r.trigger}`} style={S.reportEntry}>
                     <div style={S.reportTs}>
                       {r.ts} · trigger={r.trigger}
                       {r.engineId ? ` · engine=${r.engineId}` : ''}

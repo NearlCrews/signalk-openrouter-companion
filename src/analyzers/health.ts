@@ -1,11 +1,17 @@
+import type { BufferSummary } from '../core/buffer.js';
 import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
 } from '../core/cfg.js';
-import { fmtNumber } from '../core/format.js';
+import { DAY_MS, fmtNumber } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
-import { asTreeMap, readBankSnapshot, readNumberAt } from '../core/skNode.js';
+import {
+  asTreeMap,
+  readBankSnapshot,
+  readNumberAt,
+  type BankSnapshot as SkBankSnapshot,
+} from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -34,21 +40,15 @@ interface CellSnapshot {
   voltage: number;
 }
 
-interface BankSnapshot {
+interface HealthBankSnapshot extends SkBankSnapshot {
   id: string;
-  voltage: number | null;
-  current: number | null;
-  stateOfCharge: number | null;
-  nominalCapacityJ: number | null;
-  cycles: number | null;
-  temperatureK: number | null;
-  voltage24h: { min: number; max: number; mean: number; count: number; sources: string[] } | null;
+  voltage24h: BufferSummary | null;
   cells: CellSnapshot[] | null;
 }
 
 export interface HealthInput extends AnalysisInput {
   generatedAt: string;
-  banks: BankSnapshot[];
+  banks: HealthBankSnapshot[];
 }
 
 export class HealthAnalyzer implements Analyzer<HealthInput> {
@@ -69,9 +69,9 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     if (banksRaw.length === 0) return null;
 
     const endMs = ctx.firedAt.getTime();
-    const startMs = endMs - 24 * 3_600_000;
+    const startMs = endMs - DAY_MS;
 
-    const banks: BankSnapshot[] = banksRaw.map(([id, node]) => {
+    const banks: HealthBankSnapshot[] = banksRaw.map(([id, node]) => {
       const cells = collectCells(node);
       return {
         id,

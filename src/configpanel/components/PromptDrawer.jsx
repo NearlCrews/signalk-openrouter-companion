@@ -10,6 +10,27 @@ export function PromptDrawer({ analyzerId, ui, value, onChange, onReset, onClose
         </div>
       </div>
     );
+  // A failed fetch leaves promptDefault undefined. Show the error and suppress
+  // the textarea: editing an empty one would write a bogus customSystemPrompt
+  // over the real saved prompt.
+  if (ui.promptError)
+    return (
+      <div style={S.drawer}>
+        <div style={{ ...S.testStatus, ...S.testErr }} role="status" aria-live="polite">
+          Failed to load prompt: {ui.promptError}
+        </div>
+        <div style={S.inlineRow}>
+          <button
+            type="button"
+            className={btnClass(true)}
+            style={btn(S.btnSecondary)}
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
   const textareaId = `orc-prompt-${analyzerId}`;
   const isOverride = value !== ui.promptDefault;
   return (

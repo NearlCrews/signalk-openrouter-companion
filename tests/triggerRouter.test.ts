@@ -22,7 +22,6 @@ function makeDeps(): AnalyzerDeps {
       text: 'report',
       model: 'm',
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-      raw: {},
     })),
   };
   // Mirror the real ReportPublisher surface the router actually touches:

@@ -52,9 +52,12 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
 
   constructor(cfg: LivenessCfg) {
     this.triggers = buildTriggers(cfg.triggers);
+    // min mirrors the schema (stalenessThresholdSec minimum 30) so a value
+    // from a hand-edited JSON config is clamped at runtime too.
     this.stalenessThresholdSec = clampPositiveInt(
       cfg.stalenessThresholdSec,
       LIVENESS_DEFAULT_STALENESS_SEC,
+      { min: 30 },
     );
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, LIVENESS_DEFAULT_SYSTEM_PROMPT);
   }

@@ -79,8 +79,16 @@ export interface AgingInput extends AnalysisInput {
 }
 
 function resolveWindowDays(cfg: AgingCfg): readonly number[] {
-  const short = clampPositiveInt(cfg.shortWindowDays, AGING_DEFAULT_SHORT_DAYS);
-  const long = clampPositiveInt(cfg.longWindowDays, AGING_DEFAULT_LONG_DAYS);
+  // Bounds mirror the schema so a value from a hand-edited JSON config is
+  // clamped at runtime too (shortWindowDays 7..365, longWindowDays 7..1095).
+  const short = clampPositiveInt(cfg.shortWindowDays, AGING_DEFAULT_SHORT_DAYS, {
+    min: 7,
+    max: 365,
+  });
+  const long = clampPositiveInt(cfg.longWindowDays, AGING_DEFAULT_LONG_DAYS, {
+    min: 7,
+    max: 1095,
+  });
   const [a, b] = short <= long ? [short, long] : [long, short];
   return a === b ? [a] : [a, b];
 }
@@ -235,29 +243,27 @@ async function queryWindow(
     .trim()
     .replace(/\s+/g, ' ');
 
+  // A query fault propagates: aging requires QuestDB, so a fault is a real
+  // analyzer failure and must surface as a failure report, not a silent skip.
   const out = new Map<string, PathSummary>();
-  try {
-    const r = await client.query(sql);
-    const cols = indexColumns(r);
-    const pIdx = cols.get('path') ?? -1;
-    if (pIdx < 0) return out;
-    const fIdx = cols.get('first_val') ?? -1;
-    const lIdx = cols.get('last_val') ?? -1;
-    const nIdx = cols.get('n') ?? -1;
-    for (const row of r.dataset) {
-      const path = row[pIdx];
-      if (typeof path !== 'string') continue;
-      const firstV = fIdx >= 0 ? row[fIdx] : null;
-      const lastV = lIdx >= 0 ? row[lIdx] : null;
-      const nV = nIdx >= 0 ? row[nIdx] : 0;
-      out.set(path, {
-        first: typeof firstV === 'number' ? firstV : Number.NaN,
-        last: typeof lastV === 'number' ? lastV : Number.NaN,
-        n: typeof nV === 'number' ? nV : 0,
-      });
-    }
-  } catch {
-    // best-effort: caller treats missing path as insufficient data
+  const r = await client.query(sql);
+  const cols = indexColumns(r);
+  const pIdx = cols.get('path') ?? -1;
+  if (pIdx < 0) return out;
+  const fIdx = cols.get('first_val') ?? -1;
+  const lIdx = cols.get('last_val') ?? -1;
+  const nIdx = cols.get('n') ?? -1;
+  for (const row of r.dataset) {
+    const path = row[pIdx];
+    if (typeof path !== 'string') continue;
+    const firstV = fIdx >= 0 ? row[fIdx] : null;
+    const lastV = lIdx >= 0 ? row[lIdx] : null;
+    const nV = nIdx >= 0 ? row[nIdx] : 0;
+    out.set(path, {
+      first: typeof firstV === 'number' ? firstV : Number.NaN,
+      last: typeof lastV === 'number' ? lastV : Number.NaN,
+      n: typeof nV === 'number' ? nV : 0,
+    });
   }
   return out;
 }

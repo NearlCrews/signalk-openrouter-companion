@@ -4,6 +4,10 @@ export interface BudgetOptions {
   maxPerDay: number;
   statePath: string;
   now?: () => Date;
+  // Optional sink for persistence faults. A failed load silently resets the
+  // daily spend cap and a failed write silently weakens it, so both are worth
+  // surfacing even though neither should reject.
+  log?: (msg: string) => void;
 }
 
 interface PersistedState {
@@ -34,7 +38,12 @@ export class BudgetTracker {
         throw new Error('invalid state shape');
       }
       state = parsed;
-    } catch {
+    } catch (err) {
+      // ENOENT is the expected first-run case. Anything else means an existing
+      // budget file failed to load, which silently resets the daily spend cap.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        opts.log?.(`budget state unreadable, resetting daily counter: ${String(err)}`);
+      }
       state = { day: utcDay(now()), callsToday: 0, lastCallTs: null };
     }
     return new BudgetTracker({ ...opts, now }, state);
@@ -72,12 +81,14 @@ export class BudgetTracker {
     };
     try {
       await writeFile(this.opts.statePath, JSON.stringify(this.state));
-    } catch {
+    } catch (err) {
       // Best-effort persist. The in-memory counter is already incremented, so
       // a failed write only loses the count across a server restart. It must
       // not reject: recordCall runs inside the analyzer's try block, and a
       // rejection here would surface as a spurious analyzer-failure report
-      // even though the LLM call has not been attempted yet.
+      // even though the LLM call has not been attempted yet. A persistently
+      // failing write quietly weakens the cap, so log it.
+      this.opts.log?.(`budget state write failed: ${String(err)}`);
     }
   }
 }

@@ -124,7 +124,12 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(cfg.triggers);
-    this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS);
+    // Bounds mirror the schema (baselineDays minimum 14, maximum 365) so a
+    // value from a hand-edited JSON config is clamped at runtime too.
+    this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS, {
+      min: 14,
+      max: 365,
+    });
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, DRIFT_DEFAULT_SYSTEM_PROMPT);
   }
 
@@ -188,7 +193,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
         const d = eng.deltas[bin];
         const range = `${def.label} [${def.min}, ${def.max === Number.POSITIVE_INFINITY ? '∞' : def.max}) Hz`;
         lines.push(
-          `| ${range} | ${w.fuelCount}/${w.sogCount} | ${b.fuelCount}/${b.sogCount} | ${fmtNumber(w.meanFuelRate, { digits: 5 })} | ${fmtNumber(b.meanFuelRate, { digits: 5 })} | ${fmtPct(d.fuelRateDeltaPct)} | ${fmtNumber(w.meanSog, { digits: 5 })} | ${fmtNumber(b.meanSog, { digits: 5 })} | ${fmtPct(d.sogDeltaPct)} |`,
+          `| ${range} | ${w.fuelCount}/${w.sogCount} | ${b.fuelCount}/${b.sogCount} | ${fmtFuelRate(w.meanFuelRate)} | ${fmtFuelRate(b.meanFuelRate)} | ${fmtPct(d.fuelRateDeltaPct)} | ${fmtNumber(w.meanSog, { digits: 5 })} | ${fmtNumber(b.meanSog, { digits: 5 })} | ${fmtPct(d.sogDeltaPct)} |`,
         );
       }
       lines.push('');
@@ -258,31 +263,35 @@ async function binEngineWindow(
     .trim()
     .replace(/\s+/g, ' ');
 
-  try {
-    const res = await questdb.query(sql);
-    const cols = indexColumns(res);
-    const binIdx = cols.get('bin') ?? -1;
-    const nFuelIdx = cols.get('n_fuel') ?? -1;
-    const nSogIdx = cols.get('n_sog') ?? -1;
-    const fuelIdx = cols.get('mean_fuel') ?? -1;
-    const sogIdx = cols.get('mean_sog') ?? -1;
-    if (binIdx < 0 || nFuelIdx < 0 || nSogIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
-    if (res.dataset.length === 0) return null;
-    const out = emptyBins();
-    for (const row of res.dataset) {
-      const binRaw = row[binIdx];
-      if (typeof binRaw !== 'string' || !isBinKey(binRaw)) continue;
-      out[binRaw] = {
-        fuelCount: asFiniteNumber(row[nFuelIdx]) ?? 0,
-        sogCount: asFiniteNumber(row[nSogIdx]) ?? 0,
-        meanFuelRate: asFiniteNumber(row[fuelIdx]),
-        meanSog: asFiniteNumber(row[sogIdx]),
-      };
-    }
-    return out;
-  } catch {
-    return null;
+  // A query fault propagates: drift requires QuestDB, so a fault is a real
+  // analyzer failure and must surface as a failure report, not a silent skip.
+  const res = await questdb.query(sql);
+  const cols = indexColumns(res);
+  const binIdx = cols.get('bin') ?? -1;
+  const nFuelIdx = cols.get('n_fuel') ?? -1;
+  const nSogIdx = cols.get('n_sog') ?? -1;
+  const fuelIdx = cols.get('mean_fuel') ?? -1;
+  const sogIdx = cols.get('mean_sog') ?? -1;
+  if (binIdx < 0 || nFuelIdx < 0 || nSogIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
+  if (res.dataset.length === 0) return null;
+  const out = emptyBins();
+  for (const row of res.dataset) {
+    const binRaw = row[binIdx];
+    if (typeof binRaw !== 'string' || !isBinKey(binRaw)) continue;
+    out[binRaw] = {
+      fuelCount: asFiniteNumber(row[nFuelIdx]) ?? 0,
+      sogCount: asFiniteNumber(row[nSogIdx]) ?? 0,
+      meanFuelRate: asFiniteNumber(row[fuelIdx]),
+      meanSog: asFiniteNumber(row[sogIdx]),
+    };
   }
+  return out;
+}
+
+// fuel.rate in m^3/s is order 1e-6 for a marine diesel, which a fixed-decimal
+// format collapses to "0.00000". Exponential keeps the absolute value legible.
+function fmtFuelRate(v: number | null): string {
+  return v == null || !Number.isFinite(v) ? 'n/a' : v.toExponential(3);
 }
 
 function isBinKey(k: string): k is BinKey {

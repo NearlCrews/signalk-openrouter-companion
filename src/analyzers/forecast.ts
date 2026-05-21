@@ -40,6 +40,10 @@ const BASELINE_TO_HOURS = 24;
 const TENDENCY_HOURS = 3;
 const PA_PER_HPA = 100;
 
+// Wind direction is a circular quantity (radians true): its hourly buckets
+// need a circular mean, not an arithmetic one that breaks across the 0/2pi wrap.
+const WIND_DIRECTION_PATH = 'environment.wind.directionTrue';
+
 // Four-level severity scale, ordered weakest to strongest so the array index
 // doubles as the rank used for the severity-floor comparison.
 const SEVERITY_GRADES = ['none', 'minor', 'moderate', 'severe'] as const;
@@ -189,27 +193,36 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
 
     // QuestDB baseline is a strict enhancement: query it first so the cold-
     // start guard can let a thin buffer through when a baseline is available.
-    const baseline = questdb
-      ? await queryBaseline(questdb, QUESTDB_SELF_CONTEXT, firedMs)
-      : new Map<string, number>();
+    // A query fault must not fail the analyzer (it runs buffer-only without
+    // QuestDB), but it is logged so a broken baseline is not invisible.
+    let baseline = new Map<string, number>();
+    if (questdb) {
+      try {
+        baseline = await queryBaseline(questdb, QUESTDB_SELF_CONTEXT, firedMs);
+      } catch (err) {
+        deps.logger.debug(`forecast: QuestDB baseline query failed: ${String(err)}`);
+      }
+    }
     const hasQuestdbBaseline = baseline.size > 0;
 
     const pathsToReport = ALL_WEATHER_PATHS.filter((p) => bufferPaths.has(p) || baseline.has(p));
     if (pathsToReport.length === 0) return null;
 
     // Slice each reported path's trend window once, reused for the cold-start
-    // gate and the trend rows. Reading oldestTs from the window (not full
+    // gate and the trend rows. Buffer entries are in arrival order, not
+    // timestamp order (one path interleaves multiple sources), so scan every
+    // entry for the oldest ts. Reading oldestTs from the window (not full
     // history) is sound only because COLD_START_MIN_HISTORY_MS is shorter than
-    // the trend window: a sample old enough to pass the gate is always inside
-    // the window. Slices are time-ordered, so entries[0] is the oldest.
+    // the trend window: a sample old enough to pass the gate is always inside.
     const windowEntries = new Map<string, BufferEntry[]>();
     let oldestTs: number | null = null;
     for (const path of pathsToReport) {
       if (!bufferPaths.has(path)) continue;
       const entries = buffer.slice(path, windowStart, firedMs);
       windowEntries.set(path, entries);
-      const first = entries[0];
-      if (first && (oldestTs == null || first.ts < oldestTs)) oldestTs = first.ts;
+      for (const e of entries) {
+        if (oldestTs == null || e.ts < oldestTs) oldestTs = e.ts;
+      }
     }
     const historyMs = oldestTs == null ? 0 : firedMs - oldestTs;
     if (historyMs < COLD_START_MIN_HISTORY_MS && !hasQuestdbBaseline) return null;
@@ -217,14 +230,15 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     const trends: PathTrend[] = pathsToReport.map((path) => {
       const meta = WEATHER_PATH_META[path];
       const entries = windowEntries.get(path) ?? [];
+      const latest = latestEntry(entries);
       return {
         path,
         family: meta?.family ?? 'canonical',
         label: meta?.label ?? path,
         unit: meta?.unit ?? '',
-        source: entries.at(-1)?.source ?? null,
-        current: latestValue(entries),
-        buckets: bucketMeans(entries, windowStart),
+        source: latest?.source ?? null,
+        current: latest ? asFiniteNumber(latest.value) : null,
+        buckets: bucketMeans(entries, windowStart, path === WIND_DIRECTION_PATH),
         baselineMean: baseline.get(path) ?? null,
       };
     });
@@ -273,7 +287,12 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   }
 
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
-    const { grade, body } = parseForecast(text);
+    const { grade, body, severityLineParsed } = parseForecast(text);
+    if (!severityLineParsed) {
+      deps.logger.debug(
+        'forecast: LLM reply had no valid SEVERITY line; outlook graded none (no alarm)',
+      );
+    }
     const state = resolveForecastState(grade, this.severityFloor);
     await deps.publisher.publishOnPath(
       body.length > 0 ? body : text.trim(),
@@ -288,12 +307,17 @@ function normalizeFloor(v: unknown): SeverityFloor {
 }
 
 // Slice the buffer entries into TREND_WINDOW_HOURS hourly-mean buckets, oldest
-// bucket first. Out-of-range timestamps are clamped to the edge buckets.
+// bucket first. Out-of-range timestamps are clamped to the edge buckets. When
+// `circular` is set the values are angles in radians (wind direction): the
+// bucket mean is then the circular mean (atan2 of summed sin/cos) so a trend
+// across the 0/2pi wrap is not averaged into a meaningless mid-value.
 function bucketMeans(
   entries: ReadonlyArray<{ value: unknown; ts: number }>,
   windowStart: number,
+  circular = false,
 ): Array<number | null> {
-  const sums = new Array<number>(TREND_WINDOW_HOURS).fill(0);
+  const sumX = new Array<number>(TREND_WINDOW_HOURS).fill(0);
+  const sumY = new Array<number>(TREND_WINDOW_HOURS).fill(0);
   const counts = new Array<number>(TREND_WINDOW_HOURS).fill(0);
   for (const e of entries) {
     const value = asFiniteNumber(e.value);
@@ -301,21 +325,29 @@ function bucketMeans(
     let idx = Math.floor((e.ts - windowStart) / HOUR_MS);
     if (idx < 0) idx = 0;
     if (idx >= TREND_WINDOW_HOURS) idx = TREND_WINDOW_HOURS - 1;
-    sums[idx] = (sums[idx] ?? 0) + value;
+    sumX[idx] = (sumX[idx] ?? 0) + (circular ? Math.cos(value) : value);
+    if (circular) sumY[idx] = (sumY[idx] ?? 0) + Math.sin(value);
     counts[idx] = (counts[idx] ?? 0) + 1;
   }
-  return sums.map((s, i) => {
+  return sumX.map((x, i) => {
     const n = counts[i] ?? 0;
-    return n > 0 ? s / n : null;
+    if (n === 0) return null;
+    if (!circular) return x / n;
+    const angle = Math.atan2((sumY[i] ?? 0) / n, x / n);
+    return angle < 0 ? angle + 2 * Math.PI : angle;
   });
 }
 
-function latestValue(entries: ReadonlyArray<{ value: unknown }>): number | null {
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const v = asFiniteNumber(entries[i]?.value);
-    if (v != null) return v;
+// The newest entry by timestamp whose value is a finite number. Buffer entries
+// are in arrival order, not timestamp order, so this scans every entry rather
+// than trusting array position.
+function latestEntry(entries: ReadonlyArray<BufferEntry>): BufferEntry | null {
+  let best: BufferEntry | null = null;
+  for (const e of entries) {
+    if (asFiniteNumber(e.value) == null) continue;
+    if (best == null || e.ts > best.ts) best = e;
   }
-  return null;
+  return best;
 }
 
 // Pre-compute the 3-hour barometric tendency in hPa from the pressure path's
@@ -367,8 +399,8 @@ function fmtSigned(v: number): string {
 }
 
 // One QuestDB query that returns the per-path mean over the 24-72h baseline
-// window. Returns an empty map on any failure: the baseline is optional and
-// the analyzer runs buffer-only without it.
+// window. Throws on a query fault; the caller logs it and runs buffer-only,
+// since the baseline is a strict enhancement.
 async function queryBaseline(
   questdb: QuestDBClient,
   context: string,
@@ -390,21 +422,17 @@ async function queryBaseline(
     .replace(/\s+/g, ' ');
 
   const out = new Map<string, number>();
-  try {
-    const res = await questdb.query(sql);
-    const cols = indexColumns(res);
-    const pathIdx = cols.get('path') ?? -1;
-    const meanIdx = cols.get('mean_value') ?? -1;
-    if (pathIdx < 0 || meanIdx < 0) return out;
-    for (const row of res.dataset) {
-      const path = row[pathIdx];
-      const mean = asFiniteNumber(row[meanIdx]);
-      if (typeof path === 'string' && mean != null) {
-        out.set(path, mean);
-      }
+  const res = await questdb.query(sql);
+  const cols = indexColumns(res);
+  const pathIdx = cols.get('path') ?? -1;
+  const meanIdx = cols.get('mean_value') ?? -1;
+  if (pathIdx < 0 || meanIdx < 0) return out;
+  for (const row of res.dataset) {
+    const path = row[pathIdx];
+    const mean = asFiniteNumber(row[meanIdx]);
+    if (typeof path === 'string' && mean != null) {
+      out.set(path, mean);
     }
-  } catch {
-    return out;
   }
   return out;
 }
@@ -412,6 +440,10 @@ async function queryBaseline(
 interface ParsedForecast {
   grade: SeverityGrade;
   body: string;
+  // False when the reply had no valid SEVERITY line and grade fell back to
+  // 'none'. A custom prompt that drops the SEVERITY contract would otherwise
+  // silently downgrade every outlook to nominal.
+  severityLineParsed: boolean;
 }
 
 const SEVERITY_LINE_RE = /^\s*SEVERITY:\s*(severe|moderate|minor|none)\s*$/i;
@@ -428,10 +460,16 @@ export function parseForecast(text: string): ParsedForecast {
   const rest = nl < 0 ? '' : text.slice(nl + 1).trim();
   const severityMatch = firstLine.match(SEVERITY_LINE_RE);
   if (severityMatch?.[1]) {
-    return { grade: severityMatch[1].toLowerCase() as SeverityGrade, body: rest };
+    return {
+      grade: severityMatch[1].toLowerCase() as SeverityGrade,
+      body: rest,
+      severityLineParsed: true,
+    };
   }
-  if (SEVERITY_PREFIX_RE.test(firstLine)) return { grade: 'none', body: rest };
-  return { grade: 'none', body: text.trim() };
+  if (SEVERITY_PREFIX_RE.test(firstLine)) {
+    return { grade: 'none', body: rest, severityLineParsed: false };
+  }
+  return { grade: 'none', body: text.trim(), severityLineParsed: false };
 }
 
 // Map an LLM grade plus the configured floor to a Signal K notification state.

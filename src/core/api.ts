@@ -269,10 +269,11 @@ export function registerApiRoutes(
     }
     // Run the named analyzer directly. A manual fire uses a put-kind ctx; an
     // analyzer with nothing to report (alerts has no pending battery event)
-    // returns null from collectContext and the router skips the LLM call.
+    // returns null from collectContext and the router skips the LLM call. The
+    // outcome lets the panel distinguish a real report from a silent no-op.
     try {
-      await rt.router.runById(id, manualPutCtx());
-      res.json({ ok: true, analyzer: id });
+      const outcome = await rt.router.runById(id, manualPutCtx());
+      res.json({ ok: true, analyzer: id, outcome });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ ok: false, error: message });

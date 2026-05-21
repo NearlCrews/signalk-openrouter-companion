@@ -22,10 +22,10 @@ describe('QuestDBClient', () => {
     expect(await q.probe()).toBe(true);
   });
 
-  it('probe returns false on network failure', async () => {
+  it('probe rejects on a transport failure so the caller can report the reason', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'));
     const q = new QuestDBClient({ url: 'http://localhost:9000' });
-    expect(await q.probe()).toBe(false);
+    await expect(q.probe()).rejects.toThrow('fetch failed');
   });
 
   it('query passes through SQL urlencoded and parses response', async () => {

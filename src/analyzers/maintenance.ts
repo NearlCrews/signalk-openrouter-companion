@@ -1,3 +1,4 @@
+import type { BufferSummary } from '../core/buffer.js';
 import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
@@ -12,9 +13,9 @@ import {
   enginePathPrefix,
   PROPULSION_PREFIX,
 } from '../core/paths.js';
-import { asTreeMap, readBankSnapshot, readValueAt } from '../core/skNode.js';
+import { asTreeMap, type BankSnapshot, readBankSnapshot, readValueAt } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
-import type { AnalyzerTriggerCfg } from '../types.js';
+import { type AnalyzerTriggerCfg, MAINTENANCE_SUPPORTED_EVENTS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
@@ -47,29 +48,15 @@ interface SessionSummary {
   durationSec: number;
 }
 
-interface TelemetryStats {
-  min: number;
-  max: number;
-  mean: number;
-  count: number;
-  sources: string[];
-}
-
-interface BatterySnapshot {
+interface BatterySnapshot extends BankSnapshot {
   id: string;
-  voltage: number | null;
-  current: number | null;
-  stateOfCharge: number | null;
-  nominalCapacityJ: number | null;
-  cycles: number | null;
-  temperatureK: number | null;
-  voltageSession: TelemetryStats | null;
-  socSession: TelemetryStats | null;
+  voltageSession: BufferSummary | null;
+  socSession: BufferSummary | null;
 }
 
 export interface MaintenanceInput extends AnalysisInput {
   session: SessionSummary;
-  telemetry: Record<string, TelemetryStats>;
+  telemetry: Record<string, BufferSummary>;
   engineNotifications: Record<string, unknown>;
   batteries: BatterySnapshot[];
 }
@@ -92,7 +79,9 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
 
   constructor(cfg: MaintenanceCfg) {
     this.triggers = buildTriggers(cfg.triggers, (sub) =>
-      sub === 'engine-stop' ? { kind: 'engine-stop' } : null,
+      (MAINTENANCE_SUPPORTED_EVENTS as readonly string[]).includes(sub)
+        ? { kind: 'engine-stop' }
+        : null,
     );
     this.minSessionSeconds = cfg.minSessionSeconds;
     this.extraWatchedPaths = new Set(cfg.extraWatchedPaths ?? []);
@@ -125,7 +114,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     }
 
     const watchedPaths = listWatchedPaths(deps, engineId, this.extraWatchedPaths);
-    const telemetry: Record<string, TelemetryStats> = {};
+    const telemetry: Record<string, BufferSummary> = {};
     for (const path of watchedPaths) {
       const s = deps.buffer.summarize(path, startMs, endMs);
       if (s) telemetry[path] = s;
@@ -228,16 +217,9 @@ function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): 
   if (!tree) return [];
   return Object.entries(tree).map(([id, node]) => {
     const paths = bankPaths(id);
-    const { voltage, current, stateOfCharge, nominalCapacityJ, cycles, temperatureK } =
-      readBankSnapshot(node);
     return {
       id,
-      voltage,
-      current,
-      stateOfCharge,
-      nominalCapacityJ,
-      cycles,
-      temperatureK,
+      ...readBankSnapshot(node),
       voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
       socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
     };

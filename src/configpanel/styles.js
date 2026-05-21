@@ -169,17 +169,6 @@ export const S = {
   testStatus: { fontSize: T.fontSize.sm, fontWeight: T.fontWeight.medium },
   testOk: { color: T.color.successText },
   testErr: { color: T.color.dangerText },
-  pre: {
-    background: T.color.surface,
-    border: `1px solid ${T.color.border}`,
-    borderRadius: T.radius.md,
-    padding: T.space.lg,
-    fontSize: T.fontSize.xs,
-    lineHeight: 1.4,
-    overflow: 'auto',
-    maxHeight: 280,
-    color: T.color.textSecondary,
-  },
   empty: { fontSize: T.fontSize.md, color: T.color.textMuted, padding: T.space.padEmpty },
   // A collapsible card per analyzer. The header (checkbox, title, status pill)
   // is always visible; the body with controls renders only when expanded.

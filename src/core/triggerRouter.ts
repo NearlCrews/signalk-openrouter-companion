@@ -8,12 +8,18 @@ import type {
 } from '../analyzers/Analyzer.js';
 import type { AnalyzerId } from '../analyzers/ids.js';
 import { stringify } from './logger.js';
+import type { QuestDBClient } from './questdb.js';
 
 export interface DispatchExtras {
   putPath?: string;
   cronPattern?: string;
   batterySubkind?: BatteryEventKind;
 }
+
+// Outcome of one analyzer run. `runById` returns it so a caller (the REST fire
+// endpoint) can tell a real report apart from a no-op or a failure instead of
+// reporting blanket success.
+export type RunOutcome = 'reported' | 'no-input' | 'budget-exhausted' | 'failed';
 
 export class TriggerRouter {
   private lastStatus: string | null = null;
@@ -22,6 +28,12 @@ export class TriggerRouter {
     private analyzers: Analyzer[],
     private deps: AnalyzerDeps,
   ) {}
+
+  // Swap in a QuestDB client discovered after construction (the plugin probes
+  // QuestDB once at start and re-probes if it was unreachable then).
+  setQuestdb(questdb: QuestDBClient | null): void {
+    this.deps.questdb = questdb;
+  }
 
   // Skip SK admin-UI churn when the status string hasn't changed.
   private setStatus(msg: string): void {
@@ -40,19 +52,23 @@ export class TriggerRouter {
   // Run a single analyzer by id, bypassing trigger matching. The REST fire
   // endpoint names the analyzer directly, so it must run regardless of which
   // triggers the analyzer has enabled.
-  async runById(id: AnalyzerId, ctx: TriggerCtx): Promise<void> {
+  async runById(id: AnalyzerId, ctx: TriggerCtx): Promise<RunOutcome> {
     const a = this.analyzers.find((x) => x.id === id);
-    if (a) await this.runOne(a, ctx);
+    if (!a) return 'no-input';
+    return this.runOne(a, ctx);
   }
 
-  private async runOne(a: Analyzer, ctx: TriggerCtx): Promise<void> {
+  private async runOne(a: Analyzer, ctx: TriggerCtx): Promise<RunOutcome> {
     try {
       const input = await a.collectContext(ctx, this.deps);
-      if (input == null) return;
+      if (input == null) return 'no-input';
+      // stop() aborts the lifecycle signal; bail before spending budget or
+      // calling the LLM if a shutdown landed while collectContext was running.
+      if (this.deps.signal?.aborted) return 'no-input';
       if (!this.deps.budget.canSpend()) {
         this.deps.logger.debug(`${a.id}: budget exhausted, skipping`);
         this.setStatus('Running, budget exhausted for today');
-        return;
+        return 'budget-exhausted';
       }
       // Record the call here, not after the LLM await: the canSpend() check
       // above and the in-memory counter increment inside recordCall() run with
@@ -62,16 +78,26 @@ export class TriggerRouter {
       // intended conservative behavior for a spend cap.
       await this.deps.budget.recordCall();
       const { system, user } = a.buildPrompt(input);
-      const { text } = await this.deps.llm.complete({ system, user });
+      const { text } = await this.deps.llm.complete({
+        system,
+        user,
+        abortSignal: this.deps.signal,
+      });
       this.setStatus(this.deps.okStatus ?? 'Running');
       if (a.publishOutput) {
         await a.publishOutput(text, ctx, this.deps);
       } else {
         await this.deps.publisher.publishReport(a.id, ctx, text);
       }
+      return 'reported';
     } catch (err) {
       this.deps.logger.error(`${a.id}: ${stringify(err)}`);
-      await this.deps.publisher.publishFailure(a.id, ctx, err).catch(() => {});
+      await this.deps.publisher
+        .publishFailure(a.id, ctx, err)
+        .catch((e) =>
+          this.deps.logger.debug(`${a.id}: failed to publish failure: ${stringify(e)}`),
+        );
+      return 'failed';
     }
   }
 }

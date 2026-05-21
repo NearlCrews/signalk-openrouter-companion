@@ -17,6 +17,7 @@ import {
   SOC_PATH_RE,
 } from './core/discovery.js';
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
+import { HOUR_MS } from './core/format.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
 import { enginePaths, WEATHER_CANONICAL_PATHS, WEATHER_EXTENSION_PATHS } from './core/paths.js';
@@ -30,7 +31,7 @@ import { ALERTS_SUPPORTED_EVENTS, mergeWithDefaults, type PluginOptions } from '
 const PLUGIN_ID = 'signalk-openrouter-companion';
 const PLUGIN_NAME = 'OpenRouter Companion';
 
-const BUFFER_MAX_AGE_MS = 26 * 3600 * 1000;
+const BUFFER_MAX_AGE_MS = 26 * HOUR_MS;
 const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
 const ENGINE_SOURCE_WINDOW_MS = 1000;
 const BATTERY_SOURCE_WINDOW_MS = 5000;
@@ -91,6 +92,32 @@ export default function createPlugin(app: ServerApiLike): {
   // resolver (a module-scoped resolver would let a stale start() resolve a
   // newer start()'s promise).
   let readyPromise: Promise<void> = new Promise<void>(() => {});
+
+  // Release every resource start() registered: abort the lifecycle, stop the
+  // scheduler, drain stream subscriptions, clear intervals, drop the runtime.
+  // Shared by stop() and start()'s own catch, since SK does not call stop()
+  // for a start() that threw partway through wiring.
+  const releaseResources = (): void => {
+    if (lifecycleController) {
+      lifecycleController.abort();
+      lifecycleController = null;
+    }
+    if (scheduler) {
+      scheduler.stopAll();
+      scheduler = null;
+    }
+    while (unsubs.length > 0) {
+      try {
+        unsubs.pop()?.();
+      } catch (err) {
+        logger.error(err);
+      }
+    }
+    for (const h of intervalHandles) clearInterval(h);
+    intervalHandles.length = 0;
+    runtime = null;
+    activeRouter = null;
+  };
 
   return {
     id: PLUGIN_ID,
@@ -189,10 +216,17 @@ export default function createPlugin(app: ServerApiLike): {
           ? new QuestDBClient({ url: cfg.questdb.url })
           : null;
         const probePromise: Promise<QuestDBClient | null> = questdbCandidate
-          ? questdbCandidate.probe(lifecycle.signal).then((ok) => {
-              if (!ok) logger.debug('QuestDB unreachable; trend analyzers will skip this run');
-              return ok ? questdbCandidate : null;
-            })
+          ? questdbCandidate
+              .probe(lifecycle.signal)
+              .then((ok) => {
+                if (!ok)
+                  logger.debug('QuestDB unreachable; trend analyzers will skip until it recovers');
+                return ok ? questdbCandidate : null;
+              })
+              .catch(() => {
+                logger.debug('QuestDB unreachable; trend analyzers will skip until it recovers');
+                return null;
+              })
           : Promise.resolve(null);
         const publisher = new ReportPublisher({
           app,
@@ -211,6 +245,7 @@ export default function createPlugin(app: ServerApiLike): {
         const budgetPromise = BudgetTracker.load({
           maxPerDay: cfg.openrouter.maxCallsPerDay,
           statePath: budgetPath,
+          log: (m) => logger.error(m),
         });
 
         let router: TriggerRouter | null = null;
@@ -236,6 +271,7 @@ export default function createPlugin(app: ServerApiLike): {
               app,
               setStatus: (m) => app.setPluginStatus(m),
               okStatus: runningStatus(analyzers.length),
+              signal: lifecycle.signal,
             });
             runtime = {
               cfg: {
@@ -320,6 +356,9 @@ export default function createPlugin(app: ServerApiLike): {
         unsubs.push(
           detector.on('engine-stop', (e: EngineEvent) => {
             saveDetectorState();
+            // router is wired by the deferred init (probe + budget). An event
+            // in that brief startup window is dropped: an engine stop right at
+            // plugin start is unlikely and the next session is still captured.
             if (!router) return;
             const sess = e.session;
             if (!sess) return;
@@ -383,7 +422,11 @@ export default function createPlugin(app: ServerApiLike): {
           const bus = app.streambundle.getSelfBus(path);
           const unsub = bus.onValue((delta) => {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
-            const ts = d.timestamp ? Date.parse(d.timestamp) : Date.now();
+            // Date.parse returns NaN for a malformed timestamp; a NaN ts would
+            // silently break buffer eviction and detector session arithmetic.
+            // Fall back to now() so a bad timestamp degrades to a fresh sample.
+            const parsed = d.timestamp ? Date.parse(d.timestamp) : Number.NaN;
+            const ts = Number.isFinite(parsed) ? parsed : Date.now();
             sink(d.value, ts, d.$source ?? 'unknown');
           });
           if (unsub) unsubs.push(unsub);
@@ -483,6 +526,24 @@ export default function createPlugin(app: ServerApiLike): {
             if (changed) {
               app.setPluginStatus(runningStatus(analyzers.length));
             }
+            // QuestDB recovery: it is probed once at start(), so a QuestDB that
+            // is down then (or starts after this plugin) would otherwise leave
+            // the trend analyzers disabled for the whole plugin lifetime. When
+            // it is enabled but not currently live, re-probe and wire it in.
+            if (questdbCandidate && router && runtime && !runtime.questdbLive) {
+              const live = runtime;
+              const activeRouter = router;
+              void questdbCandidate
+                .probe(lifecycle.signal)
+                .then((ok) => {
+                  if (ok) {
+                    activeRouter.setQuestdb(questdbCandidate);
+                    live.questdbLive = questdbCandidate;
+                    logger.debug('QuestDB recovered; trend analyzers re-enabled');
+                  }
+                })
+                .catch(() => {});
+            }
           }, RESCAN_INTERVAL_MS),
         );
 
@@ -494,31 +555,17 @@ export default function createPlugin(app: ServerApiLike): {
           app.setPluginStatus(runningStatus(analyzers.length));
         }
       } catch (err) {
+        // start() threw partway through wiring subscriptions and intervals.
+        // Release whatever was registered before the throw so it does not leak
+        // until the next enable/disable cycle.
+        releaseResources();
         app.setPluginError(stringify(err));
         signalReady();
       }
     },
 
     stop: async () => {
-      if (lifecycleController) {
-        lifecycleController.abort();
-        lifecycleController = null;
-      }
-      if (scheduler) {
-        scheduler.stopAll();
-        scheduler = null;
-      }
-      while (unsubs.length > 0) {
-        try {
-          unsubs.pop()?.();
-        } catch (err) {
-          logger.error(err);
-        }
-      }
-      for (const h of intervalHandles) clearInterval(h);
-      intervalHandles.length = 0;
-      runtime = null;
-      activeRouter = null;
+      releaseResources();
       app.setPluginStatus('Stopped');
     },
 

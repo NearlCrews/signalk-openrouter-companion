@@ -40,7 +40,7 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 
 // Forecast-analyzer severity floor: the lowest LLM-graded outlook severity
 // that raises an alarm on the forecast notification. Below the floor the
-// outlook still publishes, with state 'normal', so it stays readable in the
+// outlook still publishes, with state 'nominal', so it stays readable in the
 // data browser. Source-of-truth for the schema enum and the analyzer.
 export const FORECAST_SEVERITY_FLOORS = ['severe', 'moderate', 'minor'] as const;
 export type SeverityFloor = (typeof FORECAST_SEVERITY_FLOORS)[number];
@@ -141,7 +141,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
         put: { enabled: true, path: pluginPutPath('maintenance') },
-        events: ['engine-stop'],
+        events: [...MAINTENANCE_SUPPORTED_EVENTS],
       },
       engineStopRpmHzThreshold: 1.0,
       engineStopSettleSeconds: 10,
@@ -189,7 +189,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
         put: { enabled: false, path: pluginPutPath('alerts') },
-        events: ['low-soc-enter', 'low-soc-exit', 'cell-imbalance-enter', 'cell-imbalance-exit'],
+        events: [...ALERTS_SUPPORTED_EVENTS],
       },
       lowSocPercent: 30,
       socExitHysteresis: 5,

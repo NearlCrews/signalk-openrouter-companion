@@ -36,15 +36,15 @@ export function indexColumns(r: QueryResult): Map<string, number> {
 export class QuestDBClient {
   constructor(private cfg: QuestDBCfg) {}
 
+  // Resolves false for a reachable server that answers wrongly (non-2xx, or a
+  // payload without a dataset). Throws for a transport failure (refused
+  // connection, DNS, timeout) so callers that want the reason, such as the
+  // QuestDB test endpoint, can report it instead of a bare "unreachable".
   async probe(abortSignal?: AbortSignal): Promise<boolean> {
-    try {
-      const r = await fetch(`${this.cfg.url}/exec?query=SELECT%201`, { signal: abortSignal });
-      if (!r.ok) return false;
-      const j = (await r.json()) as Partial<QueryResult>;
-      return Array.isArray(j.dataset);
-    } catch {
-      return false;
-    }
+    const r = await fetch(`${this.cfg.url}/exec?query=SELECT%201`, { signal: abortSignal });
+    if (!r.ok) return false;
+    const j = (await r.json()) as Partial<QueryResult>;
+    return Array.isArray(j.dataset);
   }
 
   async query(sql: string, abortSignal?: AbortSignal): Promise<QueryResult> {

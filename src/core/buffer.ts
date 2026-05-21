@@ -9,6 +9,16 @@ export interface BufferOptions {
   maxEntriesPerPath: number;
 }
 
+// Numeric summary of one path over a time window. Returned by `summarize`;
+// exported so analyzers reuse it instead of re-declaring the same shape.
+export interface BufferSummary {
+  min: number;
+  max: number;
+  mean: number;
+  count: number;
+  sources: string[];
+}
+
 export class RollingBuffer {
   private store = new Map<string, BufferEntry[]>();
   private readonly trimTo: number;
@@ -43,11 +53,7 @@ export class RollingBuffer {
     return this.store.keys();
   }
 
-  summarize(
-    path: string,
-    fromTs: number,
-    toTs: number,
-  ): { min: number; max: number; mean: number; count: number; sources: string[] } | null {
+  summarize(path: string, fromTs: number, toTs: number): BufferSummary | null {
     const arr = this.store.get(path);
     if (!arr) return null;
     const sources = new Set<string>();

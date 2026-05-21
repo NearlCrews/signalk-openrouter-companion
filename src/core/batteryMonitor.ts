@@ -125,6 +125,13 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
       }
       if (b.recentCells.size === 0) {
         b.imbalanceSince = null;
+        // The BMS went silent. observeCellV is the only other exit path and it
+        // cannot run without deltas, so clear an active imbalance alert here or
+        // it would stay stuck until the BMS reconnects with balanced cells.
+        if (b.imbalanceHigh) {
+          b.imbalanceHigh = false;
+          this.emit({ kind: 'cell-imbalance-exit', bankId: b.bankId, ts: now, imbalanceV: 0 });
+        }
         continue;
       }
       if (!b.imbalanceHigh && b.imbalanceSince !== null) {

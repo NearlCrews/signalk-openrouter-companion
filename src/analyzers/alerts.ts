@@ -120,7 +120,12 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
     const subkind = ctx.batteryEvent?.subkind;
     const bankId = ctx.bankId;
-    if (!subkind || !bankId) return;
+    // collectContext already guarantees both; this is a type guard. If it ever
+    // fires the LLM result is discarded after the budget was spent, so log it.
+    if (!subkind || !bankId) {
+      deps.logger.error('alerts.publishOutput: missing subkind or bankId; discarding result');
+      return;
+    }
     const { kind, state } = ALERT_ROUTING[subkind];
     const path = batteryAlertPath(bankId, kind);
     const message = truncateForN2K(text);

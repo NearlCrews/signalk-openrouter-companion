@@ -102,7 +102,6 @@ describe('OpenRouterClient', () => {
     await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({
       name: 'OpenRouterError',
       status: 401,
-      retryable: false,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -127,7 +126,7 @@ describe('OpenRouterClient', () => {
     fetchMock.mockResolvedValue(jsonResponse(503, { error: { code: 503, message: 'down' } }));
     const c = makeClient();
     const p = c.complete({ system: 's', user: 'u' });
-    const assertion = expect(p).rejects.toMatchObject({ status: 503, retryable: true });
+    const assertion = expect(p).rejects.toMatchObject({ status: 503 });
     await vi.advanceTimersByTimeAsync(10_000);
     await assertion;
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -218,7 +217,6 @@ describe('OpenRouterClient', () => {
     const assertion = expect(p).rejects.toMatchObject({
       name: 'OpenRouterError',
       status: 0,
-      retryable: true,
     });
     await vi.advanceTimersByTimeAsync(20_000);
     await assertion;
@@ -325,7 +323,6 @@ describe('OpenRouterClient', () => {
     await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({
       name: 'OpenRouterError',
       status: 200,
-      retryable: false,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

@@ -12,6 +12,15 @@ import { jsonEqual } from './utils.js';
 const NOTICE_RESTARTING = 'restarting';
 const NOTICE_DONE = 'done';
 
+// Maps the /fire endpoint's run outcome to the message shown beside the button,
+// so a no-op fire reads as "Nothing to report" rather than a misleading success.
+const FIRE_OUTCOME_TEXT = {
+  reported: 'Report generated',
+  'no-input': 'Nothing to report',
+  'budget-exhausted': 'Daily call budget exhausted',
+  failed: 'Analysis failed (check notifications)',
+};
+
 // Inject the scoped focus/hover stylesheet once. It carries the interactive
 // states (focus rings, button hover) that inline styles cannot express.
 function useScopedStyles() {
@@ -50,9 +59,16 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   useScopedStyles();
 
   // Reset edit buffer + pristine ref whenever the host pushes a new config.
+  // Guarded by a structural compare: the SK admin host can re-render with a
+  // fresh-but-equal `configuration` object, and resyncing then would silently
+  // discard in-progress unsaved edits.
+  const lastSyncedRef = useRef(configuration ?? {});
   useEffect(() => {
-    setCfg(structuredClone(configuration ?? {}));
-    setPristine(structuredClone(configuration ?? {}));
+    const next = configuration ?? {};
+    if (jsonEqual(lastSyncedRef.current, next)) return;
+    lastSyncedRef.current = next;
+    setCfg(structuredClone(next));
+    setPristine(structuredClone(next));
   }, [configuration]);
 
   const dirty = !jsonEqual(cfg, pristine);
@@ -213,7 +229,10 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     const r = await fetchJson(`/analyzers/${id}/fire`, { method: 'POST' });
     patchUi(id, {
       fire: r.ok
-        ? { ok: true, text: 'Dispatched' }
+        ? {
+            ok: r.body?.outcome !== 'failed',
+            text: FIRE_OUTCOME_TEXT[r.body?.outcome] ?? 'Dispatched',
+          }
         : { ok: false, text: r.body?.error || r.error || `HTTP ${r.status}` },
     });
     // Refresh the open drawer so the new report shows up after the LLM
@@ -235,6 +254,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   };
 
   const loadPrompt = async (id) => {
+    patchUi(id, { promptLoaded: false, promptError: null });
     const r = await fetchJson(`/analyzers/${id}/prompt`);
     if (r.ok && r.body) {
       patchUi(id, {
@@ -254,7 +274,8 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const togglePrompt = (id) => {
     const next = !analyzerUi[id]?.promptOpen;
     patchUi(id, { promptOpen: next });
-    if (next && !analyzerUi[id]?.promptLoaded) loadPrompt(id);
+    // Load on first open, and retry on reopen if the previous load failed.
+    if (next && (!analyzerUi[id]?.promptLoaded || analyzerUi[id]?.promptError)) loadPrompt(id);
   };
 
   // Single source of truth for the prompt edit buffer: the cfg object. The

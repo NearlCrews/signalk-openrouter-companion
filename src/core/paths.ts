@@ -53,7 +53,7 @@ export function enginePaths(engineId: string): { rpm: string; fuelRate: string }
   return { rpm: `${prefix}revolutions`, fuelRate: `${prefix}fuel.rate` };
 }
 
-export function bankPathPrefix(bankId: string): string {
+function bankPathPrefix(bankId: string): string {
   return `electrical.batteries.${bankId}.`;
 }
 

@@ -85,9 +85,11 @@ export class ReportPublisher {
   constructor(private cfg: PublisherCfg) {}
 
   // SKVersion.v1: all notification paths this plugin emits live in v1.
-  // Failure notifications publish on the same canonical report path the
-  // analyzer's successful report would, so subscribers see the warn next to
-  // the prior nominal report instead of on a separate channel.
+  // Failure notifications always publish on the canonical report path
+  // (notifications.openrouter-companion.<id>.report). For a default analyzer
+  // that is also where its successful report lands; an analyzer that overrides
+  // publishOutput with its own path (alerts publishes per bank) still has its
+  // failures collected here on the one canonical channel.
   async publishFailure(analyzerId: string, ctx: TriggerCtx, err: unknown): Promise<void> {
     const now = new Date();
     const reason = stringify(err);

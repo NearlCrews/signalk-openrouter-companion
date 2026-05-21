@@ -118,8 +118,19 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
 
   observe(engineId: string, source: string, hz: number, ts: number): void {
     const s = this.getState(engineId);
+    // A delta gap longer than the watchdog window is a real dropout, not the
+    // normal sub-second-to-few-second cadence the settle timers tolerate. A
+    // stale `aboveSince`/`belowSince` carried across such a gap would satisfy
+    // a settle check on the first delta after it and backdate a session start
+    // (or end) by the whole gap. Restart the settle anchors from this delta.
+    const gap = s.lastDeltaTs > 0 ? ts - s.lastDeltaTs : 0;
     s.lastDeltaTs = ts;
     s.possibleStopEmitted = false;
+    if (gap > this.watchdogMs) {
+      s.aboveSince = null;
+      s.belowSince = null;
+      s.belowSinceWhileStarting = null;
+    }
     s.recentBySource.set(source, { hz, ts });
     const cutoff = ts - this.opts.sourceWindowMs;
     let effectiveHz = Number.NEGATIVE_INFINITY;

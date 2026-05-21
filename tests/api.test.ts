@@ -176,7 +176,6 @@ describe('plugin REST API', () => {
         text: 'OK',
         model: 'anthropic/claude-haiku-4.5',
         usage: { promptTokens: 5, completionTokens: 1, totalTokens: 6 },
-        raw: {},
       }),
     } as never as PluginRuntime['llm'];
 
@@ -222,13 +221,14 @@ describe('plugin REST API', () => {
   describe('/api/analyzers/:id/fire handler', () => {
     function makeRuntimeWithRouter(opts: {
       enabledIds: string[];
-      runById?: (id: string, ctx: unknown) => Promise<void>;
+      runById?: (id: string, ctx: unknown) => Promise<string>;
     }): { rt: PluginRuntime; calls: Array<{ id: string; ctx: unknown }> } {
       const calls: Array<{ id: string; ctx: unknown }> = [];
       const runById =
         opts.runById ??
-        (async (id: string, ctx: unknown): Promise<void> => {
+        (async (id: string, ctx: unknown): Promise<string> => {
           calls.push({ id, ctx });
+          return 'reported';
         });
       const rt = makePluginRuntime({
         analyzers: opts.enabledIds.map(fakeAnalyzer),
@@ -275,7 +275,7 @@ describe('plugin REST API', () => {
         params: { id: 'health' },
       });
       expect(r.status).toBe(200);
-      expect(r.body).toEqual({ ok: true, analyzer: 'health' });
+      expect(r.body).toEqual({ ok: true, analyzer: 'health', outcome: 'reported' });
       expect(calls).toHaveLength(1);
       const first = calls[0];
       expect(first?.id).toBe('health');
@@ -308,7 +308,6 @@ describe('plugin REST API', () => {
         text: 'report',
         model: 'm',
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-        raw: {},
       }));
       const analyzer = {
         id: 'health',

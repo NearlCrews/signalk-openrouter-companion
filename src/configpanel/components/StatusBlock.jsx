@@ -21,10 +21,13 @@ export function StatusBlock({ status, statusError, onTest, testing, testResult }
         Loading status...
       </div>
     );
-  const o = status.openrouter;
-  const qdb = status.questdb;
+  // Default each branch: a malformed /status payload must degrade gracefully
+  // rather than throw and blank the whole panel.
+  const o = status.openrouter ?? {};
+  const qdb = status.questdb ?? { enabled: false, reachable: null };
   const qdbState = questdbLabel(qdb);
-  const enabledCount = status.analyzers.filter((a) => a.enabled).length;
+  const analyzers = status.analyzers ?? [];
+  const enabledCount = analyzers.filter((a) => a.enabled).length;
   return (
     <>
       <div style={S.statsGrid}>
@@ -59,7 +62,7 @@ export function StatusBlock({ status, statusError, onTest, testing, testResult }
         <div style={S.statCard}>
           <div style={S.statLabel}>Analyzers</div>
           <div style={S.statValue}>
-            {enabledCount} / {status.analyzers.length}
+            {enabledCount} / {analyzers.length}
           </div>
           <div style={S.statSub}>enabled</div>
         </div>

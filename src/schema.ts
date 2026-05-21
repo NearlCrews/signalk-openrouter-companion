@@ -224,6 +224,31 @@ function triggerSchema(opts: {
   };
 }
 
+/**
+ * The per-analyzer schema node: the outer `type: 'object'`, title and
+ * description, the top-level `enabled` boolean, and the enabled-true gate.
+ * Only the titles, the `enabled` default, and the gated `whenEnabled` fields
+ * vary per analyzer, so every analyzer block goes through here rather than
+ * repeating the skeleton seven times.
+ */
+function analyzerSchemaNode(opts: {
+  title: string;
+  description: string;
+  enabledTitle: string;
+  enabledDefault: boolean;
+  whenEnabled: Record<string, unknown>;
+}): EnabledGatedNode {
+  return {
+    type: 'object',
+    title: opts.title,
+    description: opts.description,
+    properties: {
+      enabled: { type: 'boolean', title: opts.enabledTitle, default: opts.enabledDefault },
+    },
+    ...enabledGate({ whenEnabled: opts.whenEnabled }),
+  };
+}
+
 export type PluginSchema = {
   type: 'object';
   title: string;
@@ -295,281 +320,224 @@ function buildSchemaInner(): PluginSchema {
         type: 'object',
         title: 'Analyzers',
         properties: {
-          maintenance: {
-            type: 'object',
+          maintenance: analyzerSchemaNode({
             title: 'Maintenance Advisor',
             description: 'Generates a plain-English engine session report when the engine stops.',
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable engine maintenance reports',
-                default: DEFAULT_OPTIONS.analyzers.maintenance.enabled,
+            enabledTitle: 'Enable engine maintenance reports',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.maintenance.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.maintenance.triggers,
+                supportedEvents: MAINTENANCE_SUPPORTED_EVENTS,
+              }),
+              engineStopRpmHzThreshold: {
+                type: 'number',
+                title: 'Engine-off RPM threshold (Hz)',
+                description:
+                  'RPM frequency below which the engine is considered idle (1.0 Hz = 60 RPM).',
+                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopRpmHzThreshold,
+              },
+              engineStopSettleSeconds: {
+                type: 'integer',
+                title: 'Engine-off settle time (seconds)',
+                description:
+                  'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
+                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
+                minimum: 0,
+              },
+              engineSilenceStopSeconds: {
+                type: 'integer',
+                title: 'Engine-silent stop time (seconds)',
+                description:
+                  'How long the RPM feed can go fully silent before the session is treated as ended. A switched-off NMEA 2000 engine stops broadcasting entirely rather than reporting RPM 0. Default 300s.',
+                default: DEFAULT_OPTIONS.analyzers.maintenance.engineSilenceStopSeconds,
+                minimum: 0,
+              },
+              engineStartRpmHzThreshold: {
+                type: 'number',
+                title: 'Engine-on RPM threshold (Hz)',
+                description:
+                  'RPM frequency above which the engine is considered running (1.0 Hz = 60 RPM).',
+                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartRpmHzThreshold,
+              },
+              engineStartSettleSeconds: {
+                type: 'integer',
+                title: 'Engine-on settle time (seconds)',
+                description:
+                  'How long RPM must stay above the threshold before the engine is considered running.',
+                default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
+                minimum: 0,
+              },
+              minSessionSeconds: {
+                type: 'integer',
+                title: 'Minimum session length (seconds)',
+                description: 'Engine sessions shorter than this are ignored (no report generated).',
+                default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
+                minimum: 0,
+              },
+              extraWatchedPaths: {
+                type: 'array',
+                title: 'Extra Signal K paths to include',
+                description:
+                  'Additional Signal K paths to sample during each engine session and include in the report.',
+                items: { type: 'string' },
+                default: DEFAULT_OPTIONS.analyzers.maintenance.extraWatchedPaths,
               },
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.maintenance.triggers,
-                  supportedEvents: MAINTENANCE_SUPPORTED_EVENTS,
-                }),
-                engineStopRpmHzThreshold: {
-                  type: 'number',
-                  title: 'Engine-off RPM threshold (Hz)',
-                  description:
-                    'RPM frequency below which the engine is considered idle (1.0 Hz = 60 RPM).',
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopRpmHzThreshold,
-                },
-                engineStopSettleSeconds: {
-                  type: 'integer',
-                  title: 'Engine-off settle time (seconds)',
-                  description:
-                    'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
-                  minimum: 0,
-                },
-                engineSilenceStopSeconds: {
-                  type: 'integer',
-                  title: 'Engine-silent stop time (seconds)',
-                  description:
-                    'How long the RPM feed can go fully silent before the session is treated as ended. A switched-off NMEA 2000 engine stops broadcasting entirely rather than reporting RPM 0. Default 300s.',
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineSilenceStopSeconds,
-                  minimum: 0,
-                },
-                engineStartRpmHzThreshold: {
-                  type: 'number',
-                  title: 'Engine-on RPM threshold (Hz)',
-                  description:
-                    'RPM frequency above which the engine is considered running (1.0 Hz = 60 RPM).',
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartRpmHzThreshold,
-                },
-                engineStartSettleSeconds: {
-                  type: 'integer',
-                  title: 'Engine-on settle time (seconds)',
-                  description:
-                    'How long RPM must stay above the threshold before the engine is considered running.',
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
-                  minimum: 0,
-                },
-                minSessionSeconds: {
-                  type: 'integer',
-                  title: 'Minimum session length (seconds)',
-                  description:
-                    'Engine sessions shorter than this are ignored (no report generated).',
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
-                  minimum: 0,
-                },
-                extraWatchedPaths: {
-                  type: 'array',
-                  title: 'Extra Signal K paths to include',
-                  description:
-                    'Additional Signal K paths to sample during each engine session and include in the report.',
-                  items: { type: 'string' },
-                  default: DEFAULT_OPTIONS.analyzers.maintenance.extraWatchedPaths,
-                },
-              },
-            }),
-          },
-          health: {
-            type: 'object',
+          }),
+          health: analyzerSchemaNode({
             title: 'Daily Battery Health Summary',
             description: "Daily summary of every battery bank's health.",
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable daily battery health summaries',
-                default: DEFAULT_OPTIONS.analyzers.health.enabled,
-              },
+            enabledTitle: 'Enable daily battery health summaries',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.health.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.health.triggers,
+                supportedEvents: HEALTH_SUPPORTED_EVENTS,
+              }),
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.health.triggers,
-                  supportedEvents: HEALTH_SUPPORTED_EVENTS,
-                }),
-              },
-            }),
-          },
-          aging: {
-            type: 'object',
+          }),
+          aging: analyzerSchemaNode({
             title: 'Battery Aging Tracker',
             description:
               'Monthly capacity-loss trend per battery bank, ranked by degradation rate.',
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable battery aging tracker',
-                default: DEFAULT_OPTIONS.analyzers.aging.enabled,
+            enabledTitle: 'Enable battery aging tracker',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.aging.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.aging.triggers,
+                supportedEvents: AGING_SUPPORTED_EVENTS,
+              }),
+              shortWindowDays: {
+                type: 'integer',
+                title: 'Short window (days)',
+                description:
+                  'How far back to look for the near-term aging window. Default 30. The shorter window catches recent acceleration in capacity loss.',
+                default: DEFAULT_OPTIONS.analyzers.aging.shortWindowDays,
+                minimum: 7,
+                maximum: 365,
+              },
+              longWindowDays: {
+                type: 'integer',
+                title: 'Long window (days)',
+                description:
+                  'How far back to look for the longer-term aging window. Default 90. The longer window provides a more stable baseline for the projection to 80 percent of nominal capacity.',
+                default: DEFAULT_OPTIONS.analyzers.aging.longWindowDays,
+                minimum: 7,
+                maximum: 1095,
               },
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.aging.triggers,
-                  supportedEvents: AGING_SUPPORTED_EVENTS,
-                }),
-                shortWindowDays: {
-                  type: 'integer',
-                  title: 'Short window (days)',
-                  description:
-                    'How far back to look for the near-term aging window. Default 30. The shorter window catches recent acceleration in capacity loss.',
-                  default: DEFAULT_OPTIONS.analyzers.aging.shortWindowDays,
-                  minimum: 7,
-                  maximum: 365,
-                },
-                longWindowDays: {
-                  type: 'integer',
-                  title: 'Long window (days)',
-                  description:
-                    'How far back to look for the longer-term aging window. Default 90. The longer window provides a more stable baseline for the projection to 80 percent of nominal capacity.',
-                  default: DEFAULT_OPTIONS.analyzers.aging.longWindowDays,
-                  minimum: 7,
-                  maximum: 1095,
-                },
-              },
-            }),
-          },
-          drift: {
-            type: 'object',
+          }),
+          drift: analyzerSchemaNode({
             title: 'Engine Performance Drift',
             description:
               'Weekly fuel-economy and per-RPM drift for engines vs a configurable trailing baseline.',
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable engine performance drift analysis',
-                default: DEFAULT_OPTIONS.analyzers.drift.enabled,
+            enabledTitle: 'Enable engine performance drift analysis',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.drift.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.drift.triggers,
+                supportedEvents: DRIFT_SUPPORTED_EVENTS,
+              }),
+              baselineDays: {
+                type: 'integer',
+                title: 'Baseline window (days)',
+                description:
+                  'How many days of QuestDB history to use as the baseline for the past-week vs baseline comparison. Default 30. The baseline ends where the past week begins (no overlap).',
+                default: DEFAULT_OPTIONS.analyzers.drift.baselineDays,
+                minimum: 14,
+                maximum: 365,
               },
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.drift.triggers,
-                  supportedEvents: DRIFT_SUPPORTED_EVENTS,
-                }),
-                baselineDays: {
-                  type: 'integer',
-                  title: 'Baseline window (days)',
-                  description:
-                    'How many days of QuestDB history to use as the baseline for the past-week vs baseline comparison. Default 30. The baseline ends where the past week begins (no overlap).',
-                  default: DEFAULT_OPTIONS.analyzers.drift.baselineDays,
-                  minimum: 14,
-                  maximum: 365,
-                },
-              },
-            }),
-          },
-          alerts: {
-            type: 'object',
+          }),
+          alerts: analyzerSchemaNode({
             title: 'Battery Threshold Alerts',
             description:
               'Sends notifications when state-of-charge or cell-balance crosses configured thresholds.',
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable battery threshold alerts',
-                default: DEFAULT_OPTIONS.analyzers.alerts.enabled,
+            enabledTitle: 'Enable battery threshold alerts',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.alerts.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.alerts.triggers,
+                supportedEvents: ALERTS_SUPPORTED_EVENTS,
+              }),
+              lowSocPercent: {
+                type: 'number',
+                title: 'Low state-of-charge threshold (%)',
+                description: 'Fires a low-SoC alert when any bank drops below this value.',
+                default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
+                minimum: 0,
+                maximum: 100,
+              },
+              socExitHysteresis: {
+                type: 'number',
+                title: 'SoC recovery hysteresis (%)',
+                description:
+                  'SoC must rise above (threshold + hysteresis) before the alert clears.',
+                default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
+                minimum: 0,
+              },
+              cellImbalanceV: {
+                type: 'number',
+                title: 'Cell imbalance threshold (V)',
+                description:
+                  'Voltage difference between highest and lowest cell that triggers an alert.',
+                default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
+                minimum: 0,
+              },
+              imbalanceSettleSec: {
+                type: 'integer',
+                title: 'Cell imbalance settle time (seconds)',
+                description:
+                  'Cell imbalance must persist for this many seconds before an alert fires.',
+                default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
+                minimum: 0,
               },
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.alerts.triggers,
-                  supportedEvents: ALERTS_SUPPORTED_EVENTS,
-                }),
-                lowSocPercent: {
-                  type: 'number',
-                  title: 'Low state-of-charge threshold (%)',
-                  description: 'Fires a low-SoC alert when any bank drops below this value.',
-                  default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
-                  minimum: 0,
-                  maximum: 100,
-                },
-                socExitHysteresis: {
-                  type: 'number',
-                  title: 'SoC recovery hysteresis (%)',
-                  description:
-                    'SoC must rise above (threshold + hysteresis) before the alert clears.',
-                  default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
-                  minimum: 0,
-                },
-                cellImbalanceV: {
-                  type: 'number',
-                  title: 'Cell imbalance threshold (V)',
-                  description:
-                    'Voltage difference between highest and lowest cell that triggers an alert.',
-                  default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
-                  minimum: 0,
-                },
-                imbalanceSettleSec: {
-                  type: 'integer',
-                  title: 'Cell imbalance settle time (seconds)',
-                  description:
-                    'Cell imbalance must persist for this many seconds before an alert fires.',
-                  default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
-                  minimum: 0,
-                },
-              },
-            }),
-          },
-          liveness: {
-            type: 'object',
+          }),
+          liveness: analyzerSchemaNode({
             title: 'Sensor Liveness Monitor',
             description:
               'Reports watched Signal K paths that have gone stale or are served by multiple sources.',
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable sensor liveness monitoring',
-                default: DEFAULT_OPTIONS.analyzers.liveness.enabled,
+            enabledTitle: 'Enable sensor liveness monitoring',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.liveness.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.liveness.triggers,
+                supportedEvents: LIVENESS_SUPPORTED_EVENTS,
+              }),
+              stalenessThresholdSec: {
+                type: 'integer',
+                title: 'Staleness threshold (seconds)',
+                description:
+                  'A watched path with no sample newer than this is reported as stale. Default 300.',
+                default: DEFAULT_OPTIONS.analyzers.liveness.stalenessThresholdSec,
+                minimum: 30,
               },
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.liveness.triggers,
-                  supportedEvents: LIVENESS_SUPPORTED_EVENTS,
-                }),
-                stalenessThresholdSec: {
-                  type: 'integer',
-                  title: 'Staleness threshold (seconds)',
-                  description:
-                    'A watched path with no sample newer than this is reported as stale. Default 300.',
-                  default: DEFAULT_OPTIONS.analyzers.liveness.stalenessThresholdSec,
-                  minimum: 30,
-                },
-              },
-            }),
-          },
-          forecast: {
-            type: 'object',
+          }),
+          forecast: analyzerSchemaNode({
             title: 'Weather Outlook Advisor',
             description:
               'Reads how environmental conditions are changing and publishes a short-term weather outlook as a Signal K notification.',
-            properties: {
-              enabled: {
-                type: 'boolean',
-                title: 'Enable weather outlook advisor',
-                default: DEFAULT_OPTIONS.analyzers.forecast.enabled,
+            enabledTitle: 'Enable weather outlook advisor',
+            enabledDefault: DEFAULT_OPTIONS.analyzers.forecast.enabled,
+            whenEnabled: {
+              triggers: triggerSchema({
+                defaults: DEFAULT_OPTIONS.analyzers.forecast.triggers,
+                supportedEvents: FORECAST_SUPPORTED_EVENTS,
+              }),
+              severityFloor: {
+                type: 'string',
+                title: 'Alarm severity floor',
+                description:
+                  'How bad the predicted weather must be before the outlook raises an alarm. Below the floor the outlook still publishes at a normal state, so it is always readable in the Data Browser.',
+                enum: [...FORECAST_SEVERITY_FLOORS],
+                enumNames: ['Severe only', 'Moderate and up', 'Any deterioration'],
+                default: DEFAULT_OPTIONS.analyzers.forecast.severityFloor,
               },
             },
-            ...enabledGate({
-              whenEnabled: {
-                triggers: triggerSchema({
-                  defaults: DEFAULT_OPTIONS.analyzers.forecast.triggers,
-                  supportedEvents: FORECAST_SUPPORTED_EVENTS,
-                }),
-                severityFloor: {
-                  type: 'string',
-                  title: 'Alarm severity floor',
-                  description:
-                    'How bad the predicted weather must be before the outlook raises an alarm. Below the floor the outlook still publishes at a normal state, so it is always readable in the Data Browser.',
-                  enum: [...FORECAST_SEVERITY_FLOORS],
-                  enumNames: ['Severe only', 'Moderate and up', 'Any deterioration'],
-                  default: DEFAULT_OPTIONS.analyzers.forecast.severityFloor,
-                },
-              },
-            }),
-          },
+          }),
         },
       },
     },
