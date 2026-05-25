@@ -117,6 +117,11 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
   }
 
   observe(engineId: string, source: string, hz: number, ts: number): void {
+    // Defense in depth: the subscribe wrapper clamps ts to wall-clock and
+    // drops NaN samples, but a non-finite value here would silently freeze
+    // the detector (NaN comparisons return false, so settle anchors are
+    // never reset and start/stop never fires).
+    if (!Number.isFinite(ts) || !Number.isFinite(hz)) return;
     const s = this.getState(engineId);
     // A delta gap longer than the watchdog window is a real dropout, not the
     // normal sub-second-to-few-second cadence the settle timers tolerate. A
@@ -221,7 +226,12 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
     for (const snap of snapshots) {
       if (typeof snap !== 'object' || snap === null) continue;
       const s = snap as Record<string, unknown>;
-      if (typeof s.engineId !== 'string' || typeof s.lastDeltaTs !== 'number') continue;
+      if (typeof s.engineId !== 'string') continue;
+      if (typeof s.lastDeltaTs !== 'number' || !Number.isFinite(s.lastDeltaTs)) continue;
+      // Reject snapshots whose lastDeltaTs is in the future (clock skew,
+      // hand-edit): a negative now - lastDeltaTs defeats both the maxResumeAge
+      // check below and the silentFor comparisons in tickWatchdog.
+      if (s.lastDeltaTs > now + 5 * 60_000) continue;
       if (now - s.lastDeltaTs > maxResumeAgeMs) continue;
       this.states.set(s.engineId, {
         engineId: s.engineId,
@@ -239,5 +249,5 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
 }
 
 function numOrNull(v: unknown): number | null {
-  return typeof v === 'number' ? v : null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }

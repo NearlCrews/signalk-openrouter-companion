@@ -1,4 +1,4 @@
-export interface LoggerHost {
+interface LoggerHost {
   debug(...args: unknown[]): void;
   error(msg: string): void;
 }

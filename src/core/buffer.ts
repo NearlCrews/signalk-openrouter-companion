@@ -4,7 +4,7 @@ export interface BufferEntry {
   source: string;
 }
 
-export interface BufferOptions {
+interface BufferOptions {
   maxAgeMs: number;
   maxEntriesPerPath: number;
 }

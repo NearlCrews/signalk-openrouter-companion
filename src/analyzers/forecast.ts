@@ -1,6 +1,6 @@
 import type { BufferEntry } from '../core/buffer.js';
 import { resolveSystemPrompt } from '../core/cfg.js';
-import { asFiniteNumber, fmtNumber, HOUR_MS } from '../core/format.js';
+import { asFiniteNumber, fmtNumber, fmtSigned, HOUR_MS } from '../core/format.js';
 import {
   notificationReportPath,
   WEATHER_CANONICAL_PATHS,
@@ -179,7 +179,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   private readonly severityFloor: SeverityFloor;
 
   constructor(cfg: ForecastCfg) {
-    this.triggers = buildTriggers(cfg.triggers);
+    this.triggers = buildTriggers(this.id, cfg.triggers);
     this.severityFloor = normalizeFloor(cfg.severityFloor);
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, FORECAST_DEFAULT_SYSTEM_PROMPT);
   }
@@ -317,7 +317,10 @@ function bucketMeans(
   circular = false,
 ): Array<number | null> {
   const sumX = new Array<number>(TREND_WINDOW_HOURS).fill(0);
-  const sumY = new Array<number>(TREND_WINDOW_HOURS).fill(0);
+  // sumY is only used by the circular path (wind direction); allocate it
+  // lazily so a non-circular trend (the other 10 weather paths) skips the
+  // 12-slot allocation per call.
+  const sumY = circular ? new Array<number>(TREND_WINDOW_HOURS).fill(0) : null;
   const counts = new Array<number>(TREND_WINDOW_HOURS).fill(0);
   for (const e of entries) {
     const value = asFiniteNumber(e.value);
@@ -326,14 +329,20 @@ function bucketMeans(
     if (idx < 0) idx = 0;
     if (idx >= TREND_WINDOW_HOURS) idx = TREND_WINDOW_HOURS - 1;
     sumX[idx] = (sumX[idx] ?? 0) + (circular ? Math.cos(value) : value);
-    if (circular) sumY[idx] = (sumY[idx] ?? 0) + Math.sin(value);
+    if (sumY) sumY[idx] = (sumY[idx] ?? 0) + Math.sin(value);
     counts[idx] = (counts[idx] ?? 0) + 1;
   }
   return sumX.map((x, i) => {
     const n = counts[i] ?? 0;
     if (n === 0) return null;
-    if (!circular) return x / n;
-    const angle = Math.atan2((sumY[i] ?? 0) / n, x / n);
+    if (!circular || !sumY) return x / n;
+    const mx = x / n;
+    const my = (sumY[i] ?? 0) / n;
+    // Drop the bucket if the resultant magnitude is near zero: samples that
+    // cancel around the unit circle have no coherent direction, and atan2
+    // would return 0 (north) which the prompt would read as a real heading.
+    if (Math.hypot(mx, my) < 0.1) return null;
+    const angle = Math.atan2(my, mx);
     return angle < 0 ? angle + 2 * Math.PI : angle;
   });
 }
@@ -392,10 +401,6 @@ function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): vo
     if (t.baselineMean != null) parts.push(`baseline=${fmtNumber(t.baselineMean)}`);
     lines.push(`- ${t.label} (${t.path}) [${t.unit}]: ${parts.join('; ')}`);
   }
-}
-
-function fmtSigned(v: number): string {
-  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
 }
 
 // One QuestDB query that returns the per-path mean over the 24-72h baseline

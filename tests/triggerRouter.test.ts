@@ -116,7 +116,7 @@ describe('TriggerRouter', () => {
     (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
     let router = new TriggerRouter([a], deps);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
-    expect(setStatus).toHaveBeenCalledWith('Running, budget exhausted for today');
+    expect(setStatus).toHaveBeenCalledWith('Running: budget exhausted for today');
     // Second call: budget available
     setStatus.mockClear();
     (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -125,7 +125,7 @@ describe('TriggerRouter', () => {
     expect(setStatus).toHaveBeenCalledWith('Running');
   });
 
-  it('does not exceed the daily cap when analyzers dispatch concurrently', async () => {
+  it('does not exceed the daily cap when cron analyzers fire concurrently', async () => {
     const dir = await makeTmpDir();
     try {
       const budget = await BudgetTracker.load({
@@ -136,8 +136,12 @@ describe('TriggerRouter', () => {
       const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'cron', pattern: 'p' }] });
       const b = makeAnalyzer({ id: 'b', triggers: [{ kind: 'cron', pattern: 'p' }] });
       const router = new TriggerRouter([a, b], deps);
-      await router.dispatch('cron', { kind: 'cron', firedAt: new Date() }, { cronPattern: 'p' });
-      // maxPerDay is 1 and both analyzers match: exactly one LLM call may run.
+      // Cron is dispatched via runById in production (index.ts registers one
+      // cron job per (pattern, timezone) pair and runs each member by id); the
+      // budget-cap guarantee must hold for two analyzers fired in parallel.
+      const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
+      await Promise.all([router.runById('a', ctx), router.runById('b', ctx)]);
+      // maxPerDay is 1 and both analyzers run: exactly one LLM call may fire.
       expect(deps.llm.complete).toHaveBeenCalledTimes(1);
       expect(budget.callsToday()).toBe(1);
     } finally {
@@ -172,41 +176,42 @@ describe('TriggerRouter', () => {
     expect(b.collectContext).not.toHaveBeenCalled();
   });
 
-  it('runById is a no-op for an unknown analyzer id', async () => {
+  it('runById returns "unknown" for an analyzer id that is not registered', async () => {
     const a = makeAnalyzer({ id: 'health', triggers: [] });
     const deps = makeDeps();
     const router = new TriggerRouter([a], deps);
-    await router.runById('nope', { kind: 'put', firedAt: new Date(), put: { value: 'manual' } });
+    const outcome = await router.runById('nope', {
+      kind: 'put',
+      firedAt: new Date(),
+      put: { value: 'manual' },
+    });
+    expect(outcome).toBe('unknown');
     expect(a.collectContext).not.toHaveBeenCalled();
   });
 
-  it('matches cron triggers by pattern', async () => {
+  it('runById fires the named cron analyzer (production cron path)', async () => {
     const a = makeAnalyzer({
       id: 'a',
       triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
     });
     const deps = makeDeps();
     const router = new TriggerRouter([a], deps);
-    await router.dispatch(
-      'cron',
-      { kind: 'cron', firedAt: new Date() },
-      { cronPattern: '0 8 * * *' },
-    );
+    // Production registers one cron job per (pattern, timezone) and fires
+    // its members by id; runById is the only cron entry point.
+    await router.runById('a', { kind: 'cron', firedAt: new Date() });
     expect(a.collectContext).toHaveBeenCalled();
   });
 
-  it('does not match cron triggers with a different pattern', async () => {
+  it('dispatch does not route cron (cron is runById-only in production)', async () => {
     const a = makeAnalyzer({
       id: 'a',
       triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
     });
     const deps = makeDeps();
     const router = new TriggerRouter([a], deps);
-    await router.dispatch(
-      'cron',
-      { kind: 'cron', firedAt: new Date() },
-      { cronPattern: '0 9 * * *' },
-    );
+    // dispatch is for path-based (put) and event-based (battery-event)
+    // routing; cron has no path to match on.
+    await router.dispatch('cron', { kind: 'cron', firedAt: new Date() });
     expect(a.collectContext).not.toHaveBeenCalled();
   });
 

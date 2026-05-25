@@ -1,4 +1,4 @@
-export interface OpenRouterCfg {
+interface OpenRouterCfg {
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -8,7 +8,7 @@ export interface OpenRouterCfg {
   random?: () => number;
 }
 
-export interface CompleteArgs {
+interface CompleteArgs {
   system: string;
   user: string;
   abortSignal?: AbortSignal;

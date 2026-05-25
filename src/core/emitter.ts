@@ -21,6 +21,16 @@ export class TypedEmitter<K extends string, E extends { kind: K }> {
   protected emit(e: E): void {
     const set = this.listeners.get(e.kind);
     if (!set) return;
-    for (const cb of set) cb(e);
+    // Isolate listeners: a throwing listener (e.g., the maintenance dispatch
+    // that fires on engine-stop) must not skip the state-persist listener for
+    // the same event. console.error is the visible-but-cheap surface; the
+    // detector tests assert no thrown error from emit().
+    for (const cb of set) {
+      try {
+        cb(e);
+      } catch (err) {
+        console.error(`emitter listener for ${e.kind}:`, err);
+      }
+    }
   }
 }

@@ -67,12 +67,20 @@ export function OpenRouterSection({ cfg, set, models, modelsState, loadModels })
         <input
           id="orc-max-calls"
           type="number"
-          min="0"
+          min="1"
           style={{ ...S.input, ...S.inputSmall }}
           value={o.maxCallsPerDay ?? 0}
-          onChange={(e) => set({ openrouter: { ...o, maxCallsPerDay: Number(e.target.value) } })}
+          onChange={(e) => {
+            const n = Number.parseInt(e.target.value, 10);
+            // Reject empty/zero/negative: maxCallsPerDay = 0 makes canSpend()
+            // return false forever and pegs the status banner at "budget
+            // exhausted". Keep the prior value until a valid integer arrives.
+            if (Number.isFinite(n) && n >= 1) {
+              set({ openrouter: { ...o, maxCallsPerDay: n } });
+            }
+          }}
         />
-        <span style={S.hint}>UTC daily hard cap on OpenRouter calls</span>
+        <span style={S.hint}>UTC daily hard cap on OpenRouter calls (Test button is exempt)</span>
       </div>
     </>
   );

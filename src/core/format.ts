@@ -4,7 +4,7 @@
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 
-export interface FmtOpts {
+interface FmtOpts {
   digits?: number;
   nan?: string;
 }
@@ -45,11 +45,25 @@ export function asFiniteNumber(v: unknown): number | null {
 
 // Clamp text to a maximum length at a word boundary. When the cut point has no
 // space in its second half, hard-cuts instead. With `ellipsis`, appends a
-// single ellipsis character and reserves one character of budget for it.
+// single ellipsis character (U+2026) and reserves one character of budget
+// for it. ASCII-only chartplotters may render the ellipsis as `?`; the
+// trade-off is character-budget vs glyph compatibility, with the canonical
+// single-char form chosen here for budget.
 export function clampAtWord(text: string, max: number, opts: { ellipsis?: boolean } = {}): string {
+  if (max <= 0) return opts.ellipsis ? '…' : '';
   if (text.length <= max) return text;
   const head = text.slice(0, max - (opts.ellipsis ? 1 : 0));
   const lastSpace = head.lastIndexOf(' ');
   const cut = (lastSpace > max / 2 ? head.slice(0, lastSpace) : head).trimEnd();
   return opts.ellipsis ? `${cut}…` : cut;
+}
+
+// Signed number with `digits` precision, no unit. Used by the forecast
+// analyzer to format absolute differences (delta T, delta wind) where the
+// sign is the story but a percent isn't appropriate.
+export function fmtSigned(v: number | null, opts: FmtOpts = {}): string {
+  const { digits = 1, nan = 'n/a' } = opts;
+  if (v == null || !Number.isFinite(v)) return nan;
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}${v.toFixed(digits)}`;
 }

@@ -36,8 +36,11 @@ export function alertIdFor(path: string): number {
   return h & 0xffff || 1;
 }
 
-export function pluginPutPath(analyzerId: string, verb = 'run'): string {
-  return `${PUT_PATH_PREFIX}${analyzerId}.${verb}`;
+// Per-analyzer PUT path. The verb is fixed at 'run' across the plugin (the
+// SK PUT shape used here always fires the analyzer once); a future verb would
+// be a new function rather than a parameter.
+export function pluginPutPath(analyzerId: string): string {
+  return `${PUT_PATH_PREFIX}${analyzerId}.run`;
 }
 
 export function enginePathPrefix(engineId: string): string {

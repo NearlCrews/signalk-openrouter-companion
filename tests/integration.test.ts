@@ -60,7 +60,7 @@ describe('integration: engine session -> report', () => {
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
 
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'propulsion.port.revolutions',
@@ -117,7 +117,7 @@ describe('integration: engine session -> report', () => {
       () => {},
     );
 
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'propulsion.port.revolutions',
@@ -174,7 +174,7 @@ describe('integration: engine session -> report', () => {
     const plugin = createPlugin(app as never);
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
 
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
       'electrical.batteries.house.capacity.stateOfCharge',

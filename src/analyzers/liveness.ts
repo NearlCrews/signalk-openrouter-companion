@@ -51,7 +51,7 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
   private readonly stalenessThresholdSec: number;
 
   constructor(cfg: LivenessCfg) {
-    this.triggers = buildTriggers(cfg.triggers);
+    this.triggers = buildTriggers(this.id, cfg.triggers);
     // min mirrors the schema (stalenessThresholdSec minimum 30) so a value
     // from a hand-edited JSON config is clamped at runtime too.
     this.stalenessThresholdSec = clampPositiveInt(
@@ -99,8 +99,16 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
     lines.push(`## Staleness threshold: ${input.stalenessThresholdSec}s`);
     lines.push('');
     for (const p of input.paths) {
+      // Show sub-second precision below 60s so a freshly-arrived sample reads
+      // as "0.2s ago" rather than the misleading "0s ago"; integer seconds
+      // above that since the LLM does not need 100ms precision for a 5-minute
+      // stale window.
       const age =
-        p.lastSeenAgeSec == null ? 'no samples retained' : `${p.lastSeenAgeSec.toFixed(0)}s ago`;
+        p.lastSeenAgeSec == null
+          ? 'no samples retained'
+          : p.lastSeenAgeSec < 60
+            ? `${p.lastSeenAgeSec.toFixed(1)}s ago`
+            : `${p.lastSeenAgeSec.toFixed(0)}s ago`;
       const flags: string[] = [];
       if (p.stale) flags.push('STALE');
       if (p.multiSource) flags.push('MULTI-SOURCE');

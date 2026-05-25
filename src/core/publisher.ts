@@ -11,7 +11,13 @@ export interface SignalKNotificationValue {
   method: string[];
   message: string;
   // Stable 16-bit PGN 126983 Alert Identifier; see `alertIdFor` in paths.ts.
+  // The field lives both at top level (kept for one release for the existing
+  // `signalk-nmea2000-emitter-cannon` consumer that reads `value.alertId`)
+  // and under `value.data.alertId`, the SK master extension slot for
+  // notification custom data. The top-level form will be removed once the
+  // emitter sibling reads from `data`.
   alertId?: number;
+  data?: { alertId?: number };
 }
 
 // SK states that warrant an audible NMEA 2000 alarm on the chartplotter.
@@ -26,8 +32,14 @@ const AUDIBLE_STATES: ReadonlySet<NotificationState> = new Set([
   'warn',
 ]);
 
+// `nominal` is the informational/no-action state in SK 1.8.2; an empty
+// method array tells downstream consumers "no user-facing notification".
+// The daily/weekly narrative reports (health/aging/drift/liveness/forecast)
+// land at `nominal`, so a strict SK client should not pop a visual for them.
 function methodFor(state: NotificationState): string[] {
-  return AUDIBLE_STATES.has(state) ? ['visual', 'sound'] : ['visual'];
+  if (AUDIBLE_STATES.has(state)) return ['visual', 'sound'];
+  if (state === 'nominal') return [];
+  return ['visual'];
 }
 
 // Defensive ceiling for the notification message. Analyzer prompts ask for an
@@ -38,6 +50,8 @@ const HEADLINE_MAX_CHARS = 140;
 // The chartplotter alert text. Analyzer reports lead with a short headline
 // line followed by the full narrative; this returns just that first line
 // (clamped at a word boundary), leaving the full text for the JSONL log.
+// Exported for tests; the runtime is the only other caller and uses it
+// through makeDelta below.
 export function headlineOf(text: string): string {
   const trimmed = text.trimStart();
   const nl = trimmed.indexOf('\n');
@@ -45,7 +59,7 @@ export function headlineOf(text: string): string {
   return clampAtWord(firstLine, HEADLINE_MAX_CHARS);
 }
 
-export interface SignalKNotificationDelta {
+interface SignalKNotificationDelta {
   context: string;
   updates: Array<{
     $source: string;
@@ -54,21 +68,27 @@ export interface SignalKNotificationDelta {
   }>;
 }
 
-export interface PublisherCfg {
+// app.error is part of the real SK ServerAPI surface and is always present;
+// it is not optional here. A test harness that wants to stub it just provides
+// a no-op function rather than relying on the publisher to defend missing
+// methods.
+interface PublisherCfg {
   app: {
     handleMessage(pluginId: string, delta: unknown, skVersion?: SKVersion): void;
     selfContext?: string;
-    error?(msg: string): void;
+    error(msg: string): void;
   };
   pluginId: string;
   logPath: string;
 }
 
-export interface PublishMeta {
+interface PublishMeta {
   analyzerId: string;
   ctx: TriggerCtx;
 }
 
+// JsonlEntry is the on-disk log row shape; api.ts also reads it to render
+// per-analyzer report history, hence the export.
 export interface JsonlEntry {
   ts: string;
   analyzer: string;
@@ -81,10 +101,12 @@ export interface JsonlEntry {
   failure?: string;
 }
 
+// All notification paths this plugin emits are SK v1 (`notifications.*`).
+// A future v2-shaped path must pass `SKVersion.v2` to keep it out of the v1
+// full data model.
 export class ReportPublisher {
   constructor(private cfg: PublisherCfg) {}
 
-  // SKVersion.v1: all notification paths this plugin emits live in v1.
   // Failure notifications always publish on the canonical report path
   // (notifications.openrouter-companion.<id>.report). For a default analyzer
   // that is also where its successful report lands; an analyzer that overrides
@@ -105,18 +127,29 @@ export class ReportPublisher {
     });
   }
 
+  // `displayText` is what goes on the notification value (headline-clamped for
+  // the chartplotter). `logText` is what lands in the JSONL log; defaults to
+  // displayText for callers that did not narrate separately. The alerts
+  // analyzer truncates the message to fit PGN 126985 but the full LLM report
+  // belongs in the log so an operator reviewing history sees the reasoning,
+  // not just the headline.
   async publishOnPath(
-    text: string,
+    displayText: string,
     meta: PublishMeta,
-    override: { path: string; state: NotificationState; alertId?: number },
+    override: {
+      path: string;
+      state: NotificationState;
+      alertId?: number;
+      logText?: string;
+    },
   ): Promise<void> {
     const now = new Date();
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(headlineOf(text), override.state, now, override.path, override.alertId),
+      this.makeDelta(headlineOf(displayText), override.state, now, override.path, override.alertId),
       SKVersion.v1,
     );
-    await this.appendLog(this.buildEntry(text, meta, now));
+    await this.appendLog(this.buildEntry(override.logText ?? displayText, meta, now));
   }
 
   // Default state is 'nominal' (informational): per SK 1.8.2, 'nominal' is the
@@ -150,7 +183,13 @@ export class ReportPublisher {
       method: methodFor(state),
       message: text,
     };
-    if (alertId !== undefined) value.alertId = alertId;
+    if (alertId !== undefined) {
+      // Dual-emit: top-level for the existing emitter-cannon sibling, plus
+      // the spec-clean `data` slot. Drop the top-level form once the sibling
+      // is updated to read from `value.data.alertId`.
+      value.alertId = alertId;
+      value.data = { alertId };
+    }
     return {
       context: this.cfg.app.selfContext ?? 'vessels.self',
       updates: [
@@ -190,7 +229,7 @@ export class ReportPublisher {
     try {
       await appendFile(this.cfg.logPath, `${JSON.stringify(entry)}\n`);
     } catch (err) {
-      this.cfg.app.error?.(`report log append failed: ${stringify(err)}`);
+      this.cfg.app.error(`report log append failed: ${stringify(err)}`);
     }
   }
 }

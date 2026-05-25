@@ -78,7 +78,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
   private readonly systemPrompt: string;
 
   constructor(cfg: MaintenanceCfg) {
-    this.triggers = buildTriggers(cfg.triggers, (sub) =>
+    this.triggers = buildTriggers(this.id, cfg.triggers, (sub) =>
       (MAINTENANCE_SUPPORTED_EVENTS as readonly string[]).includes(sub)
         ? { kind: 'engine-stop' }
         : null,
@@ -215,15 +215,34 @@ function snapshotEngineNotifications(
 function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): BatterySnapshot[] {
   const tree = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH));
   if (!tree) return [];
-  return Object.entries(tree).map(([id, node]) => {
-    const paths = bankPaths(id);
-    return {
-      id,
-      ...readBankSnapshot(node),
-      voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
-      socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
-    };
-  });
+  // Filter to true bank subtrees: a future SK server release could attach
+  // metadata leaves (`meta`, `$source`, `value`, `timestamp`, ...) at the
+  // `electrical.batteries` container level, and treating those as banks
+  // would produce nonsense LLM input. A real bank node is an object that
+  // carries at least one of the canonical bank fields.
+  return Object.entries(tree)
+    .filter(([_, node]) => isBankNode(node))
+    .map(([id, node]) => {
+      const paths = bankPaths(id);
+      return {
+        id,
+        ...readBankSnapshot(node),
+        voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
+        socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
+      };
+    });
+}
+
+// A real `electrical.batteries.<id>` subtree carries at least one of these
+// canonical fields. Anything else (a leaf with a `value`, a metadata blob,
+// `$source`, `timestamp`) is rejected so a future SK release that attaches
+// container-level metadata cannot inject a phantom bank id.
+const BANK_FIELD_KEYS: ReadonlyArray<string> = ['voltage', 'current', 'capacity', 'temperature'];
+
+function isBankNode(node: unknown): boolean {
+  if (typeof node !== 'object' || node === null) return false;
+  if ('value' in (node as object)) return false;
+  return BANK_FIELD_KEYS.some((k) => k in (node as object));
 }
 
 const UNIT_BY_SUFFIX: ReadonlyArray<readonly [suffix: string, unit: string]> = [

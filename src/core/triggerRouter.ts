@@ -10,16 +10,19 @@ import type { AnalyzerId } from '../analyzers/ids.js';
 import { stringify } from './logger.js';
 import type { QuestDBClient } from './questdb.js';
 
-export interface DispatchExtras {
+// cron triggers are dispatched directly via runById (a cron job names its
+// analyzer ids); only put and battery-event flow through dispatch + match.
+interface DispatchExtras {
   putPath?: string;
-  cronPattern?: string;
   batterySubkind?: BatteryEventKind;
 }
 
 // Outcome of one analyzer run. `runById` returns it so a caller (the REST fire
 // endpoint) can tell a real report apart from a no-op or a failure instead of
-// reporting blanket success.
-export type RunOutcome = 'reported' | 'no-input' | 'budget-exhausted' | 'failed';
+// reporting blanket success. `unknown` distinguishes "no analyzer with that
+// id" from `no-input` ("collectContext returned nothing"); the REST endpoint
+// pre-guards unknown ids with a 409, but in-process callers may not.
+export type RunOutcome = 'reported' | 'no-input' | 'budget-exhausted' | 'failed' | 'unknown';
 
 export class TriggerRouter {
   private lastStatus: string | null = null;
@@ -54,7 +57,7 @@ export class TriggerRouter {
   // triggers the analyzer has enabled.
   async runById(id: AnalyzerId, ctx: TriggerCtx): Promise<RunOutcome> {
     const a = this.analyzers.find((x) => x.id === id);
-    if (!a) return 'no-input';
+    if (!a) return 'unknown';
     return this.runOne(a, ctx);
   }
 
@@ -67,7 +70,7 @@ export class TriggerRouter {
       if (this.deps.signal?.aborted) return 'no-input';
       if (!this.deps.budget.canSpend()) {
         this.deps.logger.debug(`${a.id}: budget exhausted, skipping`);
-        this.setStatus('Running, budget exhausted for today');
+        this.setStatus('Running: budget exhausted for today');
         return 'budget-exhausted';
       }
       // Record the call here, not after the LLM await: the canSpend() check
@@ -104,8 +107,11 @@ export class TriggerRouter {
 
 function triggerMatches(t: TriggerSpec, kind: TriggerKind, extras: DispatchExtras): boolean {
   if (t.kind !== kind) return false;
+  // Cron is dispatched via runById (production registers one cron job per
+  // (pattern, timezone) and names its members directly); dispatch never
+  // routes cron and a call here is a misuse.
+  if (t.kind === 'cron') return false;
   if (t.kind === 'put') return t.path === extras.putPath;
-  if (t.kind === 'cron') return t.pattern === extras.cronPattern;
   if (t.kind === 'battery-event') return t.subkind === extras.batterySubkind;
   return true;
 }

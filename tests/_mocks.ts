@@ -6,11 +6,12 @@ import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime } from '../src/core/api.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
-import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
+import type { SignalKNotificationValue } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
+import { TriggerRouter } from '../src/core/triggerRouter.js';
 import { DEFAULT_OPTIONS } from '../src/types.js';
 
-export type Listener<T> = (v: T) => void;
+type Listener<T> = (v: T) => void;
 
 export interface MockBus<T> {
   push(v: T): void;
@@ -38,6 +39,7 @@ export function makeBus<T>(): MockBus<T> {
 export interface PublishedDelta {
   pluginId: string;
   delta: unknown;
+  skVersion?: unknown;
 }
 export interface RegisteredPut {
   context: string;
@@ -105,8 +107,8 @@ export function makeMockApp(dataDir: string): MockApp {
         return app.availablePaths.slice();
       },
     },
-    handleMessage(pluginId, delta) {
-      app.published.push({ pluginId, delta });
+    handleMessage(pluginId, delta, skVersion) {
+      app.published.push({ pluginId, delta, skVersion });
     },
     registerPutHandler(context, path, handler, source) {
       app.registeredPuts.push({ context, path, handler, source });
@@ -195,6 +197,7 @@ export interface MakePluginRuntimeOpts {
   startedAt?: number;
   llm?: PluginRuntime['llm'];
   budget?: PluginRuntime['budget'];
+  signal?: AbortSignal;
   logPath?: string;
   cfg?: {
     openrouter?: Partial<PluginRuntime['cfg']['openrouter']>;
@@ -218,8 +221,79 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
     apiKeySet: opts.apiKeySet ?? true,
     router: opts.router ?? null,
     logPath: opts.logPath ?? '/tmp/unused.jsonl',
+    signal: opts.signal ?? new AbortController().signal,
     startedAt: opts.startedAt ?? 0,
   };
+}
+
+// Build an AnalyzerDeps with working spy collaborators (budget, llm,
+// publisher, logger) so a test can drive a real TriggerRouter through the
+// full canSpend -> recordCall -> complete -> publish dance. Returns the deps
+// plus the individual mocks so the test can assert on call args.
+export interface RouterDepsMocks {
+  publishReport: ReturnType<typeof vi.fn>;
+  publishFailure: ReturnType<typeof vi.fn>;
+  publishOnPath: ReturnType<typeof vi.fn>;
+  canSpend: ReturnType<typeof vi.fn>;
+  recordCall: ReturnType<typeof vi.fn>;
+  complete: ReturnType<typeof vi.fn>;
+  setStatus: ReturnType<typeof vi.fn>;
+  debug: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+  getSelfPath: ReturnType<typeof vi.fn>;
+}
+
+export function makeRouterDeps(
+  overrides: { okStatus?: string; completeResult?: { text: string } } = {},
+): { deps: AnalyzerDeps; mocks: RouterDepsMocks } {
+  const mocks: RouterDepsMocks = {
+    publishReport: vi.fn().mockResolvedValue(undefined),
+    publishFailure: vi.fn().mockResolvedValue(undefined),
+    publishOnPath: vi.fn().mockResolvedValue(undefined),
+    canSpend: vi.fn().mockReturnValue(true),
+    recordCall: vi.fn().mockResolvedValue(undefined),
+    complete: vi.fn().mockResolvedValue(
+      overrides.completeResult ?? {
+        text: 'ok',
+        model: 'stub',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      },
+    ),
+    setStatus: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+    getSelfPath: vi.fn(),
+  };
+  const deps: AnalyzerDeps = {
+    app: { getSelfPath: mocks.getSelfPath as never, selfContext: MOCK_SELF_CONTEXT },
+    buffer: new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 }),
+    questdb: null as unknown as AnalyzerDeps['questdb'],
+    publisher: {
+      publishReport: mocks.publishReport,
+      publishFailure: mocks.publishFailure,
+      publishOnPath: mocks.publishOnPath,
+    } as unknown as AnalyzerDeps['publisher'],
+    budget: {
+      canSpend: mocks.canSpend,
+      recordCall: mocks.recordCall,
+    } as unknown as AnalyzerDeps['budget'],
+    llm: { complete: mocks.complete } as unknown as AnalyzerDeps['llm'],
+    logger: new Logger({ debug: mocks.debug, error: mocks.error }),
+    setStatus: mocks.setStatus,
+    okStatus: overrides.okStatus,
+  };
+  return { deps, mocks };
+}
+
+// Build a TriggerRouter wired to working spy collaborators. Common shape for
+// tests that exercise the router's dispatch/runById behavior against real
+// analyzers but mock the LLM/publish boundary.
+export function makeRouter(
+  analyzers: Analyzer[],
+  overrides: { okStatus?: string; completeResult?: { text: string } } = {},
+): { router: TriggerRouter; mocks: RouterDepsMocks } {
+  const { deps, mocks } = makeRouterDeps(overrides);
+  return { router: new TriggerRouter(analyzers, deps), mocks };
 }
 
 // Pull the first SK notification value out of a published delta. Throws on

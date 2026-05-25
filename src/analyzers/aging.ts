@@ -101,7 +101,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   private readonly systemPrompt: string;
 
   constructor(cfg: AgingCfg) {
-    this.triggers = buildTriggers(cfg.triggers);
+    this.triggers = buildTriggers(this.id, cfg.triggers);
     this.windowDays = resolveWindowDays(cfg);
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, AGING_DEFAULT_SYSTEM_PROMPT);
   }

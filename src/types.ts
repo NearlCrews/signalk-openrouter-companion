@@ -1,23 +1,21 @@
-import { pluginPutPath } from './core/paths.js';
-
 export interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
-  put: { enabled: boolean; path: string };
+  // The PUT path is a fixed convention: `plugins.openrouter-companion.<id>.run`.
+  // It is derived from the analyzer id at registration time (see
+  // `pluginPutPath` in core/paths.ts) and is not stored on the cfg shape, so
+  // a hand-edited path cannot drift from the convention and the schema does
+  // not advertise a configurable path the operator cannot actually change.
+  put: { enabled: boolean };
   events: string[];
 }
 
 export const MAINTENANCE_SUPPORTED_EVENTS = ['engine-stop'] as const;
 export type MaintenanceEventKind = (typeof MAINTENANCE_SUPPORTED_EVENTS)[number];
 
-export const HEALTH_SUPPORTED_EVENTS = [] as const;
-
-export const AGING_SUPPORTED_EVENTS = [] as const;
-
-export const DRIFT_SUPPORTED_EVENTS = [] as const;
-
-export const LIVENESS_SUPPORTED_EVENTS = [] as const;
-
-export const FORECAST_SUPPORTED_EVENTS = [] as const;
+// Shared empty-events sentinel for analyzers that have no event subscriptions.
+// One reference is bundled into dist; the prior five named copies all collapsed
+// to a single allocation here.
+export const NO_EVENTS = [] as const;
 
 export const ALERTS_SUPPORTED_EVENTS = [
   'low-soc-enter',
@@ -41,14 +39,20 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 // Forecast-analyzer severity floor: the lowest LLM-graded outlook severity
 // that raises an alarm on the forecast notification. Below the floor the
 // outlook still publishes, with state 'nominal', so it stays readable in the
-// data browser. Source-of-truth for the schema enum and the analyzer.
-export const FORECAST_SEVERITY_FLOORS = ['severe', 'moderate', 'minor'] as const;
-export type SeverityFloor = (typeof FORECAST_SEVERITY_FLOORS)[number];
+// data browser. The preset list lives in `src/severityFloors.ts` (shared
+// with the panel); these aliases are kept for backward-compat with the
+// analyzer constructor and the existing config shape.
+import {
+  DEFAULT_SEVERITY_FLOOR_VALUE,
+  SEVERITY_FLOOR_PRESETS,
+  type SeverityFloorPresetValue,
+} from './severityFloors.js';
 
-// Forecast-analyzer default severity floor: 'moderate' ("Moderate and up")
-// raises an alarm on a moderate or severe outlook. Source-of-truth for the
-// schema default and the analyzer constructor's fallback.
-export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = 'moderate';
+export const FORECAST_SEVERITY_FLOORS: ReadonlyArray<SeverityFloorPresetValue> =
+  SEVERITY_FLOOR_PRESETS.map((p) => p.value);
+export type SeverityFloor = SeverityFloorPresetValue;
+
+export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = DEFAULT_SEVERITY_FLOOR_VALUE;
 
 // Signal K notification states (the full ALARM_STATE enum). The publisher's
 // typed `state` argument and per-analyzer publish overrides both resolve to
@@ -78,6 +82,11 @@ export interface PluginOptions {
       engineStartRpmHzThreshold: number;
       engineStartSettleSeconds: number;
       minSessionSeconds: number;
+      // Configured under maintenance for historical reasons, but the effect
+      // is plugin-wide: the path list also enriches the RollingBuffer that
+      // feeds the forecast and liveness analyzers. Disabling maintenance
+      // does NOT stop those paths from being subscribed; they remain in the
+      // buffer so the other analyzers see them.
       extraWatchedPaths: string[];
       customSystemPrompt?: string;
     };
@@ -140,7 +149,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: pluginPutPath('maintenance') },
+        put: { enabled: true },
         events: [...MAINTENANCE_SUPPORTED_EVENTS],
       },
       engineStopRpmHzThreshold: 1.0,
@@ -161,16 +170,16 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
-        put: { enabled: true, path: pluginPutPath('health') },
-        events: [],
+        put: { enabled: true },
+        events: [...NO_EVENTS],
       },
     },
     aging: {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 1 * *', timezone: '' },
-        put: { enabled: true, path: pluginPutPath('aging') },
-        events: [],
+        put: { enabled: true },
+        events: [...NO_EVENTS],
       },
       shortWindowDays: AGING_DEFAULT_SHORT_DAYS,
       longWindowDays: AGING_DEFAULT_LONG_DAYS,
@@ -179,8 +188,8 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 * * 0', timezone: '' },
-        put: { enabled: true, path: pluginPutPath('drift') },
-        events: [],
+        put: { enabled: true },
+        events: [...NO_EVENTS],
       },
       baselineDays: DRIFT_DEFAULT_BASELINE_DAYS,
     },
@@ -188,7 +197,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false, path: pluginPutPath('alerts') },
+        put: { enabled: false },
         events: [...ALERTS_SUPPORTED_EVENTS],
       },
       lowSocPercent: 30,
@@ -204,8 +213,8 @@ export const DEFAULT_OPTIONS: PluginOptions = {
       enabled: true,
       triggers: {
         cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
-        put: { enabled: true, path: pluginPutPath('liveness') },
-        events: [],
+        put: { enabled: true },
+        events: [...NO_EVENTS],
       },
       stalenessThresholdSec: LIVENESS_DEFAULT_STALENESS_SEC,
     },
@@ -215,8 +224,8 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         // Every 3 hours, aligning with the classic 3-hour barometric-tendency
         // interval. User-editable in the admin panel like every analyzer.
         cron: { enabled: true, pattern: '0 */3 * * *', timezone: '' },
-        put: { enabled: true, path: pluginPutPath('forecast') },
-        events: [],
+        put: { enabled: true },
+        events: [...NO_EVENTS],
       },
       severityFloor: FORECAST_DEFAULT_SEVERITY_FLOOR,
     },
@@ -236,6 +245,12 @@ type WithPartialTriggers<T extends { triggers: AnalyzerTriggerCfg }> = Partial<
   Omit<T, 'triggers'>
 > & { triggers?: PartialTriggerCfg };
 
+// The `enabled` key on each analyzer section defaults to whatever the
+// shipped DEFAULT_OPTIONS sets (true for most, false for forecast). The
+// panel always writes the full cfg, so the saved JSON carries `enabled`
+// explicitly. Any future code path that constructs a partial overlay
+// without the `enabled` field will re-enable the analyzer; carry the flag
+// explicitly in such call sites.
 function mergeAnalyzerCfg<T extends { triggers: AnalyzerTriggerCfg }>(
   defaults: T,
   input: WithPartialTriggers<T> | undefined,
@@ -258,7 +273,12 @@ function mergeAnalyzerCfg<T extends { triggers: AnalyzerTriggerCfg }>(
 }
 
 export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): PluginOptions {
-  if (!input) return clone(DEFAULT_OPTIONS);
+  // Run validateOptions on every return path, including the no-input
+  // bootstrap. DEFAULT_OPTIONS values are valid today, so this is a no-op
+  // now; the uniform contract ('all returned cfgs are validated') protects
+  // a future maintainer who changes a default into a sentinel that would
+  // otherwise bypass the clamp.
+  if (!input) return validateOptions(clone(DEFAULT_OPTIONS));
   const inputAnalyzers = input.analyzers as
     | {
         maintenance?: WithPartialTriggers<PluginOptions['analyzers']['maintenance']>;
@@ -270,7 +290,7 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
         forecast?: WithPartialTriggers<PluginOptions['analyzers']['forecast']>;
       }
     | undefined;
-  return {
+  const merged: PluginOptions = {
     openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(input.openrouter ?? {}) },
     questdb: { ...DEFAULT_OPTIONS.questdb, ...(input.questdb ?? {}) },
     analyzers: {
@@ -287,6 +307,74 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
     },
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
   };
+  return validateOptions(merged);
+}
+
+// Clamp obviously-broken numeric values back to defaults so a hand-edited
+// JSON cfg (or a UI field cleared to '') cannot silently disable analyzers.
+// The most consequential lockout: maxCallsPerDay = 0 leaves canSpend()
+// returning false forever and pegs the status banner at "budget exhausted".
+function validateOptions(cfg: PluginOptions): PluginOptions {
+  const d = DEFAULT_OPTIONS;
+  const or = cfg.openrouter;
+  const m = cfg.analyzers.maintenance;
+  const a = cfg.analyzers.alerts;
+  cfg.openrouter = {
+    ...or,
+    maxCallsPerDay: clampMin(or.maxCallsPerDay, 1, d.openrouter.maxCallsPerDay),
+    requestTimeoutMs: clampMin(or.requestTimeoutMs, 1000, d.openrouter.requestTimeoutMs),
+  };
+  cfg.analyzers.maintenance = {
+    ...m,
+    engineStopRpmHzThreshold: finiteOr(
+      m.engineStopRpmHzThreshold,
+      d.analyzers.maintenance.engineStopRpmHzThreshold,
+    ),
+    engineStartRpmHzThreshold: finiteOr(
+      m.engineStartRpmHzThreshold,
+      d.analyzers.maintenance.engineStartRpmHzThreshold,
+    ),
+    engineStopSettleSeconds: clampMin(
+      m.engineStopSettleSeconds,
+      1,
+      d.analyzers.maintenance.engineStopSettleSeconds,
+    ),
+    engineStartSettleSeconds: clampMin(
+      m.engineStartSettleSeconds,
+      1,
+      d.analyzers.maintenance.engineStartSettleSeconds,
+    ),
+    engineSilenceStopSeconds: clampMin(
+      m.engineSilenceStopSeconds,
+      1,
+      d.analyzers.maintenance.engineSilenceStopSeconds,
+    ),
+    minSessionSeconds: clampMin(m.minSessionSeconds, 0, d.analyzers.maintenance.minSessionSeconds),
+  };
+  cfg.analyzers.alerts = {
+    ...a,
+    lowSocPercent: clampRange(a.lowSocPercent, 0, 100, d.analyzers.alerts.lowSocPercent),
+    // Strict-positive minimums on the hysteresis and threshold fields: a 0
+    // value collapses enter and exit into the same boundary, so any sensor
+    // noise spams enter/exit pairs (each pair spends an LLM call). The
+    // defaults are the sensible operating point; clamp anything weaker.
+    socExitHysteresis: clampMin(a.socExitHysteresis, 1, d.analyzers.alerts.socExitHysteresis),
+    cellImbalanceV: clampMin(a.cellImbalanceV, 0.001, d.analyzers.alerts.cellImbalanceV),
+    imbalanceSettleSec: clampMin(a.imbalanceSettleSec, 1, d.analyzers.alerts.imbalanceSettleSec),
+  };
+  return cfg;
+}
+
+function clampMin(v: unknown, min: number, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min ? v : fallback;
+}
+
+function clampRange(v: unknown, min: number, max: number, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+}
+
+function finiteOr(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
 
 function clone<T>(v: T): T {

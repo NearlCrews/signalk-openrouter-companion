@@ -1,17 +1,13 @@
 import type { BatteryEventKind } from './analyzers/Analyzer.js';
 import { CRON_PRESETS } from './cronPresets.js';
+import { SEVERITY_FLOOR_PRESETS } from './severityFloors.js';
 import {
-  AGING_SUPPORTED_EVENTS,
   ALERTS_SUPPORTED_EVENTS,
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
-  DRIFT_SUPPORTED_EVENTS,
-  FORECAST_SEVERITY_FLOORS,
-  FORECAST_SUPPORTED_EVENTS,
-  HEALTH_SUPPORTED_EVENTS,
-  LIVENESS_SUPPORTED_EVENTS,
   MAINTENANCE_SUPPORTED_EVENTS,
   type MaintenanceEventKind,
+  NO_EVENTS,
 } from './types.js';
 
 /**
@@ -194,7 +190,9 @@ function triggerSchema(opts: {
           type: 'boolean',
           title: 'Allow on-demand trigger via Signal K PUT',
           default: defaults.put.enabled,
-          description: `PUT path: ${defaults.put.path}`,
+          // PUT path is a fixed convention `plugins.openrouter-companion.<id>.run`
+          // (derived from the analyzer id at registration time, not configurable).
+          description: 'PUT to plugins.openrouter-companion.<analyzer-id>.run to fire on demand.',
         },
       },
     },
@@ -208,7 +206,8 @@ function triggerSchema(opts: {
     properties.events = {
       type: 'array',
       title: 'Event subscriptions',
-      description: 'Select which events should invoke this analyzer.',
+      description:
+        'Pick which vessel events should invoke this analyzer. Leaving all unchecked disables the event trigger; the analyzer still runs on its schedule and on a PUT if those are enabled.',
       uniqueItems: true,
       items: { type: 'string' as const, enum: supportedEvents as string[] },
       default: defaults.events,
@@ -219,7 +218,7 @@ function triggerSchema(opts: {
     type: 'object',
     title: 'When to run',
     description:
-      'Cron and on-demand PUT triggers are universal. Event triggers depend on the analyzer.',
+      'Every analyzer supports cron, PUT, and an event subscription. Defaults vary per analyzer; an event-only analyzer ships with cron disabled.',
     properties,
   };
 }
@@ -249,21 +248,27 @@ function analyzerSchemaNode(opts: {
   };
 }
 
-export type PluginSchema = {
+// PluginSchema and PluginUiSchema are file-private return-type aliases for
+// the two builders; downstream consumers (SK admin, tests) treat them as
+// opaque JSON shapes and do not import the type names.
+type PluginSchema = {
   type: 'object';
-  title: string;
   description: string;
   properties: Record<string, Record<string, unknown>>;
 };
 
-export type PluginUiSchema = Record<string, unknown>;
+type PluginUiSchema = Record<string, unknown>;
 
+// The SK admin UI wrapper sets the outer title to a single space and ignores
+// the outer `required` array, so the top-level `title` on this schema is
+// always dropped. The inner `description` IS rendered as the form preamble
+// and is the place to put user-facing copy; the inner `openrouter.required`
+// remains the load-bearing required declaration.
 function buildSchemaInner(): PluginSchema {
   return {
     type: 'object',
-    title: 'OpenRouter Companion',
     description:
-      'OpenRouter-powered analyzers for Signal K: engine maintenance reports, daily battery health summaries, battery threshold alerts, monthly battery aging trends, weekly engine performance drift, sensor-liveness monitoring, and short-term weather outlooks. Each analyzer can be independently enabled and configured below. The only required field is your OpenRouter API key.',
+      'OpenRouter-powered analyzers for Signal K: engine maintenance reports, daily battery health summaries, battery threshold alerts, monthly battery aging trends, weekly engine performance drift, sensor-liveness monitoring, and short-term weather outlooks. Each analyzer can be independently enabled and configured below. The only required field is your OpenRouter API key. Disabling any "Enable ..." or "Run on a schedule" toggle clears the gated fields below it, so save first if you want to keep a custom value.',
     properties: {
       openrouter: {
         type: 'object',
@@ -393,7 +398,7 @@ function buildSchemaInner(): PluginSchema {
             whenEnabled: {
               triggers: triggerSchema({
                 defaults: DEFAULT_OPTIONS.analyzers.health.triggers,
-                supportedEvents: HEALTH_SUPPORTED_EVENTS,
+                supportedEvents: NO_EVENTS,
               }),
             },
           }),
@@ -406,7 +411,7 @@ function buildSchemaInner(): PluginSchema {
             whenEnabled: {
               triggers: triggerSchema({
                 defaults: DEFAULT_OPTIONS.analyzers.aging.triggers,
-                supportedEvents: AGING_SUPPORTED_EVENTS,
+                supportedEvents: NO_EVENTS,
               }),
               shortWindowDays: {
                 type: 'integer',
@@ -437,7 +442,7 @@ function buildSchemaInner(): PluginSchema {
             whenEnabled: {
               triggers: triggerSchema({
                 defaults: DEFAULT_OPTIONS.analyzers.drift.triggers,
-                supportedEvents: DRIFT_SUPPORTED_EVENTS,
+                supportedEvents: NO_EVENTS,
               }),
               baselineDays: {
                 type: 'integer',
@@ -504,7 +509,7 @@ function buildSchemaInner(): PluginSchema {
             whenEnabled: {
               triggers: triggerSchema({
                 defaults: DEFAULT_OPTIONS.analyzers.liveness.triggers,
-                supportedEvents: LIVENESS_SUPPORTED_EVENTS,
+                supportedEvents: NO_EVENTS,
               }),
               stalenessThresholdSec: {
                 type: 'integer',
@@ -525,15 +530,15 @@ function buildSchemaInner(): PluginSchema {
             whenEnabled: {
               triggers: triggerSchema({
                 defaults: DEFAULT_OPTIONS.analyzers.forecast.triggers,
-                supportedEvents: FORECAST_SUPPORTED_EVENTS,
+                supportedEvents: NO_EVENTS,
               }),
               severityFloor: {
                 type: 'string',
                 title: 'Alarm severity floor',
                 description:
                   'How bad the predicted weather must be before the outlook raises an alarm. Below the floor the outlook still publishes at a normal state, so it is always readable in the Data Browser.',
-                enum: [...FORECAST_SEVERITY_FLOORS],
-                enumNames: ['Severe only', 'Moderate and up', 'Any deterioration'],
+                enum: SEVERITY_FLOOR_PRESETS.map((p) => p.value),
+                enumNames: SEVERITY_FLOOR_PRESETS.map((p) => p.label),
                 default: DEFAULT_OPTIONS.analyzers.forecast.severityFloor,
               },
             },
@@ -605,15 +610,15 @@ function buildUiSchemaInner(): PluginUiSchema {
       },
       health: {
         'ui:order': ['enabled', 'triggers'],
-        triggers: triggerUiSchema({ supportedEvents: HEALTH_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
       },
       aging: {
         'ui:order': ['enabled', 'triggers', 'shortWindowDays', 'longWindowDays'],
-        triggers: triggerUiSchema({ supportedEvents: AGING_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
       },
       drift: {
         'ui:order': ['enabled', 'triggers', 'baselineDays'],
-        triggers: triggerUiSchema({ supportedEvents: DRIFT_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
       },
       alerts: {
         'ui:order': [
@@ -628,11 +633,11 @@ function buildUiSchemaInner(): PluginUiSchema {
       },
       liveness: {
         'ui:order': ['enabled', 'triggers', 'stalenessThresholdSec'],
-        triggers: triggerUiSchema({ supportedEvents: LIVENESS_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
       },
       forecast: {
         'ui:order': ['enabled', 'triggers', 'severityFloor'],
-        triggers: triggerUiSchema({ supportedEvents: FORECAST_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
       },
     },
   };

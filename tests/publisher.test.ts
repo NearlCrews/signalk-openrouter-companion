@@ -47,10 +47,11 @@ describe('ReportPublisher', () => {
     expect(first.pluginId).toBe('orc');
     const v = firstNotificationValue(first.delta);
     expect(v.path).toBe('notifications.openrouter-companion.maintenance.report');
-    // Reports are informational ('nominal') so `signalk-nmea2000-emitter-cannon`
-    // does not emit a PGN 126983 alert; method is visual-only since nominal isn't audible.
+    // Reports are informational ('nominal'), which per SK 1.8.2 is the
+    // no-action state: method is empty so strict consumers do not pop a
+    // visual notification for a routine cron-fired report.
     expect(v.state).toBe('nominal');
-    expect(v.method).toEqual(['visual']);
+    expect(v.method).toEqual([]);
     expect(v.message).toBe('the report text');
 
     const line = (await readFile(logPath, 'utf-8')).trim();
@@ -100,7 +101,39 @@ describe('ReportPublisher', () => {
     // alert state -> audible so `signalk-nmea2000-emitter-cannon` emits PGN 126983 with Active alertState.
     expect(v.method).toEqual(['visual', 'sound']);
     expect(v.message).toBe('soc dropped');
+    // Dual-emit: the spec-clean `data.alertId` AND the legacy top-level
+    // `alertId` both carry the id during the one-release transition. The
+    // sibling emitter-cannon will migrate to `data.alertId`; locking both
+    // here prevents a refactor from silently dropping the data slot before
+    // the sibling has migrated.
     expect(v.alertId).toBe(0xabcd);
+    expect((v as { data?: { alertId?: number } }).data?.alertId).toBe(0xabcd);
+  });
+
+  it('publishOnPath writes the full text to the JSONL log when logText is supplied', async () => {
+    const path = batteryAlertPath('house', 'lowSoc');
+    const truncated = 'House SoC 25%';
+    const full =
+      'House bank dropped to 25% state of charge. The discharge curve over the last 90 minutes is steeper than typical, suggesting either a sudden load step or a faulty cell beginning to lose capacity.';
+    await publisher.publishOnPath(
+      truncated,
+      {
+        analyzerId: 'alerts',
+        ctx: {
+          kind: 'battery-event',
+          firedAt: new Date('2026-05-10T10:00:00Z'),
+          bankId: 'house',
+          batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+        },
+      },
+      { path, state: 'alert', logText: full },
+    );
+    // The notification value carries the chartplotter-safe truncated headline.
+    const v = firstNotificationValue(app.published[0]?.delta);
+    expect(v.message).toBe(truncated);
+    // The JSONL log carries the full LLM reasoning, not the truncated headline.
+    const entry = JSON.parse((await readFile(logPath, 'utf-8')).trim());
+    expect(entry.report).toBe(full);
   });
 
   it('still publishes and stays resolved when the JSONL log append fails', async () => {

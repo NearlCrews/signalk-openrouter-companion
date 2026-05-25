@@ -22,7 +22,9 @@ import { ANALYZER_TITLES } from './ids.js';
 // PGN 126985 (Alert Text Description) is the field chartplotters display.
 // Real-world caps observed across MFDs (Raymarine Axiom ~60, B&G Zeus ~70,
 // Furuno TZTouch ~80, Garmin ~72), so 64 chars is the safe headline budget.
-// Anything longer survives in the Signal K notification and the JSONL log.
+// The chartplotter alert and the SK notification value both carry this
+// truncated headline; the JSONL log keeps the full LLM text (passed
+// separately as `logText` to publishOnPath).
 const MAX_ALERT_MESSAGE_CHARS = 64;
 
 function truncateForN2K(message: string): string {
@@ -81,7 +83,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   private readonly systemPrompt: string;
 
   constructor(cfg: AlertCfg) {
-    this.triggers = buildTriggers(cfg.triggers, (sub) =>
+    this.triggers = buildTriggers(this.id, cfg.triggers, (sub) =>
       isBatteryEventKind(sub) ? { kind: 'battery-event', subkind: sub } : null,
     );
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, ALERTS_DEFAULT_SYSTEM_PROMPT);
@@ -128,11 +130,13 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     }
     const { kind, state } = ALERT_ROUTING[subkind];
     const path = batteryAlertPath(bankId, kind);
-    const message = truncateForN2K(text);
+    // Truncated headline for the chartplotter alert (PGN 126985); full LLM
+    // text into the JSONL log so an operator reviewing history reads the
+    // reasoning behind the alert, not just the headline.
     await deps.publisher.publishOnPath(
-      message,
+      truncateForN2K(text),
       { analyzerId: this.id, ctx },
-      { path, state, alertId: alertIdFor(path) },
+      { path, state, alertId: alertIdFor(path), logText: text },
     );
   }
 }

@@ -47,13 +47,17 @@ export interface PluginRuntime {
   apiKeySet: boolean;
   router: TriggerRouter | null;
   logPath: string;
+  // Lifecycle abort signal, fired by stop(). Direct LLM/QuestDB calls from
+  // the REST surface (admin Test buttons) wire this so stop() aborts the
+  // in-flight request rather than waiting out the full request timeout.
+  signal: AbortSignal;
   // Epoch ms when this runtime was built. SK rebuilds the runtime on every
   // config save, so a changed value tells the config panel the restart it
   // triggered has completed.
   startedAt: number;
 }
 
-export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
+const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
   maintenance: MAINTENANCE_DEFAULT_SYSTEM_PROMPT,
   health: HEALTH_DEFAULT_SYSTEM_PROMPT,
   aging: AGING_DEFAULT_SYSTEM_PROMPT,
@@ -66,7 +70,7 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
 const REPORTS_DEFAULT_LIMIT = 10;
 const REPORTS_MAX_LIMIT = 100;
 
-export interface StatusResponse {
+interface StatusResponse {
   openrouter: {
     apiKeySet: boolean;
     model: string;
@@ -201,7 +205,10 @@ function requireRuntime(
 ): PluginRuntime | null {
   const rt = getRuntime();
   if (!rt) {
-    res.status(503).json({ error: 'plugin not started' });
+    // Consistent { ok, error } envelope across every route's failure paths
+    // so the panel's fetchJson wrapper sees the same shape regardless of
+    // which guard tripped.
+    res.status(503).json({ ok: false, error: 'plugin not started' });
     return null;
   }
   return rt;
@@ -210,7 +217,9 @@ function requireRuntime(
 function requireAnalyzerId(req: RouteRequest, res: RouteResponse): AnalyzerId | null {
   const id = req.params?.id;
   if (!isAnalyzerId(id)) {
-    res.status(404).json({ error: 'unknown analyzer' });
+    // Same { ok, error } envelope as requireRuntime so a single panel
+    // branch handles every failure path uniformly.
+    res.status(404).json({ ok: false, error: 'unknown analyzer' });
     return null;
   }
   return id;
@@ -234,9 +243,16 @@ export function registerApiRoutes(
       return;
     }
     try {
+      // The lifecycle signal aborts the request if stop() runs (admin
+      // disables or saves config); without it, an in-flight ping holds a
+      // socket open for the full requestTimeoutMs. The Test button is
+      // operator-driven and explicitly does NOT consume the daily budget:
+      // an admin debugging connectivity should not run themselves out of
+      // analyzer calls.
       const result = await rt.llm.complete({
         system: 'Reply with the single word OK.',
         user: 'ping',
+        abortSignal: rt.signal,
       });
       res.json({
         ok: true,
@@ -284,9 +300,15 @@ export function registerApiRoutes(
     const id = requireAnalyzerId(req, res);
     if (!id) return;
     const rt = getRuntime();
+    // Deliberately does NOT go through requireRuntime: the default prompt
+    // is a compile-time constant, so the endpoint can serve it before the
+    // plugin's runtime is built. The panel's promptValueFor reads from
+    // its own `cfg` first (which the SK admin populates from the saved
+    // configuration), so a transient `current: null` here does not
+    // overwrite a real saved override the panel already has.
     const defaultPrompt = DEFAULT_SYSTEM_PROMPTS[id];
     const current = rt?.cfg.analyzers[id]?.customSystemPrompt ?? null;
-    res.json({ analyzer: id, default: defaultPrompt, current });
+    res.json({ analyzer: id, default: defaultPrompt, current, runtimeReady: rt !== null });
   });
 
   router.get('/api/openrouter/models', async (_req, res) => {
@@ -297,7 +319,7 @@ export function registerApiRoutes(
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      res.status(502).json({ error: message });
+      res.status(502).json({ ok: false, error: message });
     }
   });
 
@@ -309,13 +331,32 @@ export function registerApiRoutes(
       res.status(400).json({ ok: false, error: 'no URL provided and none in saved config' });
       return;
     }
+    // Validate the URL before constructing the client: the admin gate keeps
+    // unauthenticated callers out, but even an admin should not be able to
+    // probe an arbitrary scheme (file://, gopher://, javascript:) from the
+    // SK host. Restrict to http/https, the only schemes QuestDB serves.
+    let parsed: URL;
     try {
-      const client = new QuestDBClient({ url });
-      const ok = await client.probe();
-      res.json({ ok, url });
+      parsed = new URL(url);
+    } catch {
+      res.status(400).json({ ok: false, error: 'invalid URL' });
+      return;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
+      return;
+    }
+    // Use the normalized URL the parser produced (with a stripped trailing
+    // slash) so probe() builds `${url}/exec?query=...` without a double
+    // slash on inputs like 'http://qdb:9000/'.
+    const normalized = parsed.href.replace(/\/$/, '');
+    try {
+      const client = new QuestDBClient({ url: normalized });
+      const ok = await client.probe(rt?.signal);
+      res.json({ ok, url: normalized });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      res.status(502).json({ ok: false, url, error: message });
+      res.status(502).json({ ok: false, url: normalized, error: message });
     }
   });
 
@@ -335,7 +376,7 @@ export function registerApiRoutes(
       res.json({ analyzer: id, reports });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
+      res.status(500).json({ ok: false, error: message });
     }
   });
 }

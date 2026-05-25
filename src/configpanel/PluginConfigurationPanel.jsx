@@ -14,11 +14,15 @@ const NOTICE_DONE = 'done';
 
 // Maps the /fire endpoint's run outcome to the message shown beside the button,
 // so a no-op fire reads as "Nothing to report" rather than a misleading success.
+// `unknown` covers the runById path where the analyzer id is not registered;
+// the REST /fire endpoint pre-guards with 409, but the panel covers it too so
+// any future code path that bypasses the pre-guard reads correctly here.
 const FIRE_OUTCOME_TEXT = {
   reported: 'Report generated',
   'no-input': 'Nothing to report',
   'budget-exhausted': 'Daily call budget exhausted',
   failed: 'Analysis failed (check notifications)',
+  unknown: 'Analyzer not registered',
 };
 
 // Inject the scoped focus/hover stylesheet once. It carries the interactive
@@ -42,11 +46,29 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   const [cfg, setCfg] = useState(() => structuredClone(configuration ?? {}));
   const [pristine, setPristine] = useState(() => structuredClone(configuration ?? {}));
   const [savedNotice, setSavedNotice] = useState(null);
+  // Latches between Save click and the next host configuration push so a
+  // rapid double-click cannot fire two saves before the host resyncs.
+  const [saving, setSaving] = useState(false);
   const [models, setModels] = useState([]);
   const [modelsState, setModelsState] = useState('idle');
   const [qdbTest, setQdbTest] = useState(null);
   const [qdbTesting, setQdbTesting] = useState(false);
   const [analyzerUi, setAnalyzerUi] = useState({});
+  // Mirror of analyzerUi for reads from event handlers without going through
+  // the state updater. The updater functions must be pure (StrictMode and
+  // concurrent rendering may call them more than once), so any side effect
+  // (loadReports, loadPrompt, setTimeout) must run outside them. A ref kept
+  // in sync via useEffect gives the handlers the latest committed state
+  // without re-introducing the stale-closure bug the functional setters
+  // were originally added to fix.
+  const analyzerUiRef = useRef(analyzerUi);
+  useEffect(() => {
+    analyzerUiRef.current = analyzerUi;
+  }, [analyzerUi]);
+  // In-flight guard for the two per-analyzer GETs. React 19 StrictMode calls
+  // event handlers' state updaters twice in dev; dedup-by-key here prevents
+  // double-firing the network request even when the handler runs twice.
+  const inFlightRef = useRef(new Set());
   // Every section starts collapsed so the panel opens compact, showing just
   // the live status and the section headers.
   const [openrouterOpen, setOpenrouterOpen] = useState(false);
@@ -69,6 +91,9 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     lastSyncedRef.current = next;
     setCfg(structuredClone(next));
     setPristine(structuredClone(next));
+    // Host pushed a fresh config after a save round-trip: clear the saving
+    // latch so the button re-enables for the next edit cycle.
+    setSaving(false);
   }, [configuration]);
 
   const dirty = !jsonEqual(cfg, pristine);
@@ -148,7 +173,22 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   }, [savedNotice]);
 
   const onSave = () => {
-    save(cfg);
+    if (saving) return;
+    setSaving(true);
+    try {
+      save(cfg);
+    } catch (err) {
+      // save() rejected synchronously (transient client error, validation
+      // reject from the host). Clear the latch so the user can retry;
+      // surface the error in the notice slot.
+      setSaving(false);
+      setSavedNotice({
+        at: new Date().toLocaleTimeString(),
+        phase: NOTICE_DONE,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
     // Arm the restart watcher only when a startedAt is known. With status null
     // (plugin not yet running) prior would be undefined and the first poll
     // with any startedAt would falsely flip "restarting" to "restarted"; leave
@@ -156,6 +196,10 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     restartWatchRef.current =
       typeof status?.startedAt === 'number' ? { prior: status.startedAt } : null;
     setSavedNotice({ at: new Date().toLocaleTimeString(), phase: NOTICE_RESTARTING });
+    // Fallback: if the host never pushes a fresh configuration prop (the only
+    // other path that clears `saving`), drop the latch after a generous
+    // timeout so the Save button is not pinned forever on a silent failure.
+    setTimeout(() => setSaving((s) => (s ? false : s)), 30_000);
   };
 
   const runTest = async () => {
@@ -206,21 +250,28 @@ export default function PluginConfigurationPanel({ configuration, save }) {
   };
 
   const loadReports = async (id) => {
-    patchUi(id, { reportsLoading: true });
-    const r = await fetchJson(`/analyzers/${id}/reports?limit=${REPORT_LIMIT}`);
-    if (r.ok) {
-      patchUi(id, {
-        reports: r.body?.reports || [],
-        reportsLoading: false,
-        reportsError: null,
-      });
-    } else {
-      // Keep any previously loaded reports rather than clobbering them with an
-      // empty list, which would render a false "No reports yet".
-      patchUi(id, {
-        reportsLoading: false,
-        reportsError: r.body?.error || r.error || `HTTP ${r.status}`,
-      });
+    const key = `reports:${id}`;
+    if (inFlightRef.current.has(key)) return;
+    inFlightRef.current.add(key);
+    try {
+      patchUi(id, { reportsLoading: true });
+      const r = await fetchJson(`/analyzers/${id}/reports?limit=${REPORT_LIMIT}`);
+      if (r.ok) {
+        patchUi(id, {
+          reports: r.body?.reports || [],
+          reportsLoading: false,
+          reportsError: null,
+        });
+      } else {
+        // Keep any previously loaded reports rather than clobbering them with
+        // an empty list, which would render a false "No reports yet".
+        patchUi(id, {
+          reportsLoading: false,
+          reportsError: r.body?.error || r.error || `HTTP ${r.status}`,
+        });
+      }
+    } finally {
+      inFlightRef.current.delete(key);
     }
   };
 
@@ -230,52 +281,79 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     patchUi(id, {
       fire: r.ok
         ? {
-            ok: r.body?.outcome !== 'failed',
+            // 'failed' and 'unknown' both render in the danger color; everything
+            // else (reported, no-input, budget-exhausted) reads as a normal
+            // success or a benign no-op.
+            ok: r.body?.outcome !== 'failed' && r.body?.outcome !== 'unknown',
             text: FIRE_OUTCOME_TEXT[r.body?.outcome] ?? 'Dispatched',
           }
         : { ok: false, text: r.body?.error || r.error || `HTTP ${r.status}` },
     });
     // Refresh the open drawer so the new report shows up after the LLM
     // returns. 800 ms is a heuristic; a real boat round-trip is 1-3 s. Read
-    // the live drawer state via a functional updater: the multi-second fire
-    // means the closed-over analyzerUi is stale by the time it resolves.
-    setAnalyzerUi((current) => {
-      if (current[id]?.reportsOpen) setTimeout(() => loadReports(id), 800);
-      return current;
-    });
+    // the live drawer state via the ref: the multi-second fire means the
+    // closed-over analyzerUi is stale by the time it resolves.
+    if (analyzerUiRef.current[id]?.reportsOpen) {
+      setTimeout(() => loadReports(id), 800);
+    }
   };
 
-  const toggleExpand = (id) => patchUi(id, { expanded: !analyzerUi[id]?.expanded });
+  // Read live state via the ref to avoid the stale-closure bug a rapid
+  // double-click would hit on `analyzerUi`, and use a functional state
+  // updater for the mutation. Side effects (loadReports, loadPrompt) MUST
+  // stay outside the updater: React 19 may invoke the updater more than once
+  // (StrictMode in dev, concurrent rendering in production), and the
+  // inFlightRef guard in load* is the dedup of last resort.
+  const toggleExpand = (id) => {
+    setAnalyzerUi((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] ?? {}), expanded: !prev[id]?.expanded },
+    }));
+  };
 
   const toggleReports = (id) => {
-    const next = !analyzerUi[id]?.reportsOpen;
-    patchUi(id, { reportsOpen: next });
-    if (next && !analyzerUi[id]?.reports) loadReports(id);
+    const next = !analyzerUiRef.current[id]?.reportsOpen;
+    setAnalyzerUi((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] ?? {}), reportsOpen: next },
+    }));
+    if (next && !analyzerUiRef.current[id]?.reports) loadReports(id);
   };
 
   const loadPrompt = async (id) => {
-    patchUi(id, { promptLoaded: false, promptError: null });
-    const r = await fetchJson(`/analyzers/${id}/prompt`);
-    if (r.ok && r.body) {
-      patchUi(id, {
-        promptDefault: r.body.default,
-        promptCurrent: r.body.current,
-        promptLoaded: true,
-        promptError: null,
-      });
-    } else {
-      patchUi(id, {
-        promptError: r.body?.error || r.error || `HTTP ${r.status}`,
-        promptLoaded: true,
-      });
+    const key = `prompt:${id}`;
+    if (inFlightRef.current.has(key)) return;
+    inFlightRef.current.add(key);
+    try {
+      patchUi(id, { promptLoaded: false, promptError: null });
+      const r = await fetchJson(`/analyzers/${id}/prompt`);
+      if (r.ok && r.body) {
+        patchUi(id, {
+          promptDefault: r.body.default,
+          promptCurrent: r.body.current,
+          promptLoaded: true,
+          promptError: null,
+        });
+      } else {
+        patchUi(id, {
+          promptError: r.body?.error || r.error || `HTTP ${r.status}`,
+          promptLoaded: true,
+        });
+      }
+    } finally {
+      inFlightRef.current.delete(key);
     }
   };
 
   const togglePrompt = (id) => {
-    const next = !analyzerUi[id]?.promptOpen;
-    patchUi(id, { promptOpen: next });
+    const current = analyzerUiRef.current[id];
+    const next = !current?.promptOpen;
+    setAnalyzerUi((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] ?? {}), promptOpen: next },
+    }));
     // Load on first open, and retry on reopen if the previous load failed.
-    if (next && (!analyzerUi[id]?.promptLoaded || analyzerUi[id]?.promptError)) loadPrompt(id);
+    if (next && (!current?.promptLoaded || current?.promptError)) loadPrompt(id);
   };
 
   // Single source of truth for the prompt edit buffer: the cfg object. The
@@ -379,11 +457,15 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         <button
           type="button"
           className={btnClass(false)}
-          style={btn(S.btnSave, !dirty && S.btnSaveIdle, !dirty && S.btnDisabled)}
+          style={btn(
+            S.btnSave,
+            (!dirty || saving) && S.btnSaveIdle,
+            (!dirty || saving) && S.btnDisabled,
+          )}
           onClick={onSave}
-          disabled={!dirty}
+          disabled={!dirty || saving}
         >
-          {dirty ? 'Save configuration' : 'Saved'}
+          {saving ? 'Saving...' : dirty ? 'Save configuration' : 'Saved'}
         </button>
         {dirty && <span style={S.saveHint}>Unsaved changes</span>}
         {savedNotice && (

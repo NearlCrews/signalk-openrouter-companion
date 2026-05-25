@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
-export interface BudgetOptions {
+interface BudgetOptions {
   maxPerDay: number;
   statePath: string;
   now?: () => Date;

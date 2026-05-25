@@ -9,13 +9,20 @@ export type BatteryEvent =
   | { kind: 'cell-imbalance-enter'; bankId: string; ts: number; imbalanceV: number }
   | { kind: 'cell-imbalance-exit'; bankId: string; ts: number; imbalanceV: number };
 
-export interface BatteryMonitorOptions {
+interface BatteryMonitorOptions {
   lowSocPercent: number;
   socExitHysteresis: number;
   cellImbalanceV: number;
   imbalanceSettleSec: number;
   sourceWindowMs: number;
 }
+
+// Cell-imbalance exit re-arms only when the imbalance drops below this
+// fraction of the alert threshold. Without hysteresis a bank oscillating
+// around the threshold (a heavy load step, an LFP pack at the absorption
+// knee) fires enter/exit pairs every settle window, each pair burning two
+// LLM calls. 0.8 matches the same shape socExitHysteresis uses.
+const CELL_IMBALANCE_EXIT_FRACTION = 0.8;
 
 interface SocReading {
   soc: number;
@@ -102,12 +109,19 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
       if (r.ts < cutoff) b.recentCells.delete(idx);
     }
     const imbalance = this.computeImbalance(b);
-    const overThreshold = imbalance > this.opts.cellImbalanceV;
-    if (overThreshold) {
+    const overEnter = imbalance > this.opts.cellImbalanceV;
+    const overExit = imbalance > this.opts.cellImbalanceV * CELL_IMBALANCE_EXIT_FRACTION;
+    if (overEnter) {
       if (b.imbalanceSince === null) b.imbalanceSince = ts;
     } else {
+      // Below the enter threshold: clear the entry settle clock so the next
+      // tick does not satisfy `elapsed >= settle` from a stale anchor that
+      // covered a dip. Exit only fires once we have also cleared the 80%
+      // exit floor (hysteresis); a sample in the in-band [exit, enter] zone
+      // holds the alert state but resets the entry timer, so a fresh
+      // continuous over-enter stretch is required before the next enter.
       b.imbalanceSince = null;
-      if (b.imbalanceHigh) {
+      if (!overExit && b.imbalanceHigh) {
         b.imbalanceHigh = false;
         this.emit({ kind: 'cell-imbalance-exit', bankId, ts, imbalanceV: imbalance });
       }

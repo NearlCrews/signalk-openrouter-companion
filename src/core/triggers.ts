@@ -1,10 +1,16 @@
 import type { TriggerCtx, TriggerSpec } from '../analyzers/Analyzer.js';
+import type { AnalyzerId } from '../analyzers/ids.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
+import { pluginPutPath } from './paths.js';
 
 // Every analyzer wires the same cron + put parsing from its triggers cfg, then
 // optionally maps each event subkind string to an analyzer-specific TriggerSpec.
 // Centralized here so adding an analyzer can't drift from the canonical shape.
+// The PUT path is derived from the analyzer id (the convention is fixed at
+// `plugins.openrouter-companion.<id>.run`), so the analyzer's TriggerSpec[]
+// and the PUT handler registered in index.ts share one definition of the path.
 export function buildTriggers(
+  analyzerId: AnalyzerId,
   cfg: AnalyzerTriggerCfg,
   eventMapper?: (sub: string) => TriggerSpec | null,
 ): TriggerSpec[] {
@@ -12,8 +18,8 @@ export function buildTriggers(
   if (cfg.cron.enabled && cfg.cron.pattern) {
     out.push({ kind: 'cron', pattern: cfg.cron.pattern });
   }
-  if (cfg.put.enabled && cfg.put.path) {
-    out.push({ kind: 'put', path: cfg.put.path });
+  if (cfg.put.enabled) {
+    out.push({ kind: 'put', path: pluginPutPath(analyzerId) });
   }
   if (eventMapper) {
     for (const sub of cfg.events) {

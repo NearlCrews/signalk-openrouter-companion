@@ -1,18 +1,18 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
+import type { Analyzer } from '../src/analyzers/Analyzer.js';
 import type { AnalyzerId } from '../src/analyzers/ids.js';
 import type { PluginRuntime, RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
 import { _resetOpenRouterModelsCache, registerApiRoutes } from '../src/core/api.js';
 import { OpenRouterError } from '../src/core/openrouter.js';
-import { TriggerRouter } from '../src/core/triggerRouter.js';
 import createPlugin from '../src/index.js';
 import {
   cleanupTmpDir,
   type MockApp,
   makeMockApp,
   makePluginRuntime,
+  makeRouter,
   makeTmpDir,
 } from './_mocks.js';
 
@@ -109,7 +109,7 @@ describe('plugin REST API', () => {
       plugin.registerWithRouter(router);
       const r = await call(routes, 'get', '/api/status');
       expect(r.status).toBe(503);
-      expect(r.body).toEqual({ error: 'plugin not started' });
+      expect(r.body).toEqual({ ok: false, error: 'plugin not started' });
     });
 
     it('returns 503 from /api/status when started without an API key', async () => {
@@ -137,7 +137,7 @@ describe('plugin REST API', () => {
       const { router, routes } = makeRecordingRouter();
       plugin.registerWithRouter(router);
       plugin.start({ openrouter: { apiKey: 'sk-test' } } as never, () => {});
-      await plugin.whenReady();
+      await plugin._whenReady();
 
       const r = await call(routes, 'get', '/api/status');
       expect(r.status).toBe(200);
@@ -303,12 +303,6 @@ describe('plugin REST API', () => {
       // It previously dispatched a synthetic put path that matched no
       // analyzer's trigger, so nothing ran and no LLM call was recorded.
       const collectContext = vi.fn(async () => ({ ok: true }));
-      const recordCall = vi.fn(async () => {});
-      const complete = vi.fn(async () => ({
-        text: 'report',
-        model: 'm',
-        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-      }));
       const analyzer = {
         id: 'health',
         title: 'health',
@@ -317,18 +311,13 @@ describe('plugin REST API', () => {
         buildPrompt: () => ({ system: 's', user: 'u' }),
         publishOutput: vi.fn(async () => {}),
       } as unknown as Analyzer;
-      const deps = {
-        buffer: {},
-        questdb: null,
-        publisher: { publishReport: vi.fn(async () => {}), publishFailure: vi.fn(async () => {}) },
-        budget: { canSpend: () => true, recordCall },
-        llm: { complete },
-        logger: { debug: vi.fn(), error: vi.fn() },
-        app: { getSelfPath: () => undefined },
-      } as unknown as AnalyzerDeps;
+      // makeRouter wires up working spy collaborators (canSpend, recordCall,
+      // complete, publish) so the full router dance runs against fakes; see
+      // makeRouterDeps in _mocks.ts.
+      const { router: triggerRouter, mocks } = makeRouter([analyzer]);
       const rt = makePluginRuntime({
         analyzers: [analyzer],
-        router: new TriggerRouter([analyzer], deps),
+        router: triggerRouter,
       });
       const { router, routes } = makeRecordingRouter();
       registerApiRoutes(router, () => rt);
@@ -337,8 +326,8 @@ describe('plugin REST API', () => {
       });
       expect(r.status).toBe(200);
       expect(collectContext).toHaveBeenCalledOnce();
-      expect(complete).toHaveBeenCalledOnce();
-      expect(recordCall).toHaveBeenCalledOnce();
+      expect(mocks.complete).toHaveBeenCalledOnce();
+      expect(mocks.recordCall).toHaveBeenCalledOnce();
     });
   });
 

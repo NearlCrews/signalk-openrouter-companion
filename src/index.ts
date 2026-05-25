@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { SKVersion } from '@signalk/server-api';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
 import { ANALYZER_FACTORIES } from './analyzers/registry.js';
@@ -20,7 +21,12 @@ import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { HOUR_MS } from './core/format.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
-import { enginePaths, WEATHER_CANONICAL_PATHS, WEATHER_EXTENSION_PATHS } from './core/paths.js';
+import {
+  enginePaths,
+  pluginPutPath,
+  WEATHER_CANONICAL_PATHS,
+  WEATHER_EXTENSION_PATHS,
+} from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
@@ -39,6 +45,11 @@ const MONITOR_TICK_MS = 5000;
 const WATCHDOG_TICK_MS = 5000;
 const WATCHDOG_SEC = 30;
 const RESCAN_INTERVAL_MS = 60_000;
+// How far a delta's timestamp may lead wall-clock before it gets clamped.
+// Sensors with a mis-set RTC commonly drift hours; anything past this is
+// treated as a clock fault rather than a legitimate sample, so it cannot
+// shift the rolling-buffer eviction cutoff or the engine watchdog math.
+const CLOCK_SKEW_GRACE_MS = 60 * 60 * 1000;
 // On restart, a persisted engine session whose last delta is older than this
 // is discarded rather than resumed (the engine stopped during the downtime).
 const ENGINE_STATE_MAX_RESUME_SEC = 3600;
@@ -51,7 +62,9 @@ interface ServerApiLike {
     getSelfBus(path: string): { onValue(cb: (v: unknown) => void): () => void };
     getAvailablePaths(): string[];
   };
-  handleMessage(pluginId: string, delta: unknown): void;
+  // Third arg matches the real SK ServerAPI signature so a v2-shaped delta
+  // can be routed correctly; the publisher passes SKVersion.v1 explicitly.
+  handleMessage(pluginId: string, delta: unknown, skVersion?: SKVersion): void;
   registerPutHandler(context: string, path: string, handler: unknown, source?: string): void;
   setPluginStatus(msg: string): void;
   setPluginError(msg: string): void;
@@ -60,6 +73,15 @@ interface ServerApiLike {
   getDataDirPath(): string;
   getSelfPath(path: string): unknown;
   selfContext?: string;
+  // securityStrategy is provided by SK but not in the typed ServerAPI surface
+  // (the typed surface is the long-term-public subset; security middleware
+  // wiring is server-internal). Optional so test harnesses without auth can
+  // still satisfy the interface; runtime checks at the call site.
+  securityStrategy?: {
+    addAdminMiddleware(path: string): void;
+    addAdminWriteMiddleware(path: string): void;
+    addWriteMiddleware(path: string): void;
+  };
 }
 
 export default function createPlugin(app: ServerApiLike): {
@@ -72,7 +94,10 @@ export default function createPlugin(app: ServerApiLike): {
   start: (settings: Partial<PluginOptions>, restart: () => void) => void;
   stop: () => Promise<void>;
   registerWithRouter: (router: RouterLike) => void;
-  whenReady: () => Promise<void>;
+  // Prefixed underscore: not part of the SK Plugin contract. Tests and
+  // in-process consumers can await the deferred router init that completes
+  // after start() returns synchronously.
+  _whenReady: () => Promise<void>;
 } {
   const logger = new Logger(app);
   const unsubs: Array<() => void> = [];
@@ -133,13 +158,13 @@ export default function createPlugin(app: ServerApiLike): {
       // readyPromise, even after a later start() has replaced it.
       let signalReady: () => void = () => {};
       try {
-        app.setPluginStatus('Starting');
+        app.setPluginStatus('Starting...');
         readyPromise = new Promise<void>((resolve) => {
           signalReady = resolve;
         });
         const cfg = mergeWithDefaults(rawSettings);
         if (!cfg.openrouter.apiKey) {
-          app.setPluginStatus('Awaiting API key configuration');
+          app.setPluginStatus('No OpenRouter API key configured. Set one in plugin settings.');
           signalReady();
           return;
         }
@@ -287,6 +312,7 @@ export default function createPlugin(app: ServerApiLike): {
               apiKeySet: true,
               router,
               logPath,
+              signal: lifecycle.signal,
               startedAt: Date.now(),
             };
             activeRouter = router;
@@ -424,12 +450,25 @@ export default function createPlugin(app: ServerApiLike): {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
             // Date.parse returns NaN for a malformed timestamp; a NaN ts would
             // silently break buffer eviction and detector session arithmetic.
-            // Fall back to now() so a bad timestamp degrades to a fresh sample.
+            // A future-stamped delta (mis-set sensor RTC, backlog replay) would
+            // evict the entire RollingBuffer in one record() and freeze the
+            // engine watchdog forever (silentFor goes negative, never trips
+            // silenceStopMs). A far-past delta (epoch 0 from a sensor with no
+            // RTC, or Unix seconds parsed as ms-since-1970) is just as
+            // dangerous on the other side: silentFor becomes years, and the
+            // next tick ends a phantom multi-decade session. Tolerate small
+            // clock skew either way; beyond the grace, fall back to wall-clock.
+            const wall = Date.now();
             const parsed = d.timestamp ? Date.parse(d.timestamp) : Number.NaN;
-            const ts = Number.isFinite(parsed) ? parsed : Date.now();
+            const ts =
+              Number.isFinite(parsed) &&
+              parsed <= wall + CLOCK_SKEW_GRACE_MS &&
+              parsed >= wall - CLOCK_SKEW_GRACE_MS
+                ? parsed
+                : wall;
             sink(d.value, ts, d.$source ?? 'unknown');
           });
-          if (unsub) unsubs.push(unsub);
+          if (typeof unsub === 'function') unsubs.push(unsub);
         };
 
         const subscribeEnginePath = (engineId: string, path: string): void => {
@@ -484,8 +523,8 @@ export default function createPlugin(app: ServerApiLike): {
           }
         }
 
-        for (const section of Object.values(cfg.analyzers)) {
-          registerAnalyzerPut(app, section, () => activeRouter, PLUGIN_ID);
+        for (const id of ANALYZER_IDS) {
+          registerAnalyzerPut(app, id, cfg.analyzers[id], () => activeRouter, PLUGIN_ID);
         }
 
         intervalHandles.push(
@@ -550,7 +589,7 @@ export default function createPlugin(app: ServerApiLike): {
         if (analyzers.length === 0) {
           app.setPluginStatus('No analyzers enabled. Enable at least one in plugin settings.');
         } else if (engineIds.size === 0 && bankIds.size === 0) {
-          app.setPluginStatus('Running, no engine or battery data yet (re-scanning every 60s)');
+          app.setPluginStatus('Running: no engine or battery data yet, re-scanning every 60s');
         } else {
           app.setPluginStatus(runningStatus(analyzers.length));
         }
@@ -570,14 +609,37 @@ export default function createPlugin(app: ServerApiLike): {
     },
 
     registerWithRouter: (router: RouterLike) => {
+      // Gate every route under the plugin's API prefix to admin users.
+      // Three of the seven routes spend OpenRouter budget, fire LLM calls,
+      // or probe arbitrary URLs from the SK host; the others leak operator
+      // configuration and report history. addAdminMiddleware is the
+      // narrowest gate that closes the unauthenticated path; on a server
+      // with security disabled (dummysecurity) it is still attached and
+      // a no-op so dev setups are unaffected.
+      const prefix = `/plugins/${PLUGIN_ID}/api`;
+      if (app.securityStrategy?.addAdminMiddleware) {
+        app.securityStrategy.addAdminMiddleware(prefix);
+      } else {
+        // Fail loud: the headline security fix advertises that all routes
+        // are gated. If securityStrategy is missing the gate is silently
+        // skipped, leaving paid-LLM and SSRF endpoints exposed; the only
+        // way an operator learns is by checking the admin status banner.
+        app.setPluginError(
+          'securityStrategy not available; REST routes are unauthenticated. Upgrade signalk-server or report this deployment shape.',
+        );
+        logger.error(
+          'app.securityStrategy missing in registerWithRouter; admin middleware NOT applied',
+        );
+      }
       registerApiRoutes(router, () => runtime);
     },
 
-    // whenReady is not part of the SK Plugin interface. It exists so tests
-    // (and any in-process consumer that wants to coordinate with the plugin
-    // lifecycle) can await the deferred router init that happens after start()
-    // returns synchronously. The SK server itself never calls it.
-    whenReady: () => readyPromise,
+    // _whenReady is not part of the SK Plugin interface. The underscore
+    // signals "not in the public contract"; tests (and any in-process
+    // consumer that wants to coordinate with the plugin lifecycle) can
+    // await the deferred router init that happens after start() returns
+    // synchronously. The SK server itself never calls it.
+    _whenReady: () => readyPromise,
   };
 }
 
@@ -588,18 +650,23 @@ function runningStatus(analyzerCount: number): string {
 
 interface AnalyzerSectionLike {
   enabled: boolean;
-  triggers: { put: { enabled: boolean; path: string } };
+  triggers: { put: { enabled: boolean } };
 }
 
 function registerAnalyzerPut(
   app: ServerApiLike,
+  analyzerId: AnalyzerId,
   section: AnalyzerSectionLike,
   getRouter: () => TriggerRouter | null,
   pluginId: string,
 ): void {
   if (!section.enabled) return;
-  const { enabled, path } = section.triggers.put;
-  if (!enabled || !path) return;
+  if (!section.triggers.put.enabled) return;
+  const path = pluginPutPath(analyzerId);
+  // Guard the PUT callback against double-fire: the SK PENDING/COMPLETED
+  // contract expects exactly one cb per request. Each return path already
+  // early-exits before reaching another cb, but a future maintainer adding
+  // a wrapping try/catch must not accidentally ack twice.
   app.registerPutHandler(
     'vessels.self',
     path,
@@ -609,11 +676,17 @@ function registerAnalyzerPut(
       value: unknown,
       cb: (r: { state: string; statusCode?: number; message?: string }) => void,
     ): { state: string } => {
+      let acked = false;
+      const ack = (r: { state: string; statusCode?: number; message?: string }): void => {
+        if (acked) return;
+        acked = true;
+        cb(r);
+      };
       void (async () => {
         try {
           const router = getRouter();
           if (!router) {
-            cb({
+            ack({
               state: 'FAILED',
               statusCode: 503,
               message: 'plugin not fully started',
@@ -621,9 +694,9 @@ function registerAnalyzerPut(
             return;
           }
           await router.dispatch('put', manualPutCtx(value), { putPath: path });
-          cb({ state: 'COMPLETED', statusCode: 200 });
+          ack({ state: 'COMPLETED', statusCode: 200 });
         } catch (err) {
-          cb({ state: 'FAILED', statusCode: 500, message: stringify(err) });
+          ack({ state: 'FAILED', statusCode: 500, message: stringify(err) });
         }
       })();
       return { state: 'PENDING' };

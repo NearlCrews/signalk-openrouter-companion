@@ -20,7 +20,7 @@ describe('plugin lifecycle', () => {
   it('loads but stays inert when apiKey is missing', () => {
     const plugin = createPlugin(app as never);
     plugin.start({}, () => {});
-    expect(app.statusMessages.at(-1)).toMatch(/Awaiting API key/);
+    expect(app.statusMessages.at(-1)).toMatch(/No OpenRouter API key configured/);
     expect(app.registeredPuts).toHaveLength(0);
   });
 
@@ -124,7 +124,7 @@ describe('plugin lifecycle', () => {
     await plugin.stop();
     // whenReady resolves once the deferred init has run (it calls signalReady
     // on both the abort-skip path and the normal path).
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const statusHandler = routes.get('/api/status');
     expect(statusHandler).toBeDefined();
@@ -159,7 +159,7 @@ describe('plugin lifecycle', () => {
       { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
       () => {},
     );
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const patterns = registerSpy.mock.calls.map((c) => c[0]);
     expect(patterns).toHaveLength(3);
@@ -180,7 +180,7 @@ describe('plugin lifecycle', () => {
       } as never,
       () => {},
     );
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const driftCall = registerSpy.mock.calls.find((c) => c[0] === '0 8 * * 0');
     expect(driftCall?.[2]).toBe('America/New_York');
@@ -202,7 +202,7 @@ describe('plugin lifecycle', () => {
       { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
       () => {},
     );
-    await plugin.whenReady();
+    await plugin._whenReady();
     expect(app.buses.has('electrical.alternators.1.voltage')).toBe(false);
 
     // An alternator comes online after start(); the 60s rescan must pick it
@@ -233,7 +233,7 @@ describe('plugin lifecycle', () => {
       } as never,
       () => {},
     );
-    await plugin.whenReady();
+    await plugin._whenReady();
 
     const dailyJobs = registerSpy.mock.calls.filter((c) => c[0] === '0 8 * * *');
     expect(dailyJobs).toHaveLength(2);
@@ -262,7 +262,7 @@ describe('plugin lifecycle', () => {
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
     // The synchronous failure must still resolve readyPromise; otherwise
     // whenReady() hangs forever.
-    await plugin.whenReady();
+    await plugin._whenReady();
     expect(app.errorMessages.some((m) => m.includes('discovery boom'))).toBe(true);
   });
 
@@ -286,7 +286,7 @@ describe('plugin lifecycle', () => {
     plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
     // Wait for the router to be wired before invoking the PUT handler;
     // otherwise getRouter() returns null and the callback fires FAILED.
-    await plugin.whenReady();
+    await plugin._whenReady();
     const put = app.registeredPuts.find(
       (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
     );

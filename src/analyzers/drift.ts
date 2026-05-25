@@ -123,7 +123,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   private readonly systemPrompt: string;
 
   constructor(cfg: DriftCfg) {
-    this.triggers = buildTriggers(cfg.triggers);
+    this.triggers = buildTriggers(this.id, cfg.triggers);
     // Bounds mirror the schema (baselineDays minimum 14, maximum 365) so a
     // value from a hand-edited JSON config is clamped at runtime too.
     this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS, {

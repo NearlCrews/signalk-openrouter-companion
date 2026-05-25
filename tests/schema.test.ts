@@ -28,7 +28,8 @@ describe('schema', () => {
   it('declares apiKey as required and exposes no output config (the dead notificationPath/State knobs were removed in the notification-PGN-alignment pass)', () => {
     const s = buildSchema();
     expect(s.type).toBe('object');
-    expect(s.title).toBe('OpenRouter Companion');
+    // No outer title: the SK admin UI wrapper drops it. The user-facing copy
+    // lives in the inner description, which IS rendered as the form preamble.
     expect(typeof s.description).toBe('string');
     const openrouter = s.properties.openrouter as {
       required: string[];
@@ -98,10 +99,10 @@ describe('schema', () => {
 
     const putProps = triggers.properties.put.properties;
     expect(putProps.enabled.default).toBe(true);
-    // PUT path is no longer a separate input; it surfaces in the enabled
-    // checkbox's description as a fixed-by-convention value.
+    // PUT path is not stored in the cfg shape; the description now states
+    // the fixed convention rather than embedding a per-analyzer value.
     expect(putProps.enabled.description).toBe(
-      'PUT path: plugins.openrouter-companion.maintenance.run',
+      'PUT to plugins.openrouter-companion.<analyzer-id>.run to fire on demand.',
     );
 
     const events = triggers.properties.events as NonNullable<
@@ -306,9 +307,8 @@ describe('mergeWithDefaults', () => {
     expect(r.analyzers.maintenance.triggers.cron.pattern).toBe('0 8 * * *');
     expect(r.analyzers.maintenance.triggers.cron.timezone).toBe('');
     expect(r.analyzers.maintenance.triggers.put.enabled).toBe(true);
-    expect(r.analyzers.maintenance.triggers.put.path).toBe(
-      'plugins.openrouter-companion.maintenance.run',
-    );
+    // PUT path is not stored on the cfg shape; it is derived from the
+    // analyzer id at registration time (see pluginPutPath in core/paths.ts).
     expect(r.analyzers.maintenance.triggers.events).toEqual(['engine-stop']);
   });
 

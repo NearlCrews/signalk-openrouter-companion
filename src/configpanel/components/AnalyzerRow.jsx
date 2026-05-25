@@ -1,17 +1,13 @@
 import { CRON_PRESETS } from '../../cronPresets.js';
+import { DEFAULT_SEVERITY_FLOOR_VALUE, SEVERITY_FLOOR_PRESETS } from '../../severityFloors.js';
 import { btn, btnClass, S } from '../styles.js';
 import { T } from '../tokens.js';
 import { PromptDrawer } from './PromptDrawer.jsx';
 
-// Weather Outlook Advisor: how bad the predicted weather must be before the
-// outlook raises an alarm. Values and labels mirror the `severityFloor` enum
-// in src/schema.ts and the config shape in src/types.ts.
-const SEVERITY_FLOOR_OPTIONS = [
-  { value: 'severe', label: 'Severe only' },
-  { value: 'moderate', label: 'Moderate and up' },
-  { value: 'minor', label: 'Any deterioration' },
-];
-export const DEFAULT_SEVERITY_FLOOR = 'moderate';
+// Re-export under the panel's familiar name. The list itself lives in
+// src/severityFloors.ts as the single source of truth shared with the
+// rjsf schema (enum + enumNames) and the analyzer constructor.
+export const DEFAULT_SEVERITY_FLOOR = DEFAULT_SEVERITY_FLOOR_VALUE;
 
 // How often a scheduled analyzer runs. Values are 5-field cron patterns. The
 // preset list is CRON_PRESETS (src/cronPresets.ts), shared with the rjsf
@@ -116,7 +112,7 @@ export function AnalyzerRow({
                   value={severityFloor}
                   onChange={(e) => onSeverityFloorChange(e.target.value)}
                 >
-                  {SEVERITY_FLOOR_OPTIONS.map((o) => (
+                  {SEVERITY_FLOOR_PRESETS.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>

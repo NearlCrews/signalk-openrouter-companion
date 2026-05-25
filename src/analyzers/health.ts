@@ -58,14 +58,19 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   private readonly systemPrompt: string;
 
   constructor(cfg: HealthCfg) {
-    this.triggers = buildTriggers(cfg.triggers);
+    this.triggers = buildTriggers(this.id, cfg.triggers);
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, HEALTH_DEFAULT_SYSTEM_PROMPT);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {
     const tree = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH));
     if (!tree) return null;
-    const banksRaw = Object.entries(tree);
+    // Skip any non-bank child of `electrical.batteries`: a future SK release
+    // could attach container-level metadata leaves (`meta`, `$source`,
+    // `value`, `timestamp`, ...). A real bank carries at least one of the
+    // canonical fields below; anything else is rejected so phantom bank ids
+    // never reach the prompt.
+    const banksRaw = Object.entries(tree).filter(([_, node]) => isBankNode(node));
     if (banksRaw.length === 0) return null;
 
     const endMs = ctx.firedAt.getTime();
@@ -143,4 +148,15 @@ function collectCells(node: unknown): CellSnapshot[] {
     }
   }
   return out.sort((a, b) => a.index - b.index);
+}
+
+// Canonical fields any real battery bank subtree exposes. Mirrors the gate
+// in src/analyzers/maintenance.ts so both analyzers reject metadata leaves
+// the same way.
+const BANK_FIELD_KEYS: ReadonlyArray<string> = ['voltage', 'current', 'capacity', 'temperature'];
+
+function isBankNode(node: unknown): boolean {
+  if (typeof node !== 'object' || node === null) return false;
+  if ('value' in (node as object)) return false;
+  return BANK_FIELD_KEYS.some((k) => k in (node as object));
 }

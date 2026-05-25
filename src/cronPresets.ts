@@ -10,7 +10,7 @@
 // choice. The four cron-driven analyzer defaults today are the daily-8AM,
 // monthly-1st, weekly-Sunday, and every-3-hours entries below (health and
 // liveness, aging, drift, and forecast respectively).
-export interface CronPreset {
+interface CronPreset {
   /** A 5-field cron pattern. */
   value: string;
   /** Human-readable label shown in the dropdown. */
