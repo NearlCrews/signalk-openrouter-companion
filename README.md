@@ -14,18 +14,19 @@ Requires an [OpenRouter](https://openrouter.ai) API key.
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
 
-## What's new in 0.5.2
+## What's new in 0.5.4
 
-0.5.2 is a six-agent full-codebase review pass with no feature changes. The
-headline fix is in the engine detector: a settle anchor left stale across a
-long gap in the RPM feed could backdate a session and report a multi-hour trip
-that never happened. The pass also stops trend-analyzer QuestDB query faults
-from being silently swallowed, re-probes QuestDB so a database that starts
-after the plugin is picked up without a restart, and clears a batch of
-analyzer, config-panel, and dead-code findings.
+0.5.4 is a 15-finding follow-up to the 0.5.3 conformance pass: a five-angle
+code review of the 0.5.3 diff surfaced regressions and weak spots the review
+pass had not caught. The biggest is symmetric clock-skew clamping on inbound
+deltas (0.5.3 only clamped future-stamped deltas, so a 1970 timestamp still
+produced a phantom multi-decade engine session). The Save button's new
+stuck-on-error edge, the config panel's React 19 state-updater purity
+violations, the dirty-flag regression on the prompt reset, and the
+cell-imbalance hysteresis's weakened settle guarantee are also fixed.
 
-See the [0.5.2 changelog entry](CHANGELOG.md#052---2026-05-21) and the
-[v0.5.2 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.2).
+See the [0.5.4 changelog entry](CHANGELOG.md#054---2026-05-25) and the
+[v0.5.4 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.4).
 
 ## Features
 
@@ -83,7 +84,7 @@ form. The main settings:
 | Model | OpenRouter model slug. | anthropic/claude-haiku-4.5 |
 | Max calls per day | Hard cap on OpenRouter calls per UTC day, to bound spend. | 20 |
 | QuestDB | Optional history source for the trend analyzers. | enabled, localhost:9000 |
-| Analyzers | Each of the seven can be enabled or disabled independently. | all enabled |
+| Analyzers | Each of the seven can be enabled or disabled independently. | six on by default; the weather outlook is opt-in |
 
 Advanced settings (engine RPM thresholds, cell-imbalance settle times, trend
 window lengths, custom cron patterns) are not in the panel; they live in the
@@ -92,7 +93,9 @@ saved JSON config at
 
 ## Analyzers
 
-Seven analyzers ship, all enabled by default.
+Seven analyzers ship; six are enabled by default. The weather outlook is
+opt-in because it benefits from a barometer or anemometer on the vessel and
+is more chatty than the per-event analyzers.
 
 - **maintenance**: a short narrative of each completed engine session. Fires
   when the engine stops.

@@ -2,6 +2,194 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.4] - 2026-05-25
+
+A 15-finding follow-up to the 0.5.3 conformance pass: a five-angle code review
+of the 0.5.3 diff surfaced regressions and weak spots the review pass had not
+caught. The biggest is symmetric clock-skew clamping on inbound deltas (0.5.3
+only clamped future-stamped deltas, so a 1970 timestamp still produced a phantom
+multi-decade engine session). The Save button's new stuck-on-error edge, the
+config panel's React 19 state-updater purity violations, the dirty-flag
+regression on the prompt reset, and the cell-imbalance hysteresis's weakened
+settle guarantee are also fixed.
+
+### Fixed
+
+- **A far-past delta timestamp is now clamped, symmetric to the future-stamp
+  clamp 0.5.3 introduced.** A sensor with no RTC reporting `1970-01-01` (or
+  one sending Unix seconds parsed as ms-since-1970) used to pass through and
+  feed the engine detector with a decades-old `lastDeltaTs`; the next watchdog
+  tick would then end a phantom multi-decade session. The clamp now rejects
+  deltas more than one hour off wall-clock in either direction.
+- **The Save button cannot get pinned at "Saving..." on a silent failure.**
+  `onSave` now wraps `save(cfg)` in a try/catch and falls back on a 30-second
+  timeout if the host never pushes a fresh configuration back; a synchronous
+  reject surfaces the error in the post-save notice slot.
+- **The panel's dirty-flag no longer falsely flags a Reset Prompt as a real
+  edit.** The new key-stable `deepEqual` treated an explicit-undefined key
+  as distinct from a missing one; `onPromptReset` writes
+  `customSystemPrompt: undefined`, so a no-op reset used to enable Save.
+- **The config panel's drawer-toggle and fire handlers no longer fire side
+  effects from inside `setState` updaters.** React 19 (and any concurrent
+  rendering) may call updaters more than once, which would double-fire
+  `loadReports`, `loadPrompt`, and the `fireAnalyzer` follow-up `setTimeout`.
+  The handlers now read live state through a ref and the load helpers
+  carry an in-flight dedup guard.
+- **The cell-imbalance settle guarantee is restored.** The 0.5.3 hysteresis
+  preserved `imbalanceSince` across an in-band dip (between the 80% exit floor
+  and the alert threshold); a sample dipping mid-window then bouncing back
+  could fire `cell-imbalance-enter` despite imbalance NOT being continuously
+  above the alert threshold for the full settle window. The clock now resets
+  on any sample below the alert threshold; exit hysteresis is preserved.
+- **`validateOptions` rejects pathological zeros on the alert thresholds.**
+  `cellImbalanceV=0` (any sensor jitter fires an alert) and
+  `socExitHysteresis=0` (low-SoC enter/exit pairs spam at the boundary) are
+  now clamped to safe minimums. The `imbalanceSettleSec` minimum is also
+  raised from 0 to 1 to keep the settle gate meaningful.
+- **`mergeWithDefaults(undefined)` now also runs `validateOptions`.** The
+  no-input bootstrap used to short-circuit straight to a `clone(DEFAULT_OPTIONS)`
+  return, bypassing the new clamping. Harmless today (defaults are valid), but
+  a future default that needed clamping would silently bypass it.
+- **`isBankNode` rejects metadata-only children of `electrical.batteries`.**
+  The 0.5.3 predicate only rejected children with a top-level `value` leaf;
+  a future SK release attaching a `meta` container (no `value`) would have
+  been treated as a phantom bank id `meta`. The predicate now requires at
+  least one canonical bank field (`voltage`, `current`, `capacity`, or
+  `temperature`).
+- **The `/api/questdb/test` endpoint normalizes the URL** so a trailing slash
+  (common copy-paste from a browser address bar) does not produce a double
+  slash in the probe path.
+- **The `withTimeout` helper guards every abort against double-call.** The
+  prior pattern called `ctrl.abort` from both the listener and an explicit
+  `if (caller?.aborted)` check; the new helper short-circuits on the
+  already-aborted controller, future-proofing against a runtime that throws
+  on second abort.
+
+### Changed
+
+- **REST 404/500/502 envelopes now match the 503 envelope.** `requireAnalyzerId`
+  and the `/openrouter/models` and `/analyzers/:id/reports` error handlers
+  return `{ ok: false, error }` so a single panel branch handles every
+  failure path uniformly. The 0.5.3 promise of a consistent envelope is now
+  actually consistent.
+- **`registerWithRouter` fails loud when `securityStrategy` is missing.**
+  The 0.5.3 optional-chain silently skipped the admin gate if SK had not
+  attached `securityStrategy` at registration time; the gate now sets a plugin
+  error and logs so the operator learns from the admin status banner.
+- **The `/fire` panel handler maps the new `unknown` outcome to "Analyzer
+  not registered"** with a danger-color badge, instead of falling through
+  to "Dispatched" which read as success.
+- **The `/api/analyzers/:id/prompt` response includes `runtimeReady`** so a
+  future panel can distinguish "no override set" from "plugin not yet
+  started". Backward-compatible: the existing `current: null` semantics are
+  unchanged.
+- **The stale comment in `src/analyzers/alerts.ts` that claimed the full LLM
+  text reached the SK notification is corrected** to match the actual
+  behavior (truncated headline to the notification; full text to the JSONL
+  log via `logText`).
+- New regression tests lock in the dual-emit `value.data.alertId` and the
+  separate-log-vs-display behavior so a future refactor cannot silently
+  drop either.
+
+## [0.5.3] - 2026-05-25
+
+A three-agent Signal K conformance pass. The headlines: the plugin's seven REST
+routes were unauthenticated and could be hit by any caller on the SK admin
+network (one route spends OpenRouter budget, one probed arbitrary URLs from the
+boat, several leak operational data and report history); a single delta carrying
+a future timestamp could evict the entire rolling buffer and freeze the engine
+watchdog forever. Both classes are now closed at the trust and input edges, and
+a long list of smaller spec, correctness, and cleanup findings landed in the
+same release.
+
+### Security
+
+- **All plugin REST routes are now gated by `addAdminMiddleware`.** On a SK
+  server with security enabled, the seven `/plugins/signalk-openrouter-companion/api/*`
+  routes now require an authenticated admin caller. On a server with security
+  disabled the gate is a no-op so dev setups are unaffected.
+- **`/api/questdb/test` validates its URL before fetching.** The body's `url`
+  is parsed, restricted to `http:`/`https:`, and only then handed to the
+  QuestDB client; an authenticated admin can no longer probe arbitrary schemes
+  from the SK host.
+
+### Fixed
+
+- **A future-timestamped delta no longer evicts the rolling buffer or freezes
+  the engine watchdog.** The subscribe wrapper clamps incoming timestamps to
+  wall-clock; the engine detector's restore path rejects snapshots stamped in
+  the future. Either case was previously a one-delta bomb on the forecast and
+  liveness trend windows and on engine stop detection.
+- **The full LLM text for each battery alert now lands in the JSONL report
+  log.** Previously the log only saw the 64-char chartplotter headline; the
+  inline comment claiming "anything longer survives in the log" was
+  contradicted by the code. The notification still carries the truncated
+  headline for PGN 126985.
+- **Cell-imbalance alerts no longer spam on a bank oscillating around the
+  threshold.** An exit re-arms only once the imbalance drops below 80% of the
+  alert threshold, matching the same hysteresis pattern as the low-SoC alert.
+- **`/api/openrouter/test` aborts on plugin stop instead of hanging for up to
+  60s** and no longer counts against the daily call budget (the carve-out is
+  documented in the panel hint).
+- **Notifications with `state: nominal` are emitted with `method: []`** instead
+  of `['visual']`, matching the SK 1.8.2 convention that nominal is the
+  informational/no-action state. The daily/weekly narrative reports
+  (health/aging/drift/liveness/forecast) no longer advertise themselves as
+  visual notifications.
+- **Numeric config values are clamped at load time.** A saved `maxCallsPerDay`
+  of 0 (a UI input cleared to empty) no longer pegs the status banner at
+  "budget exhausted" forever; a non-finite engine RPM threshold falls back to
+  the default. The panel's max-calls input refuses to write values below 1.
+- **Engine detector restore rejects non-finite numbers** (`NaN`, `Infinity`)
+  that would silently freeze the detector.
+- **PUT handler ack is idempotent**, defensive against a future maintainer
+  accidentally calling the callback twice.
+- **The config panel's drawer toggles use functional state setters**, so a
+  rapid double-click cannot read stale state and load the wrong drawer.
+- **The Save button latches until the host pushes a fresh configuration**, so
+  a double-click cannot fire two saves before the restart completes.
+- **The dirty-check is now key-order-insensitive**, so a structurally equal
+  but differently-ordered configuration object does not falsely flag the
+  panel as having unsaved edits.
+- **QuestDB requests carry a 30s default timeout**, so a slow or stuck
+  QuestDB cannot hang an analyzer indefinitely.
+- **`bucketMeans` skips wind-direction buckets with no coherent direction**
+  (samples that cancel around the unit circle) rather than reporting them as
+  due north.
+- **`snapshotBatteries` and the health analyzer filter** Signal K metadata
+  leaves at the `electrical.batteries` container level so a future SK release
+  cannot inject them as phantom bank ids.
+- **`TypedEmitter` isolates listener throws** so a faulty engine-stop
+  listener does not skip the state-persist listener for the same event.
+
+### Changed
+
+- **`whenReady` renamed to `_whenReady`** to signal that it is not part of the
+  Signal K `Plugin` interface (a test-and-coordination seam, not contract).
+- **Plugin status strings align with the family convention.** `Starting`
+  becomes `Starting...`, `Awaiting API key configuration` becomes
+  `No OpenRouter API key configured. Set one in plugin settings.`, and the
+  comma-separated `Running, X` messages become `Running: X`.
+- **Battery-alert notifications now carry `alertId` both at the value top
+  level and under `value.data.alertId`.** The `data` slot is the SK master
+  extension form; the top-level form is kept for one release for the existing
+  `signalk-nmea2000-emitter-cannon` consumer and will be removed once the
+  sibling reads from `data`.
+- **The cron-dispatch arm in `TriggerRouter.dispatch` is dropped.** In
+  production, cron jobs already fire by id via `runById` (per the 0.4.1 fix);
+  the dispatch-by-pattern path existed only to keep three tests passing.
+- **The five empty `*_SUPPORTED_EVENTS` constants** for analyzers without
+  event subscriptions collapse into one shared `NO_EVENTS` sentinel.
+- **Forecast severity-floor presets live in `src/severityFloors.ts`** as the
+  single source of truth shared by the rjsf schema, the React panel, and
+  `DEFAULT_OPTIONS`, mirroring the existing cron-preset pattern.
+- **`triggers.put.path` is no longer stored in the config.** The PUT path is
+  derived at registration time from the analyzer id (the convention is
+  fixed at `plugins.openrouter-companion.<id>.run`); the schema no longer
+  advertises an editable field that the runtime ignored.
+- **Internal-only type exports** dropped across `src/core/` and `src/schema.ts`
+  for symbols that were only ever referenced inside their declaring file.
+
 ## [0.5.2] - 2026-05-21
 
 A six-agent full-codebase review pass with no feature changes. The headline fix
