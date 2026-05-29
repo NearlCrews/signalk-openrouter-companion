@@ -14,19 +14,19 @@ Requires an [OpenRouter](https://openrouter.ai) API key.
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
 
-## What's new in 0.5.4
+## What's new in 0.5.5
 
-0.5.4 is a 15-finding follow-up to the 0.5.3 conformance pass: a five-angle
-code review of the 0.5.3 diff surfaced regressions and weak spots the review
-pass had not caught. The biggest is symmetric clock-skew clamping on inbound
-deltas (0.5.3 only clamped future-stamped deltas, so a 1970 timestamp still
-produced a phantom multi-decade engine session). The Save button's new
-stuck-on-error edge, the config panel's React 19 state-updater purity
-violations, the dirty-flag regression on the prompt reset, and the
-cell-imbalance hysteresis's weakened settle guarantee are also fixed.
+0.5.5 is a maintainability and registry-compliance pass with no behavior change
+for existing installs. A four-angle cleanup consolidated duplicated logic into
+shared helpers and pushed analyzer-specific special-cases down into the shared
+extension point: the lifecycle no longer hardcodes the forecast analyzer's
+weather paths, config merging is driven by the single `ANALYZER_IDS` source of
+truth, and the per-analyzer default-prompt map moved next to the factory map.
+The plugin now also ships admin-panel screenshots, scoring full marks on the
+community SignalK plugin registry.
 
-See the [0.5.4 changelog entry](CHANGELOG.md#054---2026-05-25) and the
-[v0.5.4 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.4).
+See the [0.5.5 changelog entry](CHANGELOG.md#055---2026-05-28) and the
+[v0.5.5 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.5).
 
 ## Features
 

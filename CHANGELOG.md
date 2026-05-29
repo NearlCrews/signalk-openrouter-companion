@@ -2,6 +2,49 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.5] - 2026-05-28
+
+A maintainability and registry-compliance pass with no behavior change for
+existing installs. A four-angle cleanup of the whole codebase consolidated
+duplicated logic into shared helpers and pushed several analyzer-specific
+special-cases down into the shared extension point: the lifecycle no longer
+hardcodes the forecast analyzer's weather paths, config merging is driven by the
+single `ANALYZER_IDS` source of truth, and the per-analyzer default-prompt map
+moved next to the factory map. The plugin now also ships admin-panel screenshots
+so it scores full marks on the community SignalK plugin registry.
+
+### Added
+
+- **`signalk.screenshots` in `package.json`**, shipping two admin-panel
+  screenshots under `assets/screenshots/` in the published tarball. This
+  satisfies the SignalK plugin registry's screenshots check, the last item
+  between the plugin and a 100/100 compatibility score, and supplies the App
+  Store hero image.
+- **`Analyzer.watchedPaths`**, an optional declaration of fixed Signal K paths
+  an analyzer needs buffered that are not discovered from the live tree. The
+  lifecycle subscribes the union across enabled analyzers, so the forecast
+  analyzer's weather leaves are no longer a hardcoded branch in `index.ts`.
+
+### Changed
+
+- **`mergeWithDefaults` now iterates `ANALYZER_IDS`** instead of merging seven
+  hand-listed sections, so a new analyzer's saved config can no longer be
+  silently dropped by an overlooked key.
+- **The default-system-prompt map moved from `core/api.ts` to
+  `analyzers/registry.ts`** (as `ANALYZER_DEFAULT_SYSTEM_PROMPTS`), next to the
+  factory map, removing the import edge from the core HTTP layer to every
+  analyzer module. Adding an analyzer now touches `ids.ts` and `registry.ts`
+  only.
+- **Shared helpers replace duplicated logic:** the battery-bank node guard
+  (`isBankNode`) is now one function in `core/skNode.ts`, the QuestDB
+  whitespace-flatten is `flattenSql` in `core/questdb.ts`, the panel's REST
+  error-string fallback is `errText` in `configpanel/api.js`, and `core/api.ts`
+  reuses `stringify` for error coercion.
+- **Minor panel and code cleanups:** the config panel's dirty-flag is memoized,
+  the severity-floor control renders on prop presence rather than a hardcoded
+  analyzer id, and dead code (an unused export, two unused `bankPaths` fields,
+  an unreachable error block) was removed.
+
 ## [0.5.4] - 2026-05-25
 
 A 15-finding follow-up to the 0.5.3 conformance pass: a five-angle code review
