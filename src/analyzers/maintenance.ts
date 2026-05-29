@@ -13,7 +13,13 @@ import {
   enginePathPrefix,
   PROPULSION_PREFIX,
 } from '../core/paths.js';
-import { asTreeMap, type BankSnapshot, readBankSnapshot, readValueAt } from '../core/skNode.js';
+import {
+  asTreeMap,
+  type BankSnapshot,
+  isBankNode,
+  readBankSnapshot,
+  readValueAt,
+} from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, MAINTENANCE_SUPPORTED_EVENTS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -231,18 +237,6 @@ function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): 
         socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
       };
     });
-}
-
-// A real `electrical.batteries.<id>` subtree carries at least one of these
-// canonical fields. Anything else (a leaf with a `value`, a metadata blob,
-// `$source`, `timestamp`) is rejected so a future SK release that attaches
-// container-level metadata cannot inject a phantom bank id.
-const BANK_FIELD_KEYS: ReadonlyArray<string> = ['voltage', 'current', 'capacity', 'temperature'];
-
-function isBankNode(node: unknown): boolean {
-  if (typeof node !== 'object' || node === null) return false;
-  if ('value' in (node as object)) return false;
-  return BANK_FIELD_KEYS.some((k) => k in (node as object));
 }
 
 const UNIT_BY_SUFFIX: ReadonlyArray<readonly [suffix: string, unit: string]> = [

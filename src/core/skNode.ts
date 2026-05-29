@@ -56,3 +56,18 @@ export function readBankSnapshot(node: unknown): BankSnapshot {
     temperatureK: readNumberAt(node, 'temperature'),
   };
 }
+
+// Canonical fields any real `electrical.batteries.<bank>` subtree exposes. A
+// real bank node is an object carrying at least one of these; a leaf with a
+// `value`, or a metadata blob (`meta`, `$source`, `timestamp`), is rejected.
+const BANK_FIELD_KEYS: ReadonlyArray<string> = ['voltage', 'current', 'capacity', 'temperature'];
+
+// Shared gate for the health and maintenance analyzers: both walk the
+// `electrical.batteries` container and must reject the same non-bank children
+// so a future SK release that attaches container-level metadata leaves cannot
+// inject a phantom bank id into either prompt.
+export function isBankNode(node: unknown): boolean {
+  if (typeof node !== 'object' || node === null) return false;
+  if ('value' in (node as object)) return false;
+  return BANK_FIELD_KEYS.some((k) => k in (node as object));
+}

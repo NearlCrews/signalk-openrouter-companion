@@ -62,19 +62,15 @@ function bankPathPrefix(bankId: string): string {
 
 export function bankPaths(bankId: string): {
   voltage: string;
-  current: string;
   soc: string;
   capacityActual: string;
-  capacityNominal: string;
   cycles: string;
 } {
   const prefix = bankPathPrefix(bankId);
   return {
     voltage: `${prefix}voltage`,
-    current: `${prefix}current`,
     soc: `${prefix}capacity.stateOfCharge`,
     capacityActual: `${prefix}capacity.actual`,
-    capacityNominal: `${prefix}capacity.nominal`,
     cycles: `${prefix}cycles`,
   };
 }

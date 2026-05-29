@@ -101,7 +101,7 @@ export function AnalyzerRow({
                 </>
               )}
             </span>
-            {analyzer.id === 'forecast' && (
+            {severityFloor != null && (
               <span style={S.inlineControl}>
                 <label htmlFor={floorId} style={S.selectLabel}>
                   Severity floor

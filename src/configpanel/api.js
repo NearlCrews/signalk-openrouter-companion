@@ -9,6 +9,14 @@ async function apiFetch(path, opts = {}) {
   return fetch(`${API_BASE}${path}`, { credentials: 'same-origin', ...opts });
 }
 
+// Reduce a fetchJson envelope to a human-readable error string with one
+// precedence: the server's {ok:false,error} body, then the transport error
+// fetchJson caught, then a bare HTTP status. Shared so the panel's failure
+// branches do not each re-spell the same fallback chain.
+export function errText(r) {
+  return r.body?.error || r.error || `HTTP ${r.status}`;
+}
+
 // Standard envelope for the panel's REST calls: every endpoint returns JSON,
 // and panel state always wants {ok, status, body, error}. Promotes the
 // try/await/parse/catch boilerplate out of five callsites.

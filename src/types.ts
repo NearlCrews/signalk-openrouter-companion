@@ -42,14 +42,9 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 // data browser. The preset list lives in `src/severityFloors.ts` (shared
 // with the panel); these aliases are kept for backward-compat with the
 // analyzer constructor and the existing config shape.
-import {
-  DEFAULT_SEVERITY_FLOOR_VALUE,
-  SEVERITY_FLOOR_PRESETS,
-  type SeverityFloorPresetValue,
-} from './severityFloors.js';
+import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
+import { DEFAULT_SEVERITY_FLOOR_VALUE, type SeverityFloorPresetValue } from './severityFloors.js';
 
-export const FORECAST_SEVERITY_FLOORS: ReadonlyArray<SeverityFloorPresetValue> =
-  SEVERITY_FLOOR_PRESETS.map((p) => p.value);
 export type SeverityFloor = SeverityFloorPresetValue;
 
 export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = DEFAULT_SEVERITY_FLOOR_VALUE;
@@ -245,6 +240,13 @@ type WithPartialTriggers<T extends { triggers: AnalyzerTriggerCfg }> = Partial<
   Omit<T, 'triggers'>
 > & { triggers?: PartialTriggerCfg };
 
+// The saved-config overlay: each analyzer section is optional and may carry
+// partial triggers. Keyed off ANALYZER_IDS so it cannot drift from the section
+// list the merge loop walks.
+type AnalyzerInputOverlay = {
+  [K in AnalyzerId]?: WithPartialTriggers<PluginOptions['analyzers'][K]>;
+};
+
 // The `enabled` key on each analyzer section defaults to whatever the
 // shipped DEFAULT_OPTIONS sets (true for most, false for forecast). The
 // panel always writes the full cfg, so the saved JSON carries `enabled`
@@ -279,32 +281,28 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
   // a future maintainer who changes a default into a sentinel that would
   // otherwise bypass the clamp.
   if (!input) return validateOptions(clone(DEFAULT_OPTIONS));
-  const inputAnalyzers = input.analyzers as
-    | {
-        maintenance?: WithPartialTriggers<PluginOptions['analyzers']['maintenance']>;
-        health?: WithPartialTriggers<PluginOptions['analyzers']['health']>;
-        aging?: WithPartialTriggers<PluginOptions['analyzers']['aging']>;
-        drift?: WithPartialTriggers<PluginOptions['analyzers']['drift']>;
-        alerts?: WithPartialTriggers<PluginOptions['analyzers']['alerts']>;
-        liveness?: WithPartialTriggers<PluginOptions['analyzers']['liveness']>;
-        forecast?: WithPartialTriggers<PluginOptions['analyzers']['forecast']>;
-      }
-    | undefined;
+  const inputAnalyzers = input.analyzers as AnalyzerInputOverlay | undefined;
+  // Merge every analyzer section by iterating ANALYZER_IDS, the single source
+  // of truth. A new analyzer added to ids.ts and registry.ts is then merged
+  // from saved config automatically, rather than being silently dropped by a
+  // hand-listed object that forgot its key. The builder is keyed `unknown`
+  // because writing through a union-typed index would otherwise demand the
+  // intersection of every section shape; the loop fills all ids, so the single
+  // cast to the concrete map at the end is sound. mergeAnalyzerCfg is generic
+  // over one section shape, so its inputs are cast to the generic's base
+  // constraint here; structuredClone and the spreads preserve every real field
+  // at runtime, and only compile-time precision is bridged by the casts.
+  const analyzers = {} as Record<AnalyzerId, unknown>;
+  for (const id of ANALYZER_IDS) {
+    analyzers[id] = mergeAnalyzerCfg(
+      DEFAULT_OPTIONS.analyzers[id] as { triggers: AnalyzerTriggerCfg },
+      inputAnalyzers?.[id] as WithPartialTriggers<{ triggers: AnalyzerTriggerCfg }> | undefined,
+    );
+  }
   const merged: PluginOptions = {
     openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(input.openrouter ?? {}) },
     questdb: { ...DEFAULT_OPTIONS.questdb, ...(input.questdb ?? {}) },
-    analyzers: {
-      maintenance: mergeAnalyzerCfg(
-        DEFAULT_OPTIONS.analyzers.maintenance,
-        inputAnalyzers?.maintenance,
-      ),
-      health: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.health, inputAnalyzers?.health),
-      aging: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.aging, inputAnalyzers?.aging),
-      drift: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.drift, inputAnalyzers?.drift),
-      alerts: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.alerts, inputAnalyzers?.alerts),
-      liveness: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.liveness, inputAnalyzers?.liveness),
-      forecast: mergeAnalyzerCfg(DEFAULT_OPTIONS.analyzers.forecast, inputAnalyzers?.forecast),
-    },
+    analyzers: analyzers as PluginOptions['analyzers'],
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
   };
   return validateOptions(merged);

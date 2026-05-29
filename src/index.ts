@@ -21,12 +21,7 @@ import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { HOUR_MS } from './core/format.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
-import {
-  enginePaths,
-  pluginPutPath,
-  WEATHER_CANONICAL_PATHS,
-  WEATHER_EXTENSION_PATHS,
-} from './core/paths.js';
+import { enginePaths, pluginPutPath } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
 import { TriggerRouter } from './core/triggerRouter.js';
@@ -506,17 +501,19 @@ export default function createPlugin(app: ServerApiLike): {
           subscribeWatchedPath(path);
         }
 
-        // The forecast analyzer reads weather telemetry from the rolling
-        // buffer. The weather paths are fixed canonical strings, so no
-        // per-instance discovery is needed: subscribe the list directly. They
-        // are subscribed unconditionally (not filtered by getAvailablePaths)
-        // so a weather producer that starts after this plugin is still
-        // captured; collectContext degrades gracefully on paths that never
-        // produce data.
-        if (cfg.analyzers.forecast.enabled) {
-          const watchedSet = new Set(watched);
-          for (const path of [...WEATHER_CANONICAL_PATHS, ...WEATHER_EXTENSION_PATHS]) {
-            if (watchedSet.has(path) || engineRpmPaths.has(path)) continue;
+        // Some analyzers need fixed Signal K paths buffered that are not
+        // discovered from the live tree (forecast's weather leaves). Subscribe
+        // the union the enabled analyzers declare via Analyzer.watchedPaths, so
+        // the lifecycle never special-cases one analyzer by id. These are
+        // subscribed unconditionally (not filtered by getAvailablePaths) so a
+        // producer that starts after this plugin is still captured;
+        // collectContext degrades gracefully on paths that never produce data.
+        const declaredPaths = new Set(watched);
+        for (const a of analyzers) {
+          if (!a.watchedPaths) continue;
+          for (const path of a.watchedPaths) {
+            if (declaredPaths.has(path) || engineRpmPaths.has(path)) continue;
+            declaredPaths.add(path);
             subscribe(path, (value, ts, src) => {
               if (typeof value === 'number') buffer.record(path, value, ts, src);
             });
@@ -571,12 +568,12 @@ export default function createPlugin(app: ServerApiLike): {
             // it is enabled but not currently live, re-probe and wire it in.
             if (questdbCandidate && router && runtime && !runtime.questdbLive) {
               const live = runtime;
-              const activeRouter = router;
+              const routerForRecovery = router;
               void questdbCandidate
                 .probe(lifecycle.signal)
                 .then((ok) => {
                   if (ok) {
-                    activeRouter.setQuestdb(questdbCandidate);
+                    routerForRecovery.setQuestdb(questdbCandidate);
                     live.questdbLive = questdbCandidate;
                     logger.debug('QuestDB recovered; trend analyzers re-enabled');
                   }

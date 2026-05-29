@@ -85,7 +85,7 @@ See [DEVELOPMENT.md](../docs/DEVELOPMENT.md) for the full walkthrough. Short ver
 1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id` (typed as `AnalyzerId`), `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
 2. Use `buildTriggers(cfg.triggers, eventMapper?)` so the cron + PUT + events block stays uniform.
 3. Use `publisher.publishReport(this.id, ctx, text)` for the canonical `notifications.openrouter-companion.<id>.report` shape.
-4. Append the id to `src/analyzers/ids.ts::ANALYZER_IDS`, the factory closure to `src/analyzers/registry.ts::ANALYZER_FACTORIES`, and the config section to `src/schema.ts` plus `src/types.ts`. `index.ts` instantiates from the registry automatically.
+4. Append the id to `src/analyzers/ids.ts::ANALYZER_IDS`, the factory closure to `src/analyzers/registry.ts::ANALYZER_FACTORIES` and the default prompt to `ANALYZER_DEFAULT_SYSTEM_PROMPTS` in the same file, and the config section to `src/schema.ts` plus `src/types.ts`. `index.ts` instantiates from the registry automatically.
 5. Add tests under `tests/` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`.
 
 ## Reporting bugs

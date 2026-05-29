@@ -7,7 +7,12 @@ import {
 import { discoverEngineIds } from '../core/discovery.js';
 import { asFiniteNumber, DAY_MS, fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
-import { escapeSqlLiteral, indexColumns, QUESTDB_SELF_CONTEXT } from '../core/questdb.js';
+import {
+  escapeSqlLiteral,
+  flattenSql,
+  indexColumns,
+  QUESTDB_SELF_CONTEXT,
+} from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -228,7 +233,7 @@ async function binEngineWindow(
   const sogPath = SOG_PATH;
   const fromIso = new Date(fromMs).toISOString();
   const toIso = new Date(toMs).toISOString();
-  const sql = `
+  const sql = flattenSql(`
     WITH r AS (
       SELECT ts, value FROM signalk
       WHERE path = '${rpmPath}'
@@ -259,9 +264,7 @@ async function binEngineWindow(
       avg(CASE WHEN r.ts - s.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog
     FROM r ASOF JOIN f ASOF JOIN s
     GROUP BY bin
-  `
-    .trim()
-    .replace(/\s+/g, ' ');
+  `);
 
   // A query fault propagates: drift requires QuestDB, so a fault is a real
   // analyzer failure and must surface as a failure report, not a silent skip.

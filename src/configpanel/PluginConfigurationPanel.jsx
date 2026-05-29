@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchJson, POLL_MS, REPORT_LIMIT } from './api.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { errText, fetchJson, POLL_MS, REPORT_LIMIT } from './api.js';
 import { AnalyzerRow, DEFAULT_SEVERITY_FLOOR } from './components/AnalyzerRow.jsx';
 import { CollapsibleSection } from './components/CollapsibleSection.jsx';
 import { OpenRouterSection } from './components/OpenRouterSection.jsx';
@@ -96,7 +96,10 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     setSaving(false);
   }, [configuration]);
 
-  const dirty = !jsonEqual(cfg, pristine);
+  // Memoized: the 5s status poll re-renders the panel without touching cfg or
+  // pristine, so the full-tree deep compare reruns only when an edit or a host
+  // resync actually changes one of them.
+  const dirty = useMemo(() => !jsonEqual(cfg, pristine), [cfg, pristine]);
 
   const fetchStatus = useCallback(async () => {
     const r = await fetchJson('/status');
@@ -209,7 +212,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
     setTestResult(
       r.ok && r.body
         ? { ok: true, text: `OK (${r.body.totalTokens} tokens, ${r.body.model})` }
-        : { ok: false, text: r.body?.error || r.error || `HTTP ${r.status}` },
+        : { ok: false, text: errText(r) },
     );
     setTesting(false);
   };
@@ -267,7 +270,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         // an empty list, which would render a false "No reports yet".
         patchUi(id, {
           reportsLoading: false,
-          reportsError: r.body?.error || r.error || `HTTP ${r.status}`,
+          reportsError: errText(r),
         });
       }
     } finally {
@@ -287,7 +290,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             ok: r.body?.outcome !== 'failed' && r.body?.outcome !== 'unknown',
             text: FIRE_OUTCOME_TEXT[r.body?.outcome] ?? 'Dispatched',
           }
-        : { ok: false, text: r.body?.error || r.error || `HTTP ${r.status}` },
+        : { ok: false, text: errText(r) },
     });
     // Refresh the open drawer so the new report shows up after the LLM
     // returns. 800 ms is a heuristic; a real boat round-trip is 1-3 s. Read
@@ -336,7 +339,7 @@ export default function PluginConfigurationPanel({ configuration, save }) {
         });
       } else {
         patchUi(id, {
-          promptError: r.body?.error || r.error || `HTTP ${r.status}`,
+          promptError: errText(r),
           promptLoaded: true,
         });
       }
@@ -447,8 +450,21 @@ export default function PluginConfigurationPanel({ configuration, save }) {
             onPromptReset={onPromptReset}
             schedule={cfg.analyzers?.[a.id]?.triggers?.cron?.pattern ?? a.cron?.pattern ?? ''}
             onScheduleChange={setSchedule}
-            severityFloor={cfg.analyzers?.[a.id]?.severityFloor ?? DEFAULT_SEVERITY_FLOOR}
-            onSeverityFloorChange={(value) => setAnalyzerCfg(a.id, { severityFloor: value })}
+            // Only forecast carries a severity floor today; pass the control's
+            // props only for analyzers that have one so AnalyzerRow stays
+            // analyzer-agnostic (it renders the floor when given a value, not
+            // by checking the id). A second floor-bearing analyzer needs only a
+            // prop here, no AnalyzerRow edit.
+            severityFloor={
+              a.id === 'forecast'
+                ? (cfg.analyzers?.[a.id]?.severityFloor ?? DEFAULT_SEVERITY_FLOOR)
+                : undefined
+            }
+            onSeverityFloorChange={
+              a.id === 'forecast'
+                ? (value) => setAnalyzerCfg(a.id, { severityFloor: value })
+                : undefined
+            }
           />
         ))}
       </CollapsibleSection>

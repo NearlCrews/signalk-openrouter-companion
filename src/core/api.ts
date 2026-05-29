@@ -1,15 +1,10 @@
-import { open } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import type { Analyzer } from '../analyzers/Analyzer.js';
-import { AGING_DEFAULT_SYSTEM_PROMPT } from '../analyzers/aging.js';
-import { ALERTS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/alerts.js';
-import { DRIFT_DEFAULT_SYSTEM_PROMPT } from '../analyzers/drift.js';
-import { FORECAST_DEFAULT_SYSTEM_PROMPT } from '../analyzers/forecast.js';
-import { HEALTH_DEFAULT_SYSTEM_PROMPT } from '../analyzers/health.js';
 import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '../analyzers/ids.js';
-import { LIVENESS_DEFAULT_SYSTEM_PROMPT } from '../analyzers/liveness.js';
-import { MAINTENANCE_DEFAULT_SYSTEM_PROMPT } from '../analyzers/maintenance.js';
+import { ANALYZER_DEFAULT_SYSTEM_PROMPTS } from '../analyzers/registry.js';
 import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
+import { stringify } from './logger.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
 import type { JsonlEntry } from './publisher.js';
@@ -57,16 +52,6 @@ export interface PluginRuntime {
   startedAt: number;
 }
 
-const DEFAULT_SYSTEM_PROMPTS: Record<AnalyzerId, string> = {
-  maintenance: MAINTENANCE_DEFAULT_SYSTEM_PROMPT,
-  health: HEALTH_DEFAULT_SYSTEM_PROMPT,
-  aging: AGING_DEFAULT_SYSTEM_PROMPT,
-  drift: DRIFT_DEFAULT_SYSTEM_PROMPT,
-  alerts: ALERTS_DEFAULT_SYSTEM_PROMPT,
-  liveness: LIVENESS_DEFAULT_SYSTEM_PROMPT,
-  forecast: FORECAST_DEFAULT_SYSTEM_PROMPT,
-};
-
 const REPORTS_DEFAULT_LIMIT = 10;
 const REPORTS_MAX_LIMIT = 100;
 
@@ -102,7 +87,7 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
     },
     questdb: {
       enabled: rt.cfg.questdb.enabled,
-      reachable: !rt.cfg.questdb.enabled ? null : rt.questdbProbed ? rt.questdbLive !== null : null,
+      reachable: rt.cfg.questdb.enabled && rt.questdbProbed ? rt.questdbLive !== null : null,
     },
     analyzers: ANALYZER_IDS.map((id) => {
       const cron = rt.cfg.analyzers[id].triggers.cron;
@@ -176,12 +161,7 @@ async function tailReports(
 ): Promise<JsonlEntry[]> {
   let raw: string;
   try {
-    const fh = await open(logPath, 'r');
-    try {
-      raw = await fh.readFile({ encoding: 'utf-8' });
-    } finally {
-      await fh.close();
-    }
+    raw = await readFile(logPath, 'utf-8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
@@ -265,8 +245,7 @@ export function registerApiRoutes(
       // (empty completion); neither is a valid HTTP error status to echo, so
       // anything below 400 collapses to 500.
       const status = err instanceof OpenRouterError && err.status >= 400 ? err.status : 500;
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(status).json({ ok: false, status, error: message });
+      res.status(status).json({ ok: false, status, error: stringify(err) });
     }
   });
 
@@ -291,8 +270,7 @@ export function registerApiRoutes(
       const outcome = await rt.router.runById(id, manualPutCtx());
       res.json({ ok: true, analyzer: id, outcome });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ ok: false, error: message });
+      res.status(500).json({ ok: false, error: stringify(err) });
     }
   });
 
@@ -306,7 +284,7 @@ export function registerApiRoutes(
     // its own `cfg` first (which the SK admin populates from the saved
     // configuration), so a transient `current: null` here does not
     // overwrite a real saved override the panel already has.
-    const defaultPrompt = DEFAULT_SYSTEM_PROMPTS[id];
+    const defaultPrompt = ANALYZER_DEFAULT_SYSTEM_PROMPTS[id];
     const current = rt?.cfg.analyzers[id]?.customSystemPrompt ?? null;
     res.json({ analyzer: id, default: defaultPrompt, current, runtimeReady: rt !== null });
   });
@@ -318,8 +296,7 @@ export function registerApiRoutes(
       const result = await getOpenRouterModels();
       res.json(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(502).json({ ok: false, error: message });
+      res.status(502).json({ ok: false, error: stringify(err) });
     }
   });
 
@@ -355,8 +332,7 @@ export function registerApiRoutes(
       const ok = await client.probe(rt?.signal);
       res.json({ ok, url: normalized });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(502).json({ ok: false, url: normalized, error: message });
+      res.status(502).json({ ok: false, url: normalized, error: stringify(err) });
     }
   });
 
@@ -375,8 +351,7 @@ export function registerApiRoutes(
       const reports = await tailReports(rt.logPath, id, limit);
       res.json({ analyzer: id, reports });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ ok: false, error: message });
+      res.status(500).json({ ok: false, error: stringify(err) });
     }
   });
 }

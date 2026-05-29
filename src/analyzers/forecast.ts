@@ -9,6 +9,7 @@ import {
 } from '../core/paths.js';
 import {
   escapeSqlLiteral,
+  flattenSql,
   indexColumns,
   QUESTDB_SELF_CONTEXT,
   type QuestDBClient,
@@ -175,6 +176,12 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   readonly id = 'forecast';
   readonly title = ANALYZER_TITLES.forecast;
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  // Weather leaves are fixed canonical strings (no per-instance discovery), so
+  // the lifecycle subscribes them directly from this declaration. They feed the
+  // rolling buffer unconditionally so a weather producer that starts after the
+  // plugin is still captured; collectContext degrades gracefully on paths that
+  // never produce data.
+  readonly watchedPaths: ReadonlyArray<string> = ALL_WEATHER_PATHS;
   private readonly systemPrompt: string;
   private readonly severityFloor: SeverityFloor;
 
@@ -415,16 +422,14 @@ async function queryBaseline(
   const fromIso = new Date(firedMs - BASELINE_FROM_HOURS * HOUR_MS).toISOString();
   const toIso = new Date(firedMs - BASELINE_TO_HOURS * HOUR_MS).toISOString();
   const pathList = quotedPathList(ALL_WEATHER_PATHS);
-  const sql = `
+  const sql = flattenSql(`
     SELECT path, avg(value) AS mean_value FROM signalk
     WHERE path IN (${pathList})
       AND context = '${escapedCtx}'
       AND ts >= '${fromIso}'
       AND ts < '${toIso}'
     GROUP BY path
-  `
-    .trim()
-    .replace(/\s+/g, ' ');
+  `);
 
   const out = new Map<string, number>();
   const res = await questdb.query(sql);

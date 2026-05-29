@@ -61,6 +61,12 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly id: import('./ids.js').AnalyzerId;
   readonly title: string;
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  // Fixed Signal K self-paths this analyzer needs buffered that are not
+  // discovered from the live tree (engines and battery banks are discovered;
+  // weather leaves are fixed canonical strings). The lifecycle subscribes the
+  // union across enabled analyzers, so an analyzer declares its own data need
+  // here instead of index.ts special-casing it by id.
+  readonly watchedPaths?: ReadonlyArray<string>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
   // Optional. When omitted, the TriggerRouter publishes via

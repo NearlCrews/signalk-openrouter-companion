@@ -78,11 +78,6 @@ export function PromptDrawer({ analyzerId, ui, value, onChange, onReset, onClose
         >
           Close
         </button>
-        {ui.promptError && (
-          <span style={{ ...S.testStatus, ...S.testErr }} role="status" aria-live="polite">
-            {ui.promptError}
-          </span>
-        )}
       </div>
     </div>
   );

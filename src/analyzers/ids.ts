@@ -1,7 +1,7 @@
-// Bare-string analyzer ids and their human-readable titles, kept here
-// (not in registry-with-prompts) to avoid a circular import between
-// registry and analyzer modules. The default-system-prompt registry lives
-// in core/api.ts where it's adjacent to the route handler that needs it.
+// Bare-string analyzer ids and their human-readable titles, kept here (free of
+// analyzer-class imports) to avoid a circular import between registry and
+// analyzer modules. The factory map and the default-system-prompt registry
+// both live in registry.ts, which already imports every analyzer module.
 export const ANALYZER_IDS = [
   'maintenance',
   'health',

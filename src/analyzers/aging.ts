@@ -9,6 +9,7 @@ import { asFiniteNumber, DAY_MS, fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
 import {
   escapeSqlLiteral,
+  flattenSql,
   indexColumns,
   QUESTDB_SELF_CONTEXT,
   quotedPathList,
@@ -231,7 +232,7 @@ async function queryWindow(
   // query execution leak into last(value); pinning ts <= firedAt prevents it.
   const fromIso = new Date(firedMs - days * DAY_MS).toISOString();
   const toIso = new Date(firedMs).toISOString();
-  const sql = `
+  const sql = flattenSql(`
     SELECT path, first(value) AS first_val, last(value) AS last_val, count() AS n
     FROM signalk
     WHERE context = '${escapedCtx}'
@@ -239,9 +240,7 @@ async function queryWindow(
       AND ts > '${fromIso}'
       AND ts <= '${toIso}'
     GROUP BY path
-  `
-    .trim()
-    .replace(/\s+/g, ' ');
+  `);
 
   // A query fault propagates: aging requires QuestDB, so a fault is a real
   // analyzer failure and must surface as a failure report, not a silent skip.

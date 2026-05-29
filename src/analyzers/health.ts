@@ -8,6 +8,7 @@ import { DAY_MS, fmtNumber } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
 import {
   asTreeMap,
+  isBankNode,
   readBankSnapshot,
   readNumberAt,
   type BankSnapshot as SkBankSnapshot,
@@ -148,15 +149,4 @@ function collectCells(node: unknown): CellSnapshot[] {
     }
   }
   return out.sort((a, b) => a.index - b.index);
-}
-
-// Canonical fields any real battery bank subtree exposes. Mirrors the gate
-// in src/analyzers/maintenance.ts so both analyzers reject metadata leaves
-// the same way.
-const BANK_FIELD_KEYS: ReadonlyArray<string> = ['voltage', 'current', 'capacity', 'temperature'];
-
-function isBankNode(node: unknown): boolean {
-  if (typeof node !== 'object' || node === null) return false;
-  if ('value' in (node as object)) return false;
-  return BANK_FIELD_KEYS.some((k) => k in (node as object));
 }

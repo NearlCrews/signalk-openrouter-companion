@@ -27,6 +27,14 @@ export function quotedPathList(paths: readonly string[]): string {
 // returns. Analyzer queries must filter on this or they match no rows.
 export const QUESTDB_SELF_CONTEXT = 'self';
 
+// Collapse a multi-line template-literal SQL string to a single space-separated
+// line before sending it over the /exec query string. The trend analyzers all
+// author SQL as indented template literals for readability; this is the shared
+// flatten so the regex cannot drift between them.
+export function flattenSql(sql: string): string {
+  return sql.trim().replace(/\s+/g, ' ');
+}
+
 // Build a name-to-index lookup for a QueryResult's columns. Cheaper and less
 // repetitive than calling r.columns.findIndex per field at the call site.
 export function indexColumns(r: QueryResult): Map<string, number> {

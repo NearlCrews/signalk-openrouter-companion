@@ -17,7 +17,7 @@ src/
 ├── analyzers/
 │   ├── Analyzer.ts           Shared interface, TriggerSpec union, AnalyzerDeps
 │   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
-│   ├── registry.ts           ANALYZER_FACTORIES: per-id constructor map driven by ANALYZER_IDS
+│   ├── registry.ts           ANALYZER_FACTORIES + ANALYZER_DEFAULT_SYSTEM_PROMPTS: per-id maps driven by ANALYZER_IDS
 │   ├── maintenance.ts        State: engine-session narrative
 │   ├── health.ts             State: daily battery snapshot
 │   ├── alerts.ts             Transition: threshold crossings
@@ -29,7 +29,7 @@ src/
 │   ├── index.js              Module Federation entry stub (Webpack emits remoteEntry around this)
 │   └── PluginConfigurationPanel.jsx  React 19 panel exposed as `./PluginConfigurationPanel`
 └── core/
-    ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime; DEFAULT_SYSTEM_PROMPTS
+    ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
     ├── engineDetector.ts     Per-engine RPM session state machine, persisted across restarts
@@ -56,6 +56,7 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly id: AnalyzerId;
   readonly title: string;
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  readonly watchedPaths?: ReadonlyArray<string>;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
   publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
@@ -65,6 +66,8 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
 `AnalyzerId` is the string-literal union derived from `ANALYZER_IDS` in `src/analyzers/ids.ts`; a typo in a class's `readonly id` won't compile. `AnalysisInput = Record<string, unknown>` so analyzer-specific input interfaces should `extends AnalysisInput`.
 
 `collectContext` returns `null` to mean "no report for this trigger" (e.g., engine-stop with too short a session, or a trend window without enough data). `buildPrompt` is pure: given a snapshot, it produces the prompt halves. `publishOutput` is optional: when omitted, the `TriggerRouter` publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'` (informational, no N2K alert PGN). Override only when an analyzer needs a different path or state; transition analyzers like `alerts` use `deps.publisher.publishOnPath` with a canonical per-event path (`notifications.electrical.batteries.<bankId>.<kind>`), explicit alert state, and an `alertId` from `alertIdFor(path)` so [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) emits a stable PGN 126983 / 126985 pair.
+
+`watchedPaths` is optional: an analyzer sets it to a fixed list of Signal K paths it needs buffered that are not discovered from the live tree (engines and battery banks are discovered; `forecast`'s weather leaves are fixed strings). The lifecycle in `index.ts` subscribes the union of `watchedPaths` across enabled analyzers, so no analyzer's data need is hardcoded by id in the lifecycle.
 
 ### Standardized triggers contract
 
@@ -96,12 +99,12 @@ Trend analyzers own QuestDB queries; state analyzers don't, so a daily health re
 
 The `forecast` analyzer broadens the Companion past engine and battery telemetry: it reads how environmental conditions are changing and publishes a plain-prose short-term weather outlook. AccuWeather, as integrated by `signalk-virtual-weather-sensors`, reports current conditions only, so the prediction here is the LLM extrapolating an outlook from observed trends, anchored on the latest reading.
 
-**Two input path families.** The analyzer is explicitly aware of two distinct families of Signal K input paths, and subscribes whatever subset `app.streambundle.getAvailablePaths()` reports as present:
+**Two input path families.** The analyzer is explicitly aware of two distinct families of Signal K input paths. It declares the full list via `Analyzer.watchedPaths`, and the lifecycle subscribes them unconditionally (not filtered by `app.streambundle.getAvailablePaths()`) so a producer that starts after the plugin is still captured; `collectContext` then reports whichever subset actually produced data:
 
 - **Canonical paths** are the Signal K 1.8.2 standard leaves, provider-agnostic so a real onboard sensor or the weather plugin can feed them: `environment.outside.pressure`, `environment.outside.temperature`, `environment.outside.dewPointTemperature`, `environment.outside.relativeHumidity`, `environment.wind.speedOverGround`, `environment.wind.directionTrue`.
 - **Virtual Weather Sensor extension paths** are producer-namespaced under `environment.weather.*`, emitted by `signalk-virtual-weather-sensors` (or another producer) and present only when that plugin feeds them: `environment.weather.speedGust`, `environment.weather.cloudCover`, `environment.weather.cloudCeiling`, `environment.weather.visibility`, `environment.weather.precipitationLastHour`, `environment.weather.temperatureDeparture24h`.
 
-Both lists live as static `WEATHER_CANONICAL_PATHS` / `WEATHER_EXTENSION_PATHS` constants in `src/core/paths.ts`. Each buffered value keeps its `$source` so the prompt distinguishes an AccuWeather-sourced reading from a real onboard sensor.
+Both lists live as static `WEATHER_CANONICAL_PATHS` / `WEATHER_EXTENSION_PATHS` constants in `src/core/paths.ts`, and the analyzer exposes their union as its `watchedPaths` so the lifecycle subscribes them generically. Each buffered value keeps its `$source` so the prompt distinguishes an AccuWeather-sourced reading from a real onboard sensor.
 
 **Graceful degradation.** The analyzer is source-agnostic and never hard-depends on the weather plugin. On a canonical-only feed it still produces a forecast: pressure tendency, wind veer or back, and temperature/dewpoint convergence carry the prediction. When the extension paths are also present the outlook is enriched, since a lowering cloud ceiling, collapsing visibility, precipitation onset, and the 24h temperature departure are strong leading indicators. If less than ~1h of history is buffered and no QuestDB baseline is reachable, `collectContext` returns `null` and the tick is skipped, spending no OpenRouter call.
 
@@ -145,7 +148,7 @@ npm run clean          # rm -rf dist public
 
 Outputs:
 
-- `dist/index.js` (single ESM backend bundle, ~138 KB)
+- `dist/index.js` (single ESM backend bundle, ~169 KB)
 - `dist/*.d.ts` (TypeScript declarations)
 - `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~18 KB total)
 
@@ -159,7 +162,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-235 tests across 21 files cover:
+236 tests across 21 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
@@ -260,7 +263,7 @@ Step by step:
 
 4. Add the analyzer to `src/analyzers/registry.ts::ANALYZER_FACTORIES`. The factory closure forwards the cfg sub-object fields the constructor wants. `index.ts` iterates `ANALYZER_IDS` and instantiates via this map; no extra wiring in `index.ts` is needed unless the analyzer introduces a brand-new event source (like `EngineDetector` or `BatteryMonitor`).
 
-5. Register the default prompt in `src/core/api.ts::DEFAULT_SYSTEM_PROMPTS` so `GET /api/analyzers/:id/prompt` can serve it.
+5. Register the default prompt in `src/analyzers/registry.ts::ANALYZER_DEFAULT_SYSTEM_PROMPTS` (next to the factory map) so `GET /api/analyzers/:id/prompt` can serve it.
 
 6. Add the config block (including `customSystemPrompt?: string`) to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS`. Use `pluginPutPath('myname')` for the default PUT path.
 
