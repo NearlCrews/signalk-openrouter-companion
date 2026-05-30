@@ -48,6 +48,10 @@
   "bugs": {
     "url": "https://github.com/NearlCrews/signalk-openrouter-companion/issues"
   },
+  "funding": {
+    "type": "buymeacoffee",
+    "url": "https://www.buymeacoffee.com/nearlcrews"
+  },
   "peerDependencies": {
     "@signalk/server-api": ">=2.24.0 <3"
   },

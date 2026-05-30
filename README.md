@@ -4,6 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/signalk-openrouter-companion.svg)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![License](https://img.shields.io/github/license/NearlCrews/signalk-openrouter-companion.svg)](LICENSE)
 [![CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/nearlcrews)
 
 Runs LLM analyzers over your vessel's propulsion, electrical, and weather
 telemetry and writes the results back as plain-prose Signal K notifications:
@@ -137,6 +138,9 @@ severity meets the configured floor.
 Apache-2.0: see [LICENSE](LICENSE).
 
 ## Support
+
+Find this plugin useful? You can support its continued development by
+[buying me a coffee](https://www.buymeacoffee.com/nearlcrews).
 
 - [Report a bug](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=bug_report.yml)
 - [Request a feature](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=feature_request.yml)
