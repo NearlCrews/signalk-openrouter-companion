@@ -1,15 +1,17 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { AlertAnalyzer } from '../src/analyzers/alerts.js';
-import { RollingBuffer } from '../src/core/buffer.js';
+import type { RollingBuffer } from '../src/core/buffer.js';
+import { Logger } from '../src/core/logger.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
   cleanupTmpDir,
   firstNotificationValue,
   type MockApp,
   makeAnalyzerDeps,
+  makeBuffer,
   makeMockApp,
   makeTmpDir,
 } from './_mocks.js';
@@ -68,7 +70,7 @@ describe('AlertAnalyzer', () => {
 
   it('collectContext returns null without a battery-event ctx', async () => {
     const a = new AlertAnalyzer(makeCfg());
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
@@ -80,7 +82,7 @@ describe('AlertAnalyzer', () => {
 
   it('collectContext builds context for low-soc-enter', async () => {
     const a = new AlertAnalyzer(makeCfg());
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
@@ -104,7 +106,7 @@ describe('AlertAnalyzer', () => {
 
   it('publishOutput sends an alert-state notification on enter events', async () => {
     const a = new AlertAnalyzer(makeCfg());
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
@@ -131,7 +133,7 @@ describe('AlertAnalyzer', () => {
 
   it('publishOutput truncates long alert messages to fit PGN 126985 alertTextDescription', async () => {
     const a = new AlertAnalyzer(makeCfg());
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
@@ -156,7 +158,7 @@ describe('AlertAnalyzer', () => {
 
   it('publishOutput leaves short messages unchanged', async () => {
     const a = new AlertAnalyzer(makeCfg());
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
@@ -175,7 +177,7 @@ describe('AlertAnalyzer', () => {
 
   it('publishOutput sends a normal-state notification on exit events', async () => {
     const a = new AlertAnalyzer(makeCfg());
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const publisher = new ReportPublisher({
       app,
       pluginId: 'orcb',
@@ -194,5 +196,107 @@ describe('AlertAnalyzer', () => {
     expect(v.state).toBe('normal');
     // Exit is visual-only so `signalk-nmea2000-emitter-cannon` clears the cached PGN without re-pinging audible.
     expect(v.method).toEqual(['visual']);
+  });
+
+  it('collectContext and buildPrompt surface the cell-imbalance line for imbalance events', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const buf = makeBuffer();
+    const publisher = new ReportPublisher({
+      app,
+      pluginId: 'orcb',
+      logPath: join(dir, 'reports.jsonl'),
+    });
+    app.setSelfPath('electrical.batteries', {
+      starter: { voltage: { value: 12.8 }, capacity: { stateOfCharge: { value: 0.9 } } },
+    });
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'starter',
+      batteryEvent: { subkind: 'cell-imbalance-enter', imbalanceV: 0.12 },
+    };
+    const input = await a.collectContext(ctx, makeDeps(app, buf, publisher));
+    if (input == null) throw new Error('expected a cell-imbalance input');
+    expect(input.subkind).toBe('cell-imbalance-enter');
+    expect(input.eventData.imbalanceV).toBe(0.12);
+    const prompt = a.buildPrompt(input);
+    // fmtUnit renders to 3 decimals: 0.12 becomes 0.120 V.
+    expect(prompt.user).toContain('Triggering cell imbalance: 0.120 V');
+    expect(prompt.user).toContain('Bank: starter');
+    // The SoC line is omitted when the event carries no soc.
+    expect(prompt.user).not.toContain('Triggering SoC:');
+  });
+
+  it('publishOutput sends an alert-state notification on the cellImbalance path for enter events', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const buf = makeBuffer();
+    const publisher = new ReportPublisher({
+      app,
+      pluginId: 'orcb',
+      logPath: join(dir, 'reports.jsonl'),
+    });
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'starter',
+      batteryEvent: { subkind: 'cell-imbalance-enter', imbalanceV: 0.12 },
+    };
+    await a.publishOutput?.('Starter cell imbalance 0.12 V.', ctx, makeDeps(app, buf, publisher));
+    expect(app.published).toHaveLength(1);
+    const v = firstNotificationValue(app.published[0]?.delta);
+    // Cell-imbalance events route to their own per-bank canonical path, distinct
+    // from the lowSoc path, so each gets its own PGN 126983 cache slot.
+    expect(v.path).toBe('notifications.electrical.batteries.starter.cellImbalance');
+    expect(v.state).toBe('alert');
+    expect(v.method).toEqual(['visual', 'sound']);
+    expect(typeof v.alertId).toBe('number');
+  });
+
+  it('publishOutput sends a normal-state cell-imbalance notification on exit events', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const buf = makeBuffer();
+    const publisher = new ReportPublisher({
+      app,
+      pluginId: 'orcb',
+      logPath: join(dir, 'reports.jsonl'),
+    });
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'starter',
+      batteryEvent: { subkind: 'cell-imbalance-exit', imbalanceV: 0.01 },
+    };
+    await a.publishOutput?.('Starter cells balanced.', ctx, makeDeps(app, buf, publisher));
+    const v = firstNotificationValue(app.published[0]?.delta);
+    // Exit re-uses the same cellImbalance path as enter, with state=normal.
+    expect(v.path).toBe('notifications.electrical.batteries.starter.cellImbalance');
+    expect(v.state).toBe('normal');
+    expect(v.method).toEqual(['visual']);
+  });
+
+  it('publishOutput discards the result and logs when subkind or bankId is missing', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const buf = makeBuffer();
+    const publisher = new ReportPublisher({
+      app,
+      pluginId: 'orcb',
+      logPath: join(dir, 'reports.jsonl'),
+    });
+    const errorSpy = vi.fn();
+    const deps = {
+      ...makeDeps(app, buf, publisher),
+      logger: new Logger({ debug: vi.fn(), error: errorSpy }),
+    };
+    // A battery-event ctx with no batteryEvent leaves subkind undefined, so the
+    // guard at alerts.publishOutput fires: the LLM text is discarded after the
+    // budget was already spent, which is why it is logged rather than silent.
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'starter',
+    };
+    await a.publishOutput?.('text that should be discarded', ctx, deps);
+    expect(app.published).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('missing subkind or bankId'));
   });
 });

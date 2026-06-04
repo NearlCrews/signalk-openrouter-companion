@@ -82,6 +82,11 @@ export const SOG_PATH = 'navigation.speedOverGround';
 // canonical path list cannot drift.
 export const WEATHER_PRESSURE_PATH = 'environment.outside.pressure';
 
+// Wind direction (radians true): named separately for the same reason as the
+// pressure path. The forecast analyzer keys its circular-mean special case off
+// this exact string, so the gate and the canonical path list cannot drift.
+export const WIND_DIRECTION_PATH = 'environment.wind.directionTrue';
+
 // Weather telemetry the forecast ("Weather Outlook Advisor") analyzer reads.
 // Two families. Canonical paths are Signal K 1.8.2 standard leaves any
 // barometer/anemometer or weather plugin can feed. Extension paths are the
@@ -96,7 +101,7 @@ export const WEATHER_CANONICAL_PATHS = [
   'environment.outside.dewPointTemperature',
   'environment.outside.relativeHumidity',
   'environment.wind.speedOverGround',
-  'environment.wind.directionTrue',
+  WIND_DIRECTION_PATH,
 ] as const;
 
 export const WEATHER_EXTENSION_PATHS = [

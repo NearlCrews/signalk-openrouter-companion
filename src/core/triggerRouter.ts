@@ -96,7 +96,7 @@ export class TriggerRouter {
     } catch (err) {
       this.deps.logger.error(`${a.id}: ${stringify(err)}`);
       await this.deps.publisher
-        .publishFailure(a.id, ctx, err)
+        .publishFailure(a.id, ctx, err, { audible: a.failureAudible })
         .catch((e) =>
           this.deps.logger.debug(`${a.id}: failed to publish failure: ${stringify(e)}`),
         );

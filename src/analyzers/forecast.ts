@@ -6,6 +6,7 @@ import {
   WEATHER_CANONICAL_PATHS,
   WEATHER_EXTENSION_PATHS,
   WEATHER_PRESSURE_PATH,
+  WIND_DIRECTION_PATH,
 } from '../core/paths.js';
 import {
   escapeSqlLiteral,
@@ -16,6 +17,7 @@ import {
   quotedPathList,
 } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
+import { isSeverityFloor } from '../severityFloors.js';
 import {
   type AnalyzerTriggerCfg,
   FORECAST_DEFAULT_SEVERITY_FLOOR,
@@ -42,8 +44,10 @@ const TENDENCY_HOURS = 3;
 const PA_PER_HPA = 100;
 
 // Wind direction is a circular quantity (radians true): its hourly buckets
-// need a circular mean, not an arithmetic one that breaks across the 0/2pi wrap.
-const WIND_DIRECTION_PATH = 'environment.wind.directionTrue';
+// need a circular mean, not an arithmetic one that breaks across the 0/2pi
+// wrap. The path string is single-sourced as WIND_DIRECTION_PATH in paths.ts,
+// imported above, so the bucketMeans circular gate below cannot drift from the
+// canonical path list.
 
 // Four-level severity scale, ordered weakest to strongest so the array index
 // doubles as the rank used for the severity-floor comparison.
@@ -92,7 +96,7 @@ const WEATHER_PATH_META: Record<string, WeatherPathMeta> = {
     label: 'wind speed',
     unit: 'm/s',
   },
-  'environment.wind.directionTrue': {
+  [WIND_DIRECTION_PATH]: {
     family: 'canonical',
     label: 'wind direction (true)',
     unit: 'rad',
@@ -310,7 +314,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
 }
 
 function normalizeFloor(v: unknown): SeverityFloor {
-  return v === 'severe' || v === 'moderate' || v === 'minor' ? v : FORECAST_DEFAULT_SEVERITY_FLOOR;
+  return isSeverityFloor(v) ? v : FORECAST_DEFAULT_SEVERITY_FLOOR;
 }
 
 // Slice the buffer entries into TREND_WINDOW_HOURS hourly-mean buckets, oldest

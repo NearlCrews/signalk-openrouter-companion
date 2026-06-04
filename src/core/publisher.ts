@@ -112,13 +112,24 @@ export class ReportPublisher {
   // that is also where its successful report lands; an analyzer that overrides
   // publishOutput with its own path (alerts publishes per bank) still has its
   // failures collected here on the one canonical channel.
-  async publishFailure(analyzerId: string, ctx: TriggerCtx, err: unknown): Promise<void> {
+  // `audible` is the failing analyzer's `failureAudible` flag (see
+  // Analyzer.failureAudible for the rationale). audible=false emits method
+  // ['visual'] (PGN 126983 Silenced); audible=true keeps 'sound' (Active). The
+  // 'warn' state keeps the failure visible either way.
+  async publishFailure(
+    analyzerId: string,
+    ctx: TriggerCtx,
+    err: unknown,
+    opts: { audible?: boolean } = {},
+  ): Promise<void> {
     const now = new Date();
     const reason = stringify(err);
     const message = `${analyzerId} report unavailable: ${reason}`;
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(headlineOf(message), 'warn', now, notificationReportPath(analyzerId)),
+      this.makeDelta(headlineOf(message), 'warn', now, notificationReportPath(analyzerId), {
+        method: opts.audible ? ['visual', 'sound'] : ['visual'],
+      }),
       SKVersion.v1,
     );
     await this.appendLog({
@@ -146,7 +157,9 @@ export class ReportPublisher {
     const now = new Date();
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(headlineOf(displayText), override.state, now, override.path, override.alertId),
+      this.makeDelta(headlineOf(displayText), override.state, now, override.path, {
+        alertId: override.alertId,
+      }),
       SKVersion.v1,
     );
     await this.appendLog(this.buildEntry(override.logText ?? displayText, meta, now));
@@ -176,19 +189,22 @@ export class ReportPublisher {
     state: NotificationState,
     now: Date,
     path: string,
-    alertId?: number,
+    opts: { alertId?: number; method?: string[] } = {},
   ): SignalKNotificationDelta {
     const value: SignalKNotificationValue = {
       state,
-      method: methodFor(state),
+      // `method` defaults to the state's audible/visual mapping; callers that
+      // need a state's normal mapping overridden (failures stay visual-only)
+      // pass an explicit method.
+      method: opts.method ?? methodFor(state),
       message: text,
     };
-    if (alertId !== undefined) {
+    if (opts.alertId !== undefined) {
       // Dual-emit: top-level for the existing emitter-cannon sibling, plus
       // the spec-clean `data` slot. Drop the top-level form once the sibling
       // is updated to read from `value.data.alertId`.
-      value.alertId = alertId;
-      value.data = { alertId };
+      value.alertId = opts.alertId;
+      value.data = { alertId: opts.alertId };
     }
     return {
       context: this.cfg.app.selfContext ?? 'vessels.self',

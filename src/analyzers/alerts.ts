@@ -80,6 +80,9 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   readonly id = 'alerts';
   readonly title = ANALYZER_TITLES.alerts;
   readonly triggers: ReadonlyArray<TriggerSpec>;
+  // Safety analyzer: a sustained battery-event failure must still beep, so this
+  // opts into audible failure. See Analyzer.failureAudible for the rationale.
+  readonly failureAudible = true;
   private readonly systemPrompt: string;
 
   constructor(cfg: AlertCfg) {

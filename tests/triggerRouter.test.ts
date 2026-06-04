@@ -77,6 +77,55 @@ describe('TriggerRouter', () => {
     expect(deps.llm.complete).not.toHaveBeenCalled();
   });
 
+  // Pins the DOCUMENTED P2-6 behavior: when the shared daily budget is
+  // exhausted, runOne returns before any publish, so a battery-event run
+  // (the alerts safety analyzer) publishes NOTHING, not even a failure
+  // notification. The crossing is still detected upstream by batteryMonitor;
+  // only the helm notification is gated. This is called out in the schema
+  // description and README as "not your sole battery safety alarm". A future
+  // change must not silently alter this, hence the lock.
+  it('publishes nothing on a budget-exhausted run (documented safety-alert gating)', async () => {
+    const alerts = makeAnalyzer({
+      id: 'alerts',
+      triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
+      failureAudible: true,
+    });
+    const deps = makeDeps();
+    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const router = new TriggerRouter([alerts], deps);
+    await router.dispatch(
+      'battery-event',
+      { kind: 'battery-event', firedAt: new Date(), bankId: 'house' },
+      { batterySubkind: 'low-soc-enter' },
+    );
+    expect(deps.budget.recordCall).not.toHaveBeenCalled();
+    expect(alerts.publishOutput).not.toHaveBeenCalled();
+    expect(deps.publisher.publishFailure).not.toHaveBeenCalled();
+    expect(deps.publisher.publishReport).not.toHaveBeenCalled();
+  });
+
+  it('returns the "budget-exhausted" outcome for a battery-event run past the daily cap', async () => {
+    // Complements the no-publish lock above by pinning the RunOutcome value
+    // itself, the signal the REST fire endpoint and in-process callers read to
+    // tell a real report from a silent skip. runById surfaces the outcome
+    // directly, where dispatch returns void.
+    const alerts = makeAnalyzer({
+      id: 'alerts',
+      triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
+    });
+    const deps = makeDeps();
+    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const router = new TriggerRouter([alerts], deps);
+    const outcome = await router.runById('alerts', {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+    });
+    expect(outcome).toBe('budget-exhausted');
+    expect(deps.llm.complete).not.toHaveBeenCalled();
+  });
+
   it('isolates per-analyzer failures via Promise.allSettled', async () => {
     const bad = makeAnalyzer({
       id: 'bad',

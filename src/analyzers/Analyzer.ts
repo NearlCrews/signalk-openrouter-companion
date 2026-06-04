@@ -67,6 +67,13 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   // union across enabled analyzers, so an analyzer declares its own data need
   // here instead of index.ts special-casing it by id.
   readonly watchedPaths?: ReadonlyArray<string>;
+  // When true, a failed analyzer run publishes an AUDIBLE failure notification
+  // (method ['visual','sound']); when false or omitted it publishes visual-only
+  // (silent). Default silent: the narrative analyzers are best-effort, so a
+  // failed monthly aging summary or weather outlook must not sound the helm
+  // alarm. The safety `alerts` analyzer sets this true, so a sustained failure
+  // to produce a battery alert still beeps. See publisher.publishFailure.
+  readonly failureAudible?: boolean;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
   // Optional. When omitted, the TriggerRouter publishes via

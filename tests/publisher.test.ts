@@ -152,7 +152,7 @@ describe('ReportPublisher', () => {
     expect(app.appErrorMessages.some((m) => m.includes('log append failed'))).toBe(true);
   });
 
-  it('publishFailure emits a warn-state notification on the analyzer report path', async () => {
+  it('publishFailure emits a warn-state notification, visual-only and silent, on the report path', async () => {
     await publisher.publishFailure(
       'maintenance',
       {
@@ -165,9 +165,28 @@ describe('ReportPublisher', () => {
     const v = firstNotificationValue(app.published[0]?.delta);
     expect(v.path).toBe('notifications.openrouter-companion.maintenance.report');
     expect(v.state).toBe('warn');
-    // warn state is audible so the chartplotter user actually notices the LLM failed.
-    expect(v.method).toEqual(['visual', 'sound']);
+    // The failure is visible (warn state) but NOT audible: a transient LLM or
+    // QuestDB fault on a best-effort narrative analyzer must not sound the helm
+    // alarm louder than a success report, which is silent at 'nominal'. method
+    // omits 'sound', so PGN 126983 is Silenced rather than Active.
+    expect(v.method).toEqual(['visual']);
     expect(v.message).toContain('upstream 503');
+  });
+
+  it('publishFailure stays audible when the failing analyzer is audible-on-failure', async () => {
+    // The safety `alerts` analyzer passes audible: true so a sustained failure
+    // to produce a battery alert still beeps at the helm. The narrative
+    // analyzers (above) default to silent.
+    await publisher.publishFailure(
+      'alerts',
+      { kind: 'battery-event', firedAt: new Date() },
+      new Error('upstream 503'),
+      { audible: true },
+    );
+    expect(app.published).toHaveLength(1);
+    const v = firstNotificationValue(app.published[0]?.delta);
+    expect(v.state).toBe('warn');
+    expect(v.method).toEqual(['visual', 'sound']);
   });
 });
 
