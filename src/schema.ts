@@ -458,7 +458,7 @@ function buildSchemaInner(): PluginSchema {
           alerts: analyzerSchemaNode({
             title: 'Battery Threshold Alerts',
             description:
-              'Sends notifications when state-of-charge or cell-balance crosses configured thresholds.',
+              'Sends notifications when state-of-charge or cell-balance crosses configured thresholds. Note: the alert text is written by an OpenRouter call, so a crossing is reported only when the call succeeds and the shared daily budget (Max OpenRouter calls per day) is not yet exhausted. If the budget is spent or OpenRouter is unreachable, a crossing may not raise a notification. Do not rely on this as your sole battery safety alarm; pair it with a hardware or BMS alarm, and set the daily budget high enough to cover your expected crossings.',
             enabledTitle: 'Enable battery threshold alerts',
             enabledDefault: DEFAULT_OPTIONS.analyzers.alerts.enabled,
             whenEnabled: {

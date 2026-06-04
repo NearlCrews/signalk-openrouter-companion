@@ -14,7 +14,7 @@ Project memory for Claude Code. Read at the start of every session.
 - Seven analyzers ship today, split by purpose. State analyzers describe "now", trend analyzers describe "over time", the alerts analyzer describes "transitions":
   - `maintenance` (state): per-engine-session narrative, fires on engine-stop. No QuestDB.
   - `health` (state): daily snapshot of every battery bank, fires on cron. No QuestDB.
-  - `alerts` (transition): real-time threshold crossings (low SoC, cell imbalance), fires on battery events.
+  - `alerts` (transition): real-time threshold crossings (low SoC, cell imbalance), fires on battery events. Known and documented design choice (not a bug): the per-bank alert is published inside `publishOutput`, which the router reaches only after the shared daily budget check and a successful OpenRouter call (`triggerRouter.ts` runOne). So a budget-exhausted or offline run does not raise the per-bank alert; on a sustained LLM failure the operator still gets an audible generic `warn` on the report path (`alerts.failureAudible = true`), and on budget exhaustion only the admin status banner moves. This is documented in the schema description and README as "not your sole battery safety alarm". If you ever want the alarm to be LLM-independent, the fix is to publish a deterministic per-bank alert on the battery event first, then enrich with LLM text; that was deferred by choice, do not treat the coupling as an undiscovered defect.
   - `aging` (trend): monthly capacity-loss trend per bank over two configurable windows (default 30 and 90 days), fires on cron. Reads QuestDB.
   - `drift` (trend): weekly engine fuel-economy and per-RPM drift vs a configurable trailing baseline (default 30 days), fires on cron. Reads QuestDB.
   - `liveness` (state): reports which watched SignalK paths have gone stale or are served by multiple sources, fires on cron. Reads the `RollingBuffer` only (`pathKeys` + `slice`); no QuestDB.
@@ -26,7 +26,7 @@ Project memory for Claude Code. Read at the start of every session.
 - TypeScript 6, ESM, Node 20.18+ (engines floor; CI tests on Node 20 and 22). esbuild bundles backend to `dist/index.js`; webpack + esbuild-loader bundles the React panel to `public/remoteEntry.js`. vitest for tests. biome for lint and format.
 - No em dashes anywhere in code, commits, or docs. Use colons, commas, or split sentences.
 - Tests live in `tests/`. Share the `_mocks.ts` harness; don't re-mock fundamentals. Use `makePluginRuntime(opts)` for any new test that builds a `PluginRuntime` literal; don't hand-roll the cfg/llm/budget/etc. boilerplate.
-- Notification paths: `notifications.openrouter-companion.<analyzer>.<...>`.
+- Notification paths: `notifications.openrouter-companion.<analyzer>.<...>`, except `alerts`, which publishes per-bank events to the SK source data path `notifications.electrical.batteries.<bank>.<kind>` (see `src/core/paths.ts::batteryAlertPath`) so third-party bridges already watching that subtree pick them up. Analyzer-run failures always land on the canonical `notifications.openrouter-companion.<analyzer>.report` channel.
 - PUT paths: `plugins.openrouter-companion.<analyzer>.<verb>`.
 - Plugin REST routes are mounted at the HTTP prefix `/plugins/signalk-openrouter-companion/api/*` via `registerWithRouter`; see `src/core/api.ts`. The shared `requireRuntime` and `requireAnalyzerId` helpers dedupe the 503 / 404 envelopes at the top of each handler.
 - Apache-2.0 license. Author is Nearl Crews (`NearlCrews@users.noreply.github.com`).

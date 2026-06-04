@@ -15,19 +15,19 @@ Requires an [OpenRouter](https://openrouter.ai) API key.
 _Beta: the `aging` and `drift` trend analyzers need a few weeks of QuestDB
 history before their reports are meaningful._
 
-## What's new in 0.5.5
+## What's new in 0.5.6
 
-0.5.5 is a maintainability and registry-compliance pass with no behavior change
-for existing installs. A four-angle cleanup consolidated duplicated logic into
-shared helpers and pushed analyzer-specific special-cases down into the shared
-extension point: the lifecycle no longer hardcodes the forecast analyzer's
-weather paths, config merging is driven by the single `ANALYZER_IDS` source of
-truth, and the per-analyzer default-prompt map moved next to the factory map.
-The plugin now also ships admin-panel screenshots, scoring full marks on the
-community SignalK plugin registry.
+0.5.6 is a review-and-hardening pass from a multi-agent code review, with no new
+analyzers and no config migration. Analyzer-run failure notifications now
+differentiate by analyzer class, so a transient OpenRouter or QuestDB fault on a
+best-effort report no longer sounds the helm alarm, while the safety alerts
+analyzer keeps its failures audible. It also fixes a latent forecast
+wind-direction bug, consolidates duplicated helpers, documents that battery
+threshold alerts depend on the LLM call and the shared daily budget, and adds 23
+tests closing coverage holes.
 
-See the [0.5.5 changelog entry](CHANGELOG.md#055---2026-05-28) and the
-[v0.5.5 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.5).
+See the [0.5.6 changelog entry](CHANGELOG.md#056---2026-06-04) and the
+[v0.5.6 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.6).
 
 ## Features
 
@@ -124,6 +124,16 @@ co-installed
 can forward to a NMEA 2000 chartplotter. The `forecast` analyzer publishes its
 outlook at `state: nominal` and escalates to an alert state when the predicted
 severity meets the configured floor.
+
+> [!IMPORTANT]
+> The `alerts` analyzer writes its alert text with an OpenRouter call, so a
+> battery crossing is reported only when that call succeeds and the shared
+> daily budget (Max OpenRouter calls per day) is not yet exhausted. If the
+> budget is spent, or OpenRouter is unreachable, a crossing may not raise a
+> notification at the helm. The underlying detection still runs, but the
+> operator-facing alarm depends on a cloud call. Do not rely on this as your
+> sole battery safety alarm: pair it with a hardware or BMS alarm, and set the
+> daily budget high enough to cover your expected crossings.
 
 ## Documentation
 

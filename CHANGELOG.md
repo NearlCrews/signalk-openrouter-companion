@@ -2,6 +2,74 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.6] - 2026-06-04
+
+A review-and-hardening pass from a multi-agent code review. No new analyzers and
+no config migration. Analyzer-run failure notifications now differentiate by
+analyzer class so a transient OpenRouter or QuestDB fault on a best-effort report
+no longer sounds the helm alarm, while the safety alerts analyzer keeps its
+failures audible. A latent forecast wind-direction bug is fixed, several
+duplicated helpers are consolidated, the battery-alert dependency on the LLM call
+and the shared daily budget is now documented, and 23 tests close coverage holes.
+
+### Added
+
+- **`Analyzer.failureAudible`**, an optional flag (default silent) that opts an
+  analyzer into audible failure notifications. The `alerts` analyzer sets it so a
+  sustained battery-alert failure still beeps; the six narrative analyzers leave
+  it unset and fail silently.
+- **`isSeverityFloor` type guard** in `src/severityFloors.ts`, derived from
+  `SEVERITY_FLOOR_PRESETS` so the accepted-value set cannot drift from the
+  presets, mirroring `isAnalyzerId`.
+- **`signalk.recommends`** ("Works well with") listing the author's companion
+  plugins that pair by real data flow: `signalk-virtual-weather-sensors` (feeds
+  the forecast analyzer's weather paths) and `signalk-nmea2000-emitter-cannon`
+  (forwards the alert notifications to NMEA 2000 PGN 126983).
+- **23 tests** closing coverage holes: emitter listener isolation and error
+  reporting, battery-monitor silence-clears-imbalance and settle-reset, health
+  `collectCells` for both BMS cell shapes, alerts cell-imbalance prompt and
+  discard guard, OpenRouter Retry-After HTTP-date and abort-at-delay, QuestDB
+  `withTimeout`, the budget write-failure log, the PUT-handler 503 and 500 paths,
+  and a lock on the documented budget-exhausted no-publish behavior.
+
+### Changed
+
+- **Analyzer-run failures now differentiate audibility by analyzer.** The six
+  narrative analyzers publish failures visual-only (`method: ['visual']`, silent)
+  so a transient fault does not sound the helm alarm louder than a success report
+  (which is silent at `nominal`); the safety `alerts` analyzer keeps its failures
+  audible (`method: ['visual','sound']`).
+- **The `TypedEmitter` base routes a throwing listener through the injected
+  plugin logger** (`app.error`) instead of `console.error`, so the only
+  `console.*` in non-panel `src` is gone and listener errors land on the Signal K
+  server log surface.
+- **Shared-helper reuse:** the engine detector drops its local `numOrNull` for
+  the identical shared `asFiniteNumber`, the forecast analyzer's `normalizeFloor`
+  uses the new `isSeverityFloor` guard, and the wind-direction path is
+  single-sourced as `WIND_DIRECTION_PATH` in `src/core/paths.ts`.
+- **The `clean` build script is now cross-platform** (Node `fs.rmSync`) instead
+  of unix-only `rm -rf`, so the SignalK plugin-ci Windows matrix runs cleanly.
+- **Dependencies refreshed** to current within range, and the
+  `@signalk/server-api` build pin moved to 2.25.0 (the peer range already allowed
+  it). `npm audit` of runtime dependencies is clean.
+
+### Fixed
+
+- **Forecast wind-direction path was duplicated in three places.** The
+  circular-mean heading calculation gates on that exact string, so editing the
+  canonical path without the other copies would have silently fallen back to an
+  arithmetic mean across the 0/2pi wrap, producing a wrong heading with no error.
+  The path is now single-sourced.
+
+### Documentation
+
+- **Documented that battery threshold alerts are LLM-and-budget contingent.** The
+  per-bank alert is written by an OpenRouter call gated by the shared daily
+  budget, so a spent budget or an outage can drop a crossing at the helm. The
+  schema description, the README, and `CLAUDE.md` now state this and advise
+  pairing with a hardware or BMS alarm. The deliberate low-SoC latch-on-silence
+  asymmetry with cell-imbalance is also documented in `src/core/batteryMonitor.ts`.
+
 ## [0.5.5] - 2026-05-28
 
 A maintainability and registry-compliance pass with no behavior change for
