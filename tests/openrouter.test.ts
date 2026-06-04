@@ -370,4 +370,59 @@ describe('OpenRouterClient', () => {
     expect(r.text).toBe('ok');
     vi.useRealTimers();
   });
+
+  it('retries on 429 honoring a Retry-After given as an HTTP-date', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    // An HTTP-date two seconds out. parseRetryAfter cannot read it as an integer
+    // count of seconds, so it falls through to Date.parse and yields a 2000ms
+    // wait measured against the current (faked) clock.
+    const retryAt = new Date(Date.now() + 2000).toUTCString();
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(
+          429,
+          { error: { code: 429, message: 'rate limit' } },
+          { 'retry-after': retryAt },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'date-ok' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    // random()=1 pins the jittered base rung at its full 500ms, well under the
+    // 2000ms Retry-After, so the parsed date is what gates the retry.
+    const c = makeClient({ random: () => 1 });
+    const p = c.complete({ system: 's', user: 'u' });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const r = await p;
+    expect(r.text).toBe('date-ok');
+    vi.useRealTimers();
+  });
+
+  it('rejects from the backoff when the caller signal is already aborted at delay time', async () => {
+    const ctrl = new AbortController();
+    // Abort inside the fetch mock, after attempt() has passed its pre-fetch
+    // aborted check. The 429 still resolves to a retry signal, so complete()
+    // then calls delay() with an already-aborted signal and takes its early
+    // reject path, before any second attempt is made.
+    fetchMock.mockImplementationOnce(async () => {
+      ctrl.abort(new Error('caller gone'));
+      return jsonResponse(
+        429,
+        { error: { code: 429, message: 'rate limit' } },
+        { 'retry-after': '1' },
+      );
+    });
+    const c = makeClient();
+    await expect(c.complete({ system: 's', user: 'u', abortSignal: ctrl.signal })).rejects.toThrow(
+      'caller gone',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

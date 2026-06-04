@@ -69,4 +69,22 @@ describe('BudgetTracker', () => {
     expect(b.canSpend()).toBe(true);
     expect(b.callsToday()).toBe(0);
   });
+
+  it('logs and does not throw when the state write fails', async () => {
+    const messages: string[] = [];
+    // statePath under a non-existent subdirectory: load reads ENOENT (the clean
+    // first-run path, which logs nothing), then recordCall's write rejects with
+    // ENOENT too. That write failure must be logged and swallowed, never thrown,
+    // and the in-memory counter must still increment.
+    const path = join(dir, 'missing-subdir', 'budget.json');
+    const b = await BudgetTracker.load({
+      maxPerDay: 3,
+      statePath: path,
+      now: () => new Date('2026-05-10T00:00:00Z'),
+      log: (m) => messages.push(m),
+    });
+    await expect(b.recordCall()).resolves.toBeUndefined();
+    expect(messages.some((m) => m.includes('budget state write failed'))).toBe(true);
+    expect(b.callsToday()).toBe(1);
+  });
 });

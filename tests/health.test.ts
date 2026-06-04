@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { HealthAnalyzer } from '../src/analyzers/health.js';
-import { RollingBuffer } from '../src/core/buffer.js';
 import {
   cleanupTmpDir,
   type MockApp,
+  makeBuffer,
   makeAnalyzerDeps as makeDeps,
   makeMockApp,
   makeTmpDir,
@@ -56,7 +56,7 @@ describe('HealthAnalyzer', () => {
   });
 
   it('collectContext returns null when no battery banks are present', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const a = new HealthAnalyzer(makeCfg());
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-10T08:00:00Z') };
     const r = await a.collectContext(ctx, makeDeps(app, buf));
@@ -64,7 +64,7 @@ describe('HealthAnalyzer', () => {
   });
 
   it('collectContext builds per-bank summary from buffer + getSelfPath', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const now = new Date('2026-05-10T08:00:00Z').getTime();
     buf.record('electrical.batteries.house.voltage', 12.6, now - 3600_000, 'bms');
     buf.record('electrical.batteries.house.voltage', 12.4, now - 1000, 'bms');
@@ -120,5 +120,59 @@ describe('HealthAnalyzer', () => {
     expect(out.system).toContain('battery');
     expect(out.user).toContain('house');
     expect(out.user).toContain('0.85');
+  });
+
+  it('collectContext collects cells from the flat cell<N>.voltage form, sorted by index', async () => {
+    const buf = makeBuffer();
+    const now = new Date('2026-05-10T08:00:00Z').getTime();
+    app.setSelfPath('electrical.batteries', {
+      house: {
+        voltage: { value: 13.2 },
+        current: { value: 1.0 },
+        capacity: { stateOfCharge: { value: 0.9 } },
+        // Inserted out of index order to prove the output is sorted by index.
+        cell2: { voltage: { value: 3.32 } },
+        cell1: { voltage: { value: 3.31 } },
+        cell3: { voltage: { value: 3.33 } },
+      },
+    });
+
+    const a = new HealthAnalyzer(makeCfg());
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date(now) };
+    const r = await a.collectContext(ctx, makeDeps(app, buf));
+    if (!r) throw new Error('expected collectContext result');
+    expect(r.banks[0]?.cells).toEqual([
+      { index: 1, voltage: 3.31 },
+      { index: 2, voltage: 3.32 },
+      { index: 3, voltage: 3.33 },
+    ]);
+    // The sorted per-cell voltages reach buildPrompt's cells line.
+    const out = a.buildPrompt(r);
+    expect(out.user).toContain('cells: 1=3.310 2=3.320 3=3.330');
+  });
+
+  it('collectContext collects cells from the nested cells.<n>.voltage form, sorted by index', async () => {
+    const buf = makeBuffer();
+    const now = new Date('2026-05-10T08:00:00Z').getTime();
+    app.setSelfPath('electrical.batteries', {
+      starter: {
+        voltage: { value: 12.8 },
+        cells: {
+          '1': { voltage: { value: 3.4 } },
+          '0': { voltage: { value: 3.39 } },
+        },
+      },
+    });
+
+    const a = new HealthAnalyzer(makeCfg());
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date(now) };
+    const r = await a.collectContext(ctx, makeDeps(app, buf));
+    if (!r) throw new Error('expected collectContext result');
+    expect(r.banks[0]?.cells).toEqual([
+      { index: 0, voltage: 3.39 },
+      { index: 1, voltage: 3.4 },
+    ]);
+    const out = a.buildPrompt(r);
+    expect(out.user).toContain('cells: 0=3.390 1=3.400');
   });
 });

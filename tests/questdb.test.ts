@@ -61,6 +61,49 @@ describe('QuestDBClient', () => {
     const q = new QuestDBClient({ url: 'http://localhost:9000' });
     await expect(q.query('SELECT 1')).rejects.toThrow(/HTTP 500/);
   });
+
+  it('withTimeout propagates an already-aborted caller signal to the request', async () => {
+    // Real fetch rejects synchronously when handed an already-aborted signal;
+    // the stub mirrors that so probe surfaces the abort. The branch under test
+    // is withTimeout's caller?.aborted fast path, which aborts the internal
+    // controller before the listener would ever fire.
+    fetchMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+      if (init.signal.aborted) return Promise.reject(new Error('aborted before fetch'));
+      return Promise.resolve(ok({ dataset: [[1]] }));
+    });
+    const controller = new AbortController();
+    controller.abort(new Error('caller already done'));
+    const q = new QuestDBClient({ url: 'http://localhost:9000' });
+    await expect(q.probe(controller.signal)).rejects.toThrow();
+    const firstCall = fetchMock.mock.calls[0];
+    if (!firstCall) throw new Error('expected fetch to be called');
+    const init = firstCall[1] as { signal?: AbortSignal };
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('withTimeout aborts the in-flight request when the timeout fires', async () => {
+    vi.useFakeTimers();
+    try {
+      // The request never resolves on its own; it settles only when its signal
+      // aborts. That forces the win to come from withTimeout's setTimeout path.
+      fetchMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('request aborted')), {
+            once: true,
+          });
+        });
+      });
+      const q = new QuestDBClient({ url: 'http://localhost:9000' });
+      const p = q.probe();
+      // Attach the rejection handler before advancing timers so the rejection
+      // is never unhandled. The default QuestDB timeout is 30s; advance past it.
+      const expectation = expect(p).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(31_000);
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('escapeSqlLiteral', () => {
