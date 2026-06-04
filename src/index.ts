@@ -186,15 +186,18 @@ export default function createPlugin(app: ServerApiLike): {
           maxAgeMs: BUFFER_MAX_AGE_MS,
           maxEntriesPerPath: BUFFER_MAX_ENTRIES_PER_PATH,
         });
-        const detector = new EngineDetector({
-          stopRpmHz: cfg.analyzers.maintenance.engineStopRpmHzThreshold,
-          stopSettleSec: cfg.analyzers.maintenance.engineStopSettleSeconds,
-          startRpmHz: cfg.analyzers.maintenance.engineStartRpmHzThreshold,
-          startSettleSec: cfg.analyzers.maintenance.engineStartSettleSeconds,
-          watchdogSec: WATCHDOG_SEC,
-          silenceStopSec: cfg.analyzers.maintenance.engineSilenceStopSeconds,
-          sourceWindowMs: ENGINE_SOURCE_WINDOW_MS,
-        });
+        const detector = new EngineDetector(
+          {
+            stopRpmHz: cfg.analyzers.maintenance.engineStopRpmHzThreshold,
+            stopSettleSec: cfg.analyzers.maintenance.engineStopSettleSeconds,
+            startRpmHz: cfg.analyzers.maintenance.engineStartRpmHzThreshold,
+            startSettleSec: cfg.analyzers.maintenance.engineStartSettleSeconds,
+            watchdogSec: WATCHDOG_SEC,
+            silenceStopSec: cfg.analyzers.maintenance.engineSilenceStopSeconds,
+            sourceWindowMs: ENGINE_SOURCE_WINDOW_MS,
+          },
+          logger,
+        );
         // Resume an engine session that was in progress when the plugin last
         // stopped, so a restart mid-trip neither splits nor loses the session.
         try {
@@ -217,13 +220,16 @@ export default function createPlugin(app: ServerApiLike): {
             logger.debug(`engine-detector state save failed: ${stringify(err)}`);
           });
         };
-        const monitor = new BatteryMonitor({
-          lowSocPercent: cfg.analyzers.alerts.lowSocPercent,
-          socExitHysteresis: cfg.analyzers.alerts.socExitHysteresis,
-          cellImbalanceV: cfg.analyzers.alerts.cellImbalanceV,
-          imbalanceSettleSec: cfg.analyzers.alerts.imbalanceSettleSec,
-          sourceWindowMs: BATTERY_SOURCE_WINDOW_MS,
-        });
+        const monitor = new BatteryMonitor(
+          {
+            lowSocPercent: cfg.analyzers.alerts.lowSocPercent,
+            socExitHysteresis: cfg.analyzers.alerts.socExitHysteresis,
+            cellImbalanceV: cfg.analyzers.alerts.cellImbalanceV,
+            imbalanceSettleSec: cfg.analyzers.alerts.imbalanceSettleSec,
+            sourceWindowMs: BATTERY_SOURCE_WINDOW_MS,
+          },
+          logger,
+        );
         const llm = new OpenRouterClient({
           apiKey: cfg.openrouter.apiKey,
           baseUrl: cfg.openrouter.baseUrl,

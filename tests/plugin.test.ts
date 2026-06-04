@@ -308,4 +308,87 @@ describe('plugin lifecycle', () => {
     vi.unstubAllGlobals();
     await plugin.stop();
   });
+
+  it('invokes the PUT handler callback with FAILED 503 before the router is ready', async () => {
+    app.availablePaths = ['propulsion.port.revolutions'];
+    const plugin = createPlugin(app as never);
+    // Do NOT await _whenReady: the PUT handler is registered synchronously in
+    // start(), but activeRouter is only set by the deferred init, so invoking it
+    // now exercises the not-ready guard. questdb is disabled so the deferred
+    // init does not probe the network.
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
+      () => {},
+    );
+    const put = app.registeredPuts.find(
+      (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
+    );
+    expect(put).toBeDefined();
+
+    const cb = vi.fn();
+    const sync = (put?.handler as (...args: unknown[]) => unknown)(
+      'vessels.self',
+      'plugins.openrouter-companion.maintenance.run',
+      { reason: 'manual' },
+      cb,
+    );
+    expect(sync).toEqual({ state: 'PENDING' });
+    // The not-ready branch acks synchronously (no await before the ack), so the
+    // callback has already fired exactly once by the time the handler returns.
+    expect(cb).toHaveBeenCalledTimes(1);
+    const arg = cb.mock.calls[0]?.[0] as {
+      state: string;
+      statusCode?: number;
+      message?: string;
+    };
+    expect(arg.state).toBe('FAILED');
+    expect(arg.statusCode).toBe(503);
+    expect(arg.message).toMatch(/not fully started/);
+
+    // Let the deferred init settle so stop() tears down a fully-wired runtime.
+    await plugin._whenReady();
+    await plugin.stop();
+  });
+
+  it('invokes the PUT handler callback with FAILED 500 when dispatch throws', async () => {
+    app.availablePaths = ['propulsion.port.revolutions'];
+    const dispatchSpy = vi
+      .spyOn(TriggerRouter.prototype, 'dispatch')
+      .mockRejectedValue(new Error('dispatch boom'));
+    const plugin = createPlugin(app as never);
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, questdb: { enabled: false } } as never,
+      () => {},
+    );
+    // Wait for the router so the handler reaches dispatch rather than the
+    // not-ready guard.
+    await plugin._whenReady();
+    const put = app.registeredPuts.find(
+      (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
+    );
+    expect(put).toBeDefined();
+
+    const cb = vi.fn();
+    const sync = (put?.handler as (...args: unknown[]) => unknown)(
+      'vessels.self',
+      'plugins.openrouter-companion.maintenance.run',
+      { reason: 'manual' },
+      cb,
+    );
+    expect(sync).toEqual({ state: 'PENDING' });
+    await vi.waitFor(() => expect(cb).toHaveBeenCalled(), { timeout: 2000 });
+    // The acked guard means the rejected dispatch produces exactly one callback.
+    expect(cb).toHaveBeenCalledTimes(1);
+    const arg = cb.mock.calls[0]?.[0] as {
+      state: string;
+      statusCode?: number;
+      message?: string;
+    };
+    expect(arg.state).toBe('FAILED');
+    expect(arg.statusCode).toBe(500);
+    expect(arg.message).toMatch(/dispatch boom/);
+
+    dispatchSpy.mockRestore();
+    await plugin.stop();
+  });
 });

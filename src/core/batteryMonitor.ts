@@ -1,5 +1,6 @@
 import type { BatteryEventKind } from '../analyzers/Analyzer.js';
 import { TypedEmitter } from './emitter.js';
+import type { Logger } from './logger.js';
 
 export type { BatteryEventKind } from '../analyzers/Analyzer.js';
 
@@ -48,8 +49,11 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
   private readonly exitThreshold: number;
   private readonly imbalanceSettleMs: number;
 
-  constructor(private opts: BatteryMonitorOptions) {
-    super();
+  constructor(
+    private opts: BatteryMonitorOptions,
+    logger: Pick<Logger, 'error'>,
+  ) {
+    super((message) => logger.error(message));
     this.lowThreshold = opts.lowSocPercent / 100;
     this.exitThreshold = (opts.lowSocPercent + opts.socExitHysteresis) / 100;
     this.imbalanceSettleMs = opts.imbalanceSettleSec * 1000;
@@ -142,6 +146,13 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
         // The BMS went silent. observeCellV is the only other exit path and it
         // cannot run without deltas, so clear an active imbalance alert here or
         // it would stay stuck until the BMS reconnects with balanced cells.
+        // Deliberate asymmetry with low-soc: a cell-imbalance alert is a
+        // comparative diagnostic with no meaning once the cells stop reporting,
+        // so silence clears it. A low-soc alert is a depletion alarm and is NOT
+        // cleared on silence (observeSoc has no tick-side path): auto-clearing a
+        // depletion alarm because the sensor died would assert an unobservable,
+        // unsafe recovery, so low-soc deliberately latches until a live SoC
+        // sample rises back above the exit threshold. See batteryMonitor.test.ts.
         if (b.imbalanceHigh) {
           b.imbalanceHigh = false;
           this.emit({ kind: 'cell-imbalance-exit', bankId: b.bankId, ts: now, imbalanceV: 0 });

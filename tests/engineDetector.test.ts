@@ -3,15 +3,18 @@ import { EngineDetector, type EngineEvent } from '../src/core/engineDetector.js'
 
 function makeDetector() {
   const events: EngineEvent[] = [];
-  const det = new EngineDetector({
-    stopRpmHz: 1.0,
-    stopSettleSec: 10,
-    startRpmHz: 5.0,
-    startSettleSec: 5,
-    watchdogSec: 30,
-    silenceStopSec: 300,
-    sourceWindowMs: 1000,
-  });
+  const det = new EngineDetector(
+    {
+      stopRpmHz: 1.0,
+      stopSettleSec: 10,
+      startRpmHz: 5.0,
+      startSettleSec: 5,
+      watchdogSec: 30,
+      silenceStopSec: 300,
+      sourceWindowMs: 1000,
+    },
+    { error: () => {} },
+  );
   det.on('engine-start', (e) => events.push(e));
   det.on('engine-stop', (e) => events.push(e));
   det.on('possible-stop', (e) => events.push(e));

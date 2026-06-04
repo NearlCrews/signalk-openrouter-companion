@@ -23,8 +23,9 @@ const PAST_WEEK_DAYS = 7;
 // delta is meaningful. Reported as null otherwise.
 const MIN_BIN_SAMPLES = 30;
 // Below this (in Hz, i.e. rev/s) we treat the engine as off or still cranking
-// and exclude the sample from any bin. Matches the running-detect floor used
-// by the engine detector and is roughly 300 RPM.
+// and exclude the sample from any bin. An independent floor between the
+// detector's default stop (1.0 Hz) and start (8.0 Hz) thresholds, roughly
+// 300 RPM.
 const RPM_RUNNING_THRESHOLD_HZ = 5.0;
 // Maximum lag (in microseconds) between an RPM sample and the ASOF-joined
 // fuel.rate or SOG sample for that joined value to count toward the per-bin
@@ -230,7 +231,8 @@ async function binEngineWindow(
   const { rpm, fuelRate } = enginePaths(engineId);
   const rpmPath = escapeSqlLiteral(rpm);
   const fuelPath = escapeSqlLiteral(fuelRate);
-  const sogPath = SOG_PATH;
+  // Escaped to match the sibling rpm and fuel paths; a no-op on this constant.
+  const sogPath = escapeSqlLiteral(SOG_PATH);
   const fromIso = new Date(fromMs).toISOString();
   const toIso = new Date(toMs).toISOString();
   const sql = flattenSql(`

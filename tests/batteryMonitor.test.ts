@@ -3,13 +3,16 @@ import { type BatteryEvent, BatteryMonitor } from '../src/core/batteryMonitor.js
 
 function makeMonitor() {
   const events: BatteryEvent[] = [];
-  const monitor = new BatteryMonitor({
-    lowSocPercent: 30,
-    socExitHysteresis: 5,
-    cellImbalanceV: 0.1,
-    imbalanceSettleSec: 60,
-    sourceWindowMs: 5000,
-  });
+  const monitor = new BatteryMonitor(
+    {
+      lowSocPercent: 30,
+      socExitHysteresis: 5,
+      cellImbalanceV: 0.1,
+      imbalanceSettleSec: 60,
+      sourceWindowMs: 5000,
+    },
+    { error: () => {} },
+  );
   monitor.on('low-soc-enter', (e) => events.push(e));
   monitor.on('low-soc-exit', (e) => events.push(e));
   monitor.on('cell-imbalance-enter', (e) => events.push(e));
@@ -139,6 +142,50 @@ describe('BatteryMonitor cell-imbalance', () => {
     monitor.tick(1_010_000);
     expect(events).toEqual([]);
     monitor.tick(1_070_000);
+    expect(events).toEqual([]);
+  });
+
+  it('clears an active imbalance alert when the BMS goes silent', () => {
+    const { monitor, events } = makeMonitor();
+    // Sustain an imbalance long enough to fire cell-imbalance-enter.
+    for (let ts = 1_000_000; ts <= 1_064_000; ts += 2_000) {
+      observePair(monitor, 3.5, 3.7, ts);
+    }
+    monitor.tick(1_065_000);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe('cell-imbalance-enter');
+    // The BMS then goes silent. A tick past the 5s source window evicts every
+    // cell reading, so recentCells empties. observeCellV cannot run without
+    // deltas, so this is the only exit path left: the active alert is cleared
+    // with imbalanceV 0, since a comparative diagnostic has no value once no
+    // cells are reporting.
+    monitor.tick(1_075_000);
+    expect(events).toHaveLength(2);
+    expect(events[1]?.kind).toBe('cell-imbalance-exit');
+    expect(events[1]?.imbalanceV).toBe(0);
+  });
+
+  it('resets the settle timer without emitting when the imbalance resolves before settling', () => {
+    const { monitor, events } = makeMonitor();
+    // The outlier cell (1) and the anchor cell (0) are imbalanced and fresh, so
+    // the entry settle clock starts at 1_000_000. No tick runs during the
+    // buildup, so the alert never fires. The outlier stops reporting before the
+    // anchor: at the settle-window tick the outlier is outside the 5s window and
+    // is evicted, while the anchor survives, so the lone surviving cell has zero
+    // spread. The tick finds the settle window elapsed but the imbalance gone,
+    // so it clears the timer without emitting an enter.
+    for (let ts = 1_000_000; ts <= 1_058_000; ts += 2_000) {
+      monitor.observeCellV('trolling', 0, 3.5, ts);
+      monitor.observeCellV('trolling', 1, 3.7, ts);
+    }
+    // The anchor gets one more fresh reading; the outlier does not. The outlier
+    // (last seen 1_058_000) is still inside the 5s window here, so this call
+    // sees a real imbalance and keeps the settle timer armed.
+    monitor.observeCellV('trolling', 0, 3.5, 1_060_000);
+    // 63.5s since the timer armed: the settle window has elapsed. The outlier
+    // (1_058_000) is now outside the 5s window and is evicted; the anchor
+    // (1_060_000) survives, so the live imbalance is 0 and no alert fires.
+    monitor.tick(1_063_500);
     expect(events).toEqual([]);
   });
 });

@@ -1,4 +1,6 @@
 import { TypedEmitter } from './emitter.js';
+import { asFiniteNumber } from './format.js';
+import type { Logger } from './logger.js';
 
 type EngineEventKind = 'engine-start' | 'engine-stop' | 'possible-stop';
 
@@ -67,8 +69,11 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
   private readonly watchdogMs: number;
   private readonly silenceStopMs: number;
 
-  constructor(private opts: EngineDetectorOptions) {
-    super();
+  constructor(
+    private opts: EngineDetectorOptions,
+    logger: Pick<Logger, 'error'>,
+  ) {
+    super((message) => logger.error(message));
     this.stopSettleMs = opts.stopSettleSec * 1000;
     this.startSettleMs = opts.startSettleSec * 1000;
     this.watchdogMs = opts.watchdogSec * 1000;
@@ -236,18 +241,14 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
       this.states.set(s.engineId, {
         engineId: s.engineId,
         running: true,
-        belowSince: numOrNull(s.belowSince),
-        aboveSince: numOrNull(s.aboveSince),
-        belowSinceWhileStarting: numOrNull(s.belowSinceWhileStarting),
-        sessionStartTs: numOrNull(s.sessionStartTs),
+        belowSince: asFiniteNumber(s.belowSince),
+        aboveSince: asFiniteNumber(s.aboveSince),
+        belowSinceWhileStarting: asFiniteNumber(s.belowSinceWhileStarting),
+        sessionStartTs: asFiniteNumber(s.sessionStartTs),
         lastDeltaTs: s.lastDeltaTs,
         possibleStopEmitted: s.possibleStopEmitted === true,
         recentBySource: new Map(),
       });
     }
   }
-}
-
-function numOrNull(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
