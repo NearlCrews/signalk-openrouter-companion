@@ -1,6 +1,6 @@
 {
   "name": "signalk-openrouter-companion",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "OpenRouter-powered LLM analyzers for Signal K: plain-prose engine and battery reports. OpenRouter API key required.",
   "main": "dist/index.js",
   "type": "module",
@@ -29,6 +29,10 @@
     "screenshots": [
       "./assets/screenshots/panel-overview.png",
       "./assets/screenshots/panel-analyzers.png"
+    ],
+    "recommends": [
+      "signalk-virtual-weather-sensors",
+      "signalk-nmea2000-emitter-cannon"
     ]
   },
   "engines": {
@@ -60,7 +64,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "@signalk/server-api": "2.24.0",
+    "@signalk/server-api": "2.25.0",
     "@types/node": "^25.7.0",
     "@vitest/coverage-v8": "^4.1.6",
     "esbuild": "^0.28.0",
@@ -77,7 +81,7 @@
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "build:bundle": "node esbuild.config.mjs",
     "build:panel": "webpack --config webpack.config.cjs",
-    "clean": "rm -rf dist public",
+    "clean": "node -e \"const fs=require('node:fs');for(const d of ['dist','public'])fs.rmSync(d,{recursive:true,force:true})\"",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:run": "vitest run",
