@@ -9,7 +9,7 @@ const pkg = require('./package.json');
 const containerName = pkg.name.replace(/[-@/]/g, '_');
 
 module.exports = {
-  entry: './src/configpanel/index.js',
+  entry: './src/configpanel/index.ts',
   mode: 'production',
   // Output an ES module so the SK admin's `<script type="module">` tag
   // (auto-applied because this package's `package.json` has
@@ -27,36 +27,35 @@ module.exports = {
   module: {
     rules: [
       {
-        test: /\.jsx?$/,
-        exclude: /node_modules/,
-        loader: 'esbuild-loader',
+        // One rule covers the panel's `.tsx` components and the non-JSX `.ts`
+        // modules shared with the backend (e.g. src/cronPresets.ts, the single
+        // source of truth for the schedule presets). esbuild-loader strips the
+        // types and compiles the JSX; no separate tsc pass runs for the panel
+        // (it is excluded from tsconfig). The `loader` option is intentionally
+        // omitted: esbuild-loader v3+ picks the right esbuild loader per file
+        // extension, so `.ts` files keep angle-bracket type assertions (never
+        // parsed as JSX) while `.tsx` files get JSX compilation.
         // jsx: 'automatic' uses the React 19 default runtime that imports
-        // `react/jsx-runtime` as a normal module, so the JSX-compiled output
-        // does not depend on a bare `React` identifier being in scope. The
-        // legacy `transform` (classic) runtime emits React.createElement(...)
-        // which breaks under Module Federation: the singleton-shared `react`
-        // module is fetched lazily, so `React` is undefined at the moment
-        // JSX runs and the panel fails to mount.
-        options: { loader: 'jsx', target: 'es2022', jsx: 'automatic' },
-      },
-      {
-        // The panel is plain JS, but it imports a few `.ts` modules shared
-        // with the type-checked backend (e.g. src/cronPresets.ts, the single
-        // source of truth for the schedule presets). esbuild-loader strips
-        // the type annotations; no separate tsc pass runs for the panel.
-        test: /\.ts$/,
+        // `react/jsx-runtime` as a normal module, so the compiled output does
+        // not depend on a bare `React` identifier being in scope. The legacy
+        // `transform` (classic) runtime emits React.createElement(...) which
+        // breaks under Module Federation: the singleton-shared `react` module
+        // is fetched lazily, so `React` is undefined at the moment JSX runs and
+        // the panel fails to mount.
+        test: /\.[jt]sx?$/,
         exclude: /node_modules/,
         loader: 'esbuild-loader',
-        options: { loader: 'ts', target: 'es2022' },
+        options: { target: 'es2022', jsx: 'automatic' },
       },
     ],
   },
-  // extensionAlias lets a `.js` import specifier resolve to a `.ts` file, so
-  // a module shared with the backend can keep its `.ts` source while the
-  // panel imports it with the `.js` specifier the backend also uses.
+  // extensionAlias lets a `.js` import specifier resolve to a `.ts`/`.tsx`
+  // source. The panel imports its own modules and the shared backend modules
+  // with the `.js` specifier the backend also uses, while the files on disk are
+  // TypeScript.
   resolve: {
-    extensions: ['.js', '.jsx', '.ts'],
-    extensionAlias: { '.js': ['.js', '.ts'] },
+    extensions: ['.tsx', '.ts', '.jsx', '.js'],
+    extensionAlias: { '.js': ['.ts', '.tsx', '.js'] },
   },
   plugins: [
     new ModuleFederationPlugin({
