@@ -5,7 +5,7 @@ import type { SKVersion } from '@signalk/server-api';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
 import { ANALYZER_FACTORIES } from './analyzers/registry.js';
-import { type PluginRuntime, type RouterLike, registerApiRoutes } from './core/api.js';
+import { getOpenApi, type PluginRuntime, type RouterLike, registerApiRoutes } from './core/api.js';
 import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
 import { BudgetTracker } from './core/budget.js';
 import { RollingBuffer } from './core/buffer.js';
@@ -89,6 +89,7 @@ export default function createPlugin(app: ServerApiLike): {
   start: (settings: Partial<PluginOptions>, restart: () => void) => void;
   stop: () => Promise<void>;
   registerWithRouter: (router: RouterLike) => void;
+  getOpenApi: () => object;
   // Prefixed underscore: not part of the SK Plugin contract. Tests and
   // in-process consumers can await the deferred router init that completes
   // after start() returns synchronously.
@@ -607,8 +608,9 @@ export default function createPlugin(app: ServerApiLike): {
     },
 
     stop: async () => {
+      // The SK server sets the plugin status after stop() resolves, so an
+      // explicit 'Stopped' here would only be overwritten.
       releaseResources();
-      app.setPluginStatus('Stopped');
     },
 
     registerWithRouter: (router: RouterLike) => {
@@ -636,6 +638,8 @@ export default function createPlugin(app: ServerApiLike): {
       }
       registerApiRoutes(router, () => runtime);
     },
+
+    getOpenApi,
 
     // _whenReady is not part of the SK Plugin interface. The underscore
     // signals "not in the public contract"; tests (and any in-process
@@ -666,10 +670,6 @@ function registerAnalyzerPut(
   if (!section.enabled) return;
   if (!section.triggers.put.enabled) return;
   const path = pluginPutPath(analyzerId);
-  // Guard the PUT callback against double-fire: the SK PENDING/COMPLETED
-  // contract expects exactly one cb per request. Each return path already
-  // early-exits before reaching another cb, but a future maintainer adding
-  // a wrapping try/catch must not accidentally ack twice.
   app.registerPutHandler(
     'vessels.self',
     path,
@@ -678,7 +678,17 @@ function registerAnalyzerPut(
       _path: string,
       value: unknown,
       cb: (r: { state: string; statusCode?: number; message?: string }) => void,
-    ): { state: string } => {
+    ): { state: string; statusCode?: number; message?: string } => {
+      const router = getRouter();
+      // Router not yet built (a PUT landing during the deferred init window):
+      // resolve synchronously with a terminal result. Returning PENDING here
+      // and then calling cb would have the SK contract surface a 503 carrying
+      // a PENDING state and a result href that never completes.
+      if (!router) {
+        return { state: 'COMPLETED', statusCode: 503, message: 'plugin not fully started' };
+      }
+      // Guard the async ack against double-fire: the SK PENDING/COMPLETED
+      // contract expects exactly one cb per request.
       let acked = false;
       const ack = (r: { state: string; statusCode?: number; message?: string }): void => {
         if (acked) return;
@@ -687,15 +697,6 @@ function registerAnalyzerPut(
       };
       void (async () => {
         try {
-          const router = getRouter();
-          if (!router) {
-            ack({
-              state: 'FAILED',
-              statusCode: 503,
-              message: 'plugin not fully started',
-            });
-            return;
-          }
           await router.dispatch('put', manualPutCtx(value), { putPath: path });
           ack({ state: 'COMPLETED', statusCode: 200 });
         } catch (err) {

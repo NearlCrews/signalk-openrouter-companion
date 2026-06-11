@@ -94,6 +94,15 @@ export class TriggerRouter {
       }
       return 'reported';
     } catch (err) {
+      // A shutdown that aborts mid-LLM-call or mid-backoff surfaces here as the
+      // abort error. Publishing a failure on the way down would raise a
+      // spurious report, and for alerts (failureAudible) an audible N2K alarm,
+      // for a run that was only interrupted. Treat it as the same silent no-op
+      // as the pre-LLM abort check above.
+      if (this.deps.signal?.aborted) {
+        this.deps.logger.debug(`${a.id}: aborted during run, skipping failure publish`);
+        return 'no-input';
+      }
       this.deps.logger.error(`${a.id}: ${stringify(err)}`);
       await this.deps.publisher
         .publishFailure(a.id, ctx, err, { audible: a.failureAudible })

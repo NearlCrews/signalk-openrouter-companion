@@ -1,54 +1,35 @@
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { Analyzer, AnalyzerDeps, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import type { Analyzer, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import type { AnalyzerId } from '../src/analyzers/ids.js';
 import { BudgetTracker } from '../src/core/budget.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
-import { cleanupTmpDir, makeTmpDir } from './_mocks.js';
+import { cleanupTmpDir, makeRouter, makeRouterDeps, makeTmpDir } from './_mocks.js';
 
-function makeAnalyzer(overrides: Partial<Analyzer> & Pick<Analyzer, 'id' | 'triggers'>): Analyzer {
-  return {
+// The router routes by trigger shape, not by analyzer identity, so these tests
+// use throwaway ids ('a', 'b', ...). makeAnalyzer accepts a plain string id and
+// casts to AnalyzerId, while the deps/router come from the shared _mocks
+// helpers so the spy surface matches the rest of the suite.
+type AnalyzerOverrides = Partial<Omit<Analyzer, 'id' | 'triggers'>> & {
+  id: string;
+  triggers: Analyzer['triggers'];
+};
+
+function makeAnalyzer(overrides: AnalyzerOverrides): Analyzer {
+  const base = {
     title: overrides.id,
     collectContext: vi.fn(async () => ({ ok: true })),
     buildPrompt: vi.fn(() => ({ system: 's', user: 'u' })),
     publishOutput: vi.fn(async () => {}),
-    ...overrides,
-  } as Analyzer;
-}
-
-function makeDeps(): AnalyzerDeps {
-  const budget = { canSpend: vi.fn(() => true), recordCall: vi.fn(async () => {}) };
-  const llm = {
-    complete: vi.fn(async () => ({
-      text: 'report',
-      model: 'm',
-      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-    })),
   };
-  // Mirror the real ReportPublisher surface the router actually touches:
-  // publishReport for analyzers without publishOutput, publishFailure for
-  // collectContext / LLM exceptions. publishOnPath is unused here.
-  const publisher = {
-    publishReport: vi.fn(async () => {}),
-    publishFailure: vi.fn(async () => {}),
-  };
-  const logger = { debug: vi.fn(), error: vi.fn() };
-  return {
-    buffer: {} as never,
-    questdb: null,
-    publisher: publisher as never,
-    budget: budget as never,
-    llm: llm as never,
-    logger: logger as never,
-    app: { getSelfPath: () => undefined },
-  };
+  return { ...base, ...overrides, id: overrides.id as AnalyzerId } as Analyzer;
 }
 
 describe('TriggerRouter', () => {
   it('dispatches engine-stop to analyzers subscribed to it', async () => {
     const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-stop' }] });
     const b = makeAnalyzer({ id: 'b', triggers: [{ kind: 'engine-start' }] });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a, b], deps);
+    const { router } = makeRouter([a, b]);
     const ctx: TriggerCtx = { kind: 'engine-stop', firedAt: new Date() };
     await router.dispatch('engine-stop', ctx);
     expect(a.collectContext).toHaveBeenCalled();
@@ -61,20 +42,18 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'engine-stop' }],
       collectContext: vi.fn(async () => null),
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router, mocks } = makeRouter([a]);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
-    expect(deps.llm.complete).not.toHaveBeenCalled();
-    expect(deps.publisher.publishReport).not.toHaveBeenCalled();
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.publishReport).not.toHaveBeenCalled();
   });
 
   it('skips LLM call when budget is exhausted', async () => {
     const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-stop' }] });
-    const deps = makeDeps();
-    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    const router = new TriggerRouter([a], deps);
+    const { router, mocks } = makeRouter([a]);
+    mocks.canSpend.mockReturnValue(false);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
-    expect(deps.llm.complete).not.toHaveBeenCalled();
+    expect(mocks.complete).not.toHaveBeenCalled();
   });
 
   // Pins the DOCUMENTED P2-6 behavior: when the shared daily budget is
@@ -90,18 +69,17 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
       failureAudible: true,
     });
-    const deps = makeDeps();
-    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    const router = new TriggerRouter([alerts], deps);
+    const { router, mocks } = makeRouter([alerts]);
+    mocks.canSpend.mockReturnValue(false);
     await router.dispatch(
       'battery-event',
       { kind: 'battery-event', firedAt: new Date(), bankId: 'house' },
       { batterySubkind: 'low-soc-enter' },
     );
-    expect(deps.budget.recordCall).not.toHaveBeenCalled();
+    expect(mocks.recordCall).not.toHaveBeenCalled();
     expect(alerts.publishOutput).not.toHaveBeenCalled();
-    expect(deps.publisher.publishFailure).not.toHaveBeenCalled();
-    expect(deps.publisher.publishReport).not.toHaveBeenCalled();
+    expect(mocks.publishFailure).not.toHaveBeenCalled();
+    expect(mocks.publishReport).not.toHaveBeenCalled();
   });
 
   it('returns the "budget-exhausted" outcome for a battery-event run past the daily cap', async () => {
@@ -113,9 +91,8 @@ describe('TriggerRouter', () => {
       id: 'alerts',
       triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
     });
-    const deps = makeDeps();
-    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    const router = new TriggerRouter([alerts], deps);
+    const { router, mocks } = makeRouter([alerts]);
+    mocks.canSpend.mockReturnValue(false);
     const outcome = await router.runById('alerts', {
       kind: 'battery-event',
       firedAt: new Date(),
@@ -123,7 +100,7 @@ describe('TriggerRouter', () => {
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     });
     expect(outcome).toBe('budget-exhausted');
-    expect(deps.llm.complete).not.toHaveBeenCalled();
+    expect(mocks.complete).not.toHaveBeenCalled();
   });
 
   it('isolates per-analyzer failures via Promise.allSettled', async () => {
@@ -135,11 +112,35 @@ describe('TriggerRouter', () => {
       }),
     });
     const good = makeAnalyzer({ id: 'good', triggers: [{ kind: 'engine-stop' }] });
-    const deps = makeDeps();
-    const router = new TriggerRouter([bad, good], deps);
+    const { router, mocks } = makeRouter([bad, good]);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
     expect(good.collectContext).toHaveBeenCalled();
-    expect(deps.publisher.publishFailure).toHaveBeenCalled();
+    expect(mocks.publishFailure).toHaveBeenCalled();
+  });
+
+  it('does not publish a failure when aborted mid-LLM-call (shutdown path)', async () => {
+    // A stop() landing while a completion is in flight aborts the lifecycle
+    // signal and rejects the LLM call. The router must swallow that abort, not
+    // publish a failure report, which for an audible analyzer would raise a
+    // spurious N2K alarm on the way down. See triggerRouter.ts runOne's catch.
+    const a = makeAnalyzer({
+      id: 'alerts',
+      triggers: [{ kind: 'engine-stop' }],
+      failureAudible: true,
+    });
+    const { deps, mocks } = makeRouterDeps();
+    const controller = new AbortController();
+    deps.signal = controller.signal;
+    mocks.complete.mockImplementation(async () => {
+      controller.abort();
+      throw new Error('request aborted');
+    });
+    const router = new TriggerRouter([a], deps);
+    const outcome = await router.runById('alerts', { kind: 'engine-stop', firedAt: new Date() });
+    expect(mocks.complete).toHaveBeenCalled();
+    expect(mocks.publishFailure).not.toHaveBeenCalled();
+    expect(mocks.error).not.toHaveBeenCalled();
+    expect(outcome).toBe('no-input');
   });
 
   it('matches put triggers by path', async () => {
@@ -147,8 +148,7 @@ describe('TriggerRouter', () => {
       id: 'a',
       triggers: [{ kind: 'put', path: 'plugins.x.run' }],
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router } = makeRouter([a]);
     await router.dispatch(
       'put',
       { kind: 'put', firedAt: new Date(), put: { value: 1 } },
@@ -159,19 +159,18 @@ describe('TriggerRouter', () => {
 
   it('sets status when budget exhausts and resets after a successful call', async () => {
     const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-stop' }] });
-    const setStatus = vi.fn();
-    const deps = { ...makeDeps(), setStatus };
+    const { deps, mocks } = makeRouterDeps();
     // First call: budget exhausted
-    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+    mocks.canSpend.mockReturnValueOnce(false);
     let router = new TriggerRouter([a], deps);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
-    expect(setStatus).toHaveBeenCalledWith('Running: budget exhausted for today');
+    expect(mocks.setStatus).toHaveBeenCalledWith('Running: budget exhausted for today');
     // Second call: budget available
-    setStatus.mockClear();
-    (deps.budget.canSpend as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    mocks.setStatus.mockClear();
+    mocks.canSpend.mockReturnValue(true);
     router = new TriggerRouter([a], deps);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
-    expect(setStatus).toHaveBeenCalledWith('Running');
+    expect(mocks.setStatus).toHaveBeenCalledWith('Running');
   });
 
   it('does not exceed the daily cap when cron analyzers fire concurrently', async () => {
@@ -181,7 +180,8 @@ describe('TriggerRouter', () => {
         maxPerDay: 1,
         statePath: join(dir, 'budget.json'),
       });
-      const deps = { ...makeDeps(), budget };
+      const { deps, mocks } = makeRouterDeps();
+      deps.budget = budget;
       const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'cron', pattern: 'p' }] });
       const b = makeAnalyzer({ id: 'b', triggers: [{ kind: 'cron', pattern: 'p' }] });
       const router = new TriggerRouter([a, b], deps);
@@ -189,9 +189,12 @@ describe('TriggerRouter', () => {
       // cron job per (pattern, timezone) pair and runs each member by id); the
       // budget-cap guarantee must hold for two analyzers fired in parallel.
       const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
-      await Promise.all([router.runById('a', ctx), router.runById('b', ctx)]);
+      await Promise.all([
+        router.runById('a' as AnalyzerId, ctx),
+        router.runById('b' as AnalyzerId, ctx),
+      ]);
       // maxPerDay is 1 and both analyzers run: exactly one LLM call may fire.
-      expect(deps.llm.complete).toHaveBeenCalledTimes(1);
+      expect(mocks.complete).toHaveBeenCalledTimes(1);
       expect(budget.callsToday()).toBe(1);
     } finally {
       await cleanupTmpDir(dir);
@@ -203,8 +206,7 @@ describe('TriggerRouter', () => {
       id: 'a',
       triggers: [{ kind: 'put', path: 'plugins.x.run' }],
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router } = makeRouter([a]);
     await router.dispatch(
       'put',
       { kind: 'put', firedAt: new Date(), put: { value: 1 } },
@@ -216,20 +218,18 @@ describe('TriggerRouter', () => {
   it('runById runs the named analyzer through the full path', async () => {
     const a = makeAnalyzer({ id: 'health', triggers: [] });
     const b = makeAnalyzer({ id: 'drift', triggers: [] });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a, b], deps);
+    const { router, mocks } = makeRouter([a, b]);
     await router.runById('health', { kind: 'put', firedAt: new Date(), put: { value: 'manual' } });
     expect(a.collectContext).toHaveBeenCalledOnce();
-    expect(deps.budget.recordCall).toHaveBeenCalledOnce();
+    expect(mocks.recordCall).toHaveBeenCalledOnce();
     expect(a.publishOutput).toHaveBeenCalledOnce();
     expect(b.collectContext).not.toHaveBeenCalled();
   });
 
   it('runById returns "unknown" for an analyzer id that is not registered', async () => {
     const a = makeAnalyzer({ id: 'health', triggers: [] });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
-    const outcome = await router.runById('nope', {
+    const { router } = makeRouter([a]);
+    const outcome = await router.runById('nope' as AnalyzerId, {
       kind: 'put',
       firedAt: new Date(),
       put: { value: 'manual' },
@@ -243,11 +243,10 @@ describe('TriggerRouter', () => {
       id: 'a',
       triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router } = makeRouter([a]);
     // Production registers one cron job per (pattern, timezone) and fires
     // its members by id; runById is the only cron entry point.
-    await router.runById('a', { kind: 'cron', firedAt: new Date() });
+    await router.runById('a' as AnalyzerId, { kind: 'cron', firedAt: new Date() });
     expect(a.collectContext).toHaveBeenCalled();
   });
 
@@ -256,8 +255,7 @@ describe('TriggerRouter', () => {
       id: 'a',
       triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router } = makeRouter([a]);
     // dispatch is for path-based (put) and event-based (battery-event)
     // routing; cron has no path to match on.
     await router.dispatch('cron', { kind: 'cron', firedAt: new Date() });
@@ -269,8 +267,7 @@ describe('TriggerRouter', () => {
       id: 'a',
       triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router } = makeRouter([a]);
     await router.dispatch(
       'battery-event',
       {
@@ -289,8 +286,7 @@ describe('TriggerRouter', () => {
       id: 'a',
       triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
     });
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    const { router } = makeRouter([a]);
     await router.dispatch(
       'battery-event',
       {
@@ -311,13 +307,10 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'engine-stop' }],
       collectContext: vi.fn(async () => ({ ok: true })),
       buildPrompt: vi.fn(() => ({ system: 's', user: 'u' })),
-    };
-    const deps = makeDeps();
-    const router = new TriggerRouter([a], deps);
+    } as Analyzer;
+    const { router, mocks } = makeRouter([a]);
     await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
-    expect(deps.publisher.publishReport).toHaveBeenCalledTimes(1);
-    expect((deps.publisher.publishReport as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
-      'maintenance',
-    );
+    expect(mocks.publishReport).toHaveBeenCalledTimes(1);
+    expect(mocks.publishReport.mock.calls[0]?.[0]).toBe('maintenance');
   });
 });

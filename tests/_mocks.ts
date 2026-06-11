@@ -1,12 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { vi } from 'vitest';
+import { type Mock, vi } from 'vitest';
 import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime } from '../src/core/api.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
-import type { SignalKNotificationValue } from '../src/core/publisher.js';
+import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
 import { DEFAULT_OPTIONS } from '../src/types.js';
@@ -19,10 +19,12 @@ export interface MockBus<T> {
   listenerCount(): number;
 }
 
-export const MOCK_SELF_CONTEXT =
-  'vessels.urn:mrn:signalk:uuid:00000000-0000-0000-0000-000000000000';
+// Module-local: used by makeMockApp and makeRouterDeps below; no test imports
+// it directly.
+const MOCK_SELF_CONTEXT = 'vessels.urn:mrn:signalk:uuid:00000000-0000-0000-0000-000000000000';
 
-export function makeBus<T>(): MockBus<T> {
+// Module-local: makeMockApp's stream bus factory; no test imports it directly.
+function makeBus<T>(): MockBus<T> {
   const subs = new Set<Listener<T>>();
   return {
     push: (v) => {
@@ -230,17 +232,23 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
 // publisher, logger) so a test can drive a real TriggerRouter through the
 // full canSpend -> recordCall -> complete -> publish dance. Returns the deps
 // plus the individual mocks so the test can assert on call args.
+// A bare vi.fn() infers as Mock<Procedure | Constructable>, which strict mode
+// treats as neither callable nor assignable to a precise (...args) => T. Pin a
+// plain callable signature so the spies stay both invokable and assignable to
+// the deps function types they stand in for.
+type Spy = Mock<(...args: unknown[]) => unknown>;
+
 export interface RouterDepsMocks {
-  publishReport: ReturnType<typeof vi.fn>;
-  publishFailure: ReturnType<typeof vi.fn>;
-  publishOnPath: ReturnType<typeof vi.fn>;
-  canSpend: ReturnType<typeof vi.fn>;
-  recordCall: ReturnType<typeof vi.fn>;
-  complete: ReturnType<typeof vi.fn>;
-  setStatus: ReturnType<typeof vi.fn>;
-  debug: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
-  getSelfPath: ReturnType<typeof vi.fn>;
+  publishReport: Spy;
+  publishFailure: Spy;
+  publishOnPath: Spy;
+  canSpend: Spy;
+  recordCall: Spy;
+  complete: Spy;
+  setStatus: Spy;
+  debug: Spy;
+  error: Spy;
+  getSelfPath: Spy;
 }
 
 export function makeRouterDeps(

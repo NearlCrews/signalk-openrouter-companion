@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from './http.js';
+
 interface OpenRouterCfg {
   apiKey: string;
   baseUrl: string;
@@ -77,24 +79,18 @@ export class OpenRouterClient {
     }
   }
 
-  // A single request: its own timeout and abort wiring, both cleaned up before
-  // the caller decides whether to retry. Throws for terminal failures (a
-  // terminal HTTP status, an empty completion, a caller abort); returns a retry
-  // signal for transient HTTP statuses and transport faults.
+  // A single request bounded by its own timeout, combined with the caller's
+  // abort signal via fetchWithTimeout (no manual teardown needed). Throws for
+  // terminal failures (a terminal HTTP status, an empty completion, a caller
+  // abort); returns a retry signal for transient HTTP statuses and transport
+  // faults, including the request timeout.
   private async attempt(args: CompleteArgs): Promise<Attempt> {
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), this.cfg.requestTimeoutMs);
-    const onCallerAbort = (): void => ctrl.abort();
-    if (args.abortSignal) {
-      if (args.abortSignal.aborted) ctrl.abort();
-      else args.abortSignal.addEventListener('abort', onCallerAbort, { once: true });
-    }
+    let res: Response;
     try {
-      let res: Response;
-      try {
-        res = await fetch(`${this.cfg.baseUrl}/chat/completions`, {
+      res = await fetchWithTimeout(
+        `${this.cfg.baseUrl}/chat/completions`,
+        {
           method: 'POST',
-          signal: ctrl.signal,
           headers: {
             Authorization: `Bearer ${this.cfg.apiKey}`,
             'Content-Type': 'application/json',
@@ -109,54 +105,53 @@ export class OpenRouterClient {
               { role: 'user', content: args.user },
             ],
           }),
-        });
+        },
+        this.cfg.requestTimeoutMs,
+        args.abortSignal,
+      );
+    } catch (err) {
+      return transportRetry(args, err);
+    }
+
+    if (res.status === 200) {
+      let body: ApiResponse;
+      try {
+        body = (await res.json()) as ApiResponse;
       } catch (err) {
+        // The timeout firing mid-body-read, or a truncated/malformed
+        // payload: same transient treatment as a failed fetch.
         return transportRetry(args, err);
       }
-
-      if (res.status === 200) {
-        let body: ApiResponse;
-        try {
-          body = (await res.json()) as ApiResponse;
-        } catch (err) {
-          // The timeout firing mid-body-read, or a truncated/malformed
-          // payload: same transient treatment as a failed fetch.
-          return transportRetry(args, err);
-        }
-        const text = body.choices?.[0]?.message?.content ?? '';
-        if (text.trim() === '') {
-          throw new OpenRouterError(200, 'empty completion', body);
-        }
-        const u = body.usage ?? {};
-        return {
-          kind: 'result',
-          result: {
-            text,
-            model: body.model ?? this.cfg.model,
-            usage: {
-              promptTokens: u.prompt_tokens ?? 0,
-              completionTokens: u.completion_tokens ?? 0,
-              totalTokens: u.total_tokens ?? 0,
-            },
+      const text = body.choices?.[0]?.message?.content ?? '';
+      if (text.trim() === '') {
+        throw new OpenRouterError(200, 'empty completion', body);
+      }
+      const u = body.usage ?? {};
+      return {
+        kind: 'result',
+        result: {
+          text,
+          model: body.model ?? this.cfg.model,
+          usage: {
+            promptTokens: u.prompt_tokens ?? 0,
+            completionTokens: u.completion_tokens ?? 0,
+            totalTokens: u.total_tokens ?? 0,
           },
-        };
-      }
-
-      const errBody = await safeJson(res);
-      const message = errBody?.error?.message ?? `HTTP ${res.status}`;
-      const metadata = errBody?.error?.metadata;
-      if (TRANSIENT_STATUSES.has(res.status)) {
-        return {
-          kind: 'retry',
-          error: new OpenRouterError(res.status, message, metadata),
-          retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
-        };
-      }
-      throw new OpenRouterError(res.status, message, metadata);
-    } finally {
-      clearTimeout(timeout);
-      args.abortSignal?.removeEventListener('abort', onCallerAbort);
+        },
+      };
     }
+
+    const errBody = await safeJson(res);
+    const message = errBody?.error?.message ?? `HTTP ${res.status}`;
+    const metadata = errBody?.error?.metadata;
+    if (TRANSIENT_STATUSES.has(res.status)) {
+      return {
+        kind: 'retry',
+        error: new OpenRouterError(res.status, message, metadata),
+        retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
+      };
+    }
+    throw new OpenRouterError(res.status, message, metadata);
   }
 }
 
@@ -182,11 +177,14 @@ async function safeJson(res: Response): Promise<ApiErrorBody | null> {
 }
 
 // `Retry-After` is either a number of seconds or an HTTP-date (RFC 9110).
+// Only an all-digits value is read as seconds; Number.parseInt would otherwise
+// accept a malformed "12abc" as 12. Anything else falls through to the date
+// branch, which yields null for an unparseable value.
 function parseRetryAfter(h: string | null): number | null {
   if (!h) return null;
-  const sec = Number.parseInt(h, 10);
-  if (Number.isFinite(sec)) return sec * 1000;
-  const date = Date.parse(h);
+  const trimmed = h.trim();
+  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10) * 1000;
+  const date = Date.parse(trimmed);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 

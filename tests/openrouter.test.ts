@@ -94,6 +94,36 @@ describe('OpenRouterClient', () => {
     vi.useRealTimers();
   });
 
+  it('does not read a malformed Retry-After as seconds (falls back to backoff)', async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(
+        // "12abc" is neither all-digits nor an HTTP-date: parseRetryAfter must
+        // return null (Number.parseInt would have wrongly read it as 12s), so
+        // the retry waits only the backoff floor, not 12 seconds.
+        jsonResponse(
+          429,
+          { error: { code: 429, message: 'rate limit' } },
+          { 'retry-after': '12abc' },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'ok' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    const c = makeClient({ requestTimeoutMs: 5000, random: () => 0 });
+    const p = c.complete({ system: 's', user: 'u' });
+    // Backoff floor for the first retry is ~250ms; advancing 300ms (well under
+    // 12s) must fire the retry if Retry-After was correctly ignored.
+    await vi.advanceTimersByTimeAsync(300);
+    const r = await p;
+    expect(r.text).toBe('ok');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it('throws immediately on 401', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(401, { error: { code: 401, message: 'bad key' } }),
@@ -225,7 +255,11 @@ describe('OpenRouterClient', () => {
   });
 
   it('retries when the internal request timeout fires, not treated as a caller abort', async () => {
-    vi.useFakeTimers();
+    // Real timers: the request timeout is now AbortSignal.timeout, a platform
+    // timer fake timers do not drive. A 10ms timeout fires quickly; the first
+    // fetch only settles on abort, so the retry must come from the timeout, not
+    // a caller abort (there is no caller signal here). random: () => 0 pins the
+    // backoff to its floor (~250ms) so the test stays fast and deterministic.
     fetchMock
       .mockImplementationOnce((_url: string, init: RequestInit) => {
         return new Promise((_resolve, reject) => {
@@ -240,13 +274,10 @@ describe('OpenRouterClient', () => {
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
-    const c = makeClient({ requestTimeoutMs: 10 });
-    const p = c.complete({ system: 's', user: 'u' });
-    await vi.advanceTimersByTimeAsync(10_000);
-    const r = await p;
+    const c = makeClient({ requestTimeoutMs: 10, random: () => 0 });
+    const r = await c.complete({ system: 's', user: 'u' });
     expect(r.text).toBe('recovered');
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
   });
 
   it('rethrows without retry when the caller signal is already aborted', async () => {

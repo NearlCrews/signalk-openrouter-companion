@@ -13,7 +13,6 @@ interface BudgetOptions {
 interface PersistedState {
   day: string;
   callsToday: number;
-  lastCallTs: string | null;
 }
 
 function utcDay(d: Date): string {
@@ -34,17 +33,23 @@ export class BudgetTracker {
     try {
       const raw = await readFile(opts.statePath, 'utf-8');
       const parsed = JSON.parse(raw) as PersistedState;
-      if (typeof parsed.day !== 'string' || typeof parsed.callsToday !== 'number') {
+      // callsToday gates the spend cap, so reject a NaN, fractional, or
+      // negative count rather than letting it through to the comparison.
+      if (
+        typeof parsed.day !== 'string' ||
+        !Number.isInteger(parsed.callsToday) ||
+        parsed.callsToday < 0
+      ) {
         throw new Error('invalid state shape');
       }
-      state = parsed;
+      state = { day: parsed.day, callsToday: parsed.callsToday };
     } catch (err) {
       // ENOENT is the expected first-run case. Anything else means an existing
       // budget file failed to load, which silently resets the daily spend cap.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         opts.log?.(`budget state unreadable, resetting daily counter: ${String(err)}`);
       }
-      state = { day: utcDay(now()), callsToday: 0, lastCallTs: null };
+      state = { day: utcDay(now()), callsToday: 0 };
     }
     return new BudgetTracker({ ...opts, now }, state);
   }
@@ -52,7 +57,7 @@ export class BudgetTracker {
   private rolloverIfNeeded(): void {
     const today = utcDay(this.opts.now());
     if (this.state.day !== today) {
-      this.state = { day: today, callsToday: 0, lastCallTs: null };
+      this.state = { day: today, callsToday: 0 };
     }
   }
 
@@ -77,7 +82,6 @@ export class BudgetTracker {
     this.state = {
       day: this.state.day,
       callsToday: this.state.callsToday + 1,
-      lastCallTs: this.opts.now().toISOString(),
     };
     try {
       await writeFile(this.opts.statePath, JSON.stringify(this.state));

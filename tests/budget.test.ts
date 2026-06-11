@@ -70,6 +70,23 @@ describe('BudgetTracker', () => {
     expect(b.callsToday()).toBe(0);
   });
 
+  it('resets when callsToday is negative or non-integer (hardened load)', async () => {
+    // A hand-edited or corrupted file whose callsToday is well-formed JSON but
+    // not a non-negative integer must not pass through to the spend-cap
+    // comparison. Each bad shape resets to a clean counter.
+    const now = () => new Date('2026-05-10T00:00:00Z');
+    for (const bad of [
+      { day: '2026-05-10', callsToday: -1 },
+      { day: '2026-05-10', callsToday: 1.5 },
+    ]) {
+      const path = join(dir, `budget-${bad.callsToday}.json`);
+      await writeFile(path, JSON.stringify(bad));
+      const b = await BudgetTracker.load({ maxPerDay: 3, statePath: path, now });
+      expect(b.callsToday()).toBe(0);
+      expect(b.canSpend()).toBe(true);
+    }
+  });
+
   it('logs and does not throw when the state write fails', async () => {
     const messages: string[] = [];
     // statePath under a non-existent subdirectory: load reads ENOENT (the clean

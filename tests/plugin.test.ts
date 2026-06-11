@@ -81,7 +81,6 @@ describe('plugin lifecycle', () => {
     expect(beforeListeners).toBeGreaterThan(0);
     await plugin.stop();
     expect(app.buses.get('propulsion.port.revolutions')?.listenerCount()).toBe(0);
-    expect(app.statusMessages.at(-1)).toBe('Stopped');
   });
 
   it('supports a start/stop/start cycle', async () => {
@@ -97,7 +96,7 @@ describe('plugin lifecycle', () => {
     expect(app.buses.get('propulsion.port.revolutions')?.listenerCount()).toBeGreaterThan(0);
     expect(app.registeredPuts.length).toBe(firstPutCount * 2);
     await plugin.stop();
-    expect(app.statusMessages.at(-1)).toBe('Stopped');
+    expect(app.buses.get('propulsion.port.revolutions')?.listenerCount()).toBe(0);
   });
 
   it('does not resurrect the runtime when stop() races the deferred router init', async () => {
@@ -220,7 +219,7 @@ describe('plugin lifecycle', () => {
     // the same pattern. Each job must fire only its own analyzer; a job that
     // dispatched by pattern would fan out to both and double-spend the budget.
     const registerSpy = vi.spyOn(CronScheduler.prototype, 'register');
-    const runByIdSpy = vi.spyOn(TriggerRouter.prototype, 'runById').mockResolvedValue(undefined);
+    const runByIdSpy = vi.spyOn(TriggerRouter.prototype, 'runById').mockResolvedValue('reported');
     const plugin = createPlugin(app as never);
     plugin.start(
       {
@@ -309,7 +308,7 @@ describe('plugin lifecycle', () => {
     await plugin.stop();
   });
 
-  it('invokes the PUT handler callback with FAILED 503 before the router is ready', async () => {
+  it('returns COMPLETED 503 synchronously before the router is ready (no PENDING ack)', async () => {
     app.availablePaths = ['propulsion.port.revolutions'];
     const plugin = createPlugin(app as never);
     // Do NOT await _whenReady: the PUT handler is registered synchronously in
@@ -331,19 +330,15 @@ describe('plugin lifecycle', () => {
       'plugins.openrouter-companion.maintenance.run',
       { reason: 'manual' },
       cb,
-    );
-    expect(sync).toEqual({ state: 'PENDING' });
-    // The not-ready branch acks synchronously (no await before the ack), so the
-    // callback has already fired exactly once by the time the handler returns.
-    expect(cb).toHaveBeenCalledTimes(1);
-    const arg = cb.mock.calls[0]?.[0] as {
-      state: string;
-      statusCode?: number;
-      message?: string;
-    };
-    expect(arg.state).toBe('FAILED');
-    expect(arg.statusCode).toBe(503);
-    expect(arg.message).toMatch(/not fully started/);
+    ) as { state: string; statusCode?: number; message?: string };
+    // The not-ready guard resolves synchronously with a terminal result, rather
+    // than returning PENDING and acking via cb: a PENDING return plus a 503 cb
+    // would have SK surface a 503 carrying a PENDING state and a result href
+    // that never completes. The cb must not be called.
+    expect(sync.state).toBe('COMPLETED');
+    expect(sync.statusCode).toBe(503);
+    expect(sync.message).toMatch(/not fully started/);
+    expect(cb).not.toHaveBeenCalled();
 
     // Let the deferred init settle so stop() tears down a fully-wired runtime.
     await plugin._whenReady();
