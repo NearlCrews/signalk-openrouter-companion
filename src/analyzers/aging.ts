@@ -8,10 +8,10 @@ import { discoverBankIds } from '../core/discovery.js';
 import { asFiniteNumber, DAY_MS, fmtNumber } from '../core/format.js';
 import { bankPaths } from '../core/paths.js';
 import {
-  escapeSqlLiteral,
+  decodePathKeyed,
   flattenSql,
-  indexColumns,
-  QUESTDB_SELF_CONTEXT,
+  isoRange,
+  QUESTDB_SELF_CONTEXT_SQL,
   quotedPathList,
 } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
@@ -109,7 +109,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {
     if (!deps.questdb) return null;
-    const bankIds = discoverBankIds(Array.from(deps.buffer.pathKeys()));
+    const bankIds = discoverBankIds(deps.buffer.pathKeys());
     if (bankIds.length === 0) return null;
 
     const questdb = deps.questdb;
@@ -126,7 +126,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const summariesByWindow = await Promise.all(
       this.windowDays.map(async (days) => ({
         days,
-        summaries: await queryWindow(questdb, QUESTDB_SELF_CONTEXT, allPaths, days, firedMs),
+        summaries: await queryWindow(questdb, allPaths, days, firedMs),
       })),
     );
 
@@ -153,11 +153,12 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   }
 
   buildPrompt(input: AgingInput): { system: string; user: string } {
-    const days = input.banks[0]?.windows.map((w) => w.days) ?? Array.from(this.windowDays);
-    const windowDesc = days.map((d) => `${d}-day`).join(' and ');
+    // By the time buildPrompt runs, each bank's windows match this.windowDays
+    // one for one (collectContext builds them from the same list).
+    const windowDesc = this.windowDays.map((d) => `${d}-day`).join(' and ');
     const lines: string[] = [];
     lines.push(`## Generated ${input.generatedAt}`);
-    lines.push(`Configured windows: ${windowDesc} (longest = ${days.at(-1) ?? days[0]} days)`);
+    lines.push(`Configured windows: ${windowDesc} (longest = ${this.windowDays.at(-1)} days)`);
     lines.push('');
     for (const b of input.banks) {
       lines.push(`### Bank: ${b.id}`);
@@ -220,22 +221,19 @@ function computeWindowStats(
 
 async function queryWindow(
   client: NonNullable<AnalyzerDeps['questdb']>,
-  context: string,
   paths: string[],
   days: number,
   firedMs: number,
 ): Promise<Map<string, PathSummary>> {
-  const escapedCtx = escapeSqlLiteral(context);
   const escapedPaths = quotedPathList(paths);
   // Explicit ISO bounds anchored to the trigger time. A server-side now()
   // upper bound would let BMS samples that arrive between the trigger and the
   // query execution leak into last(value); pinning ts <= firedAt prevents it.
-  const fromIso = new Date(firedMs - days * DAY_MS).toISOString();
-  const toIso = new Date(firedMs).toISOString();
+  const [fromIso, toIso] = isoRange(firedMs - days * DAY_MS, firedMs);
   const sql = flattenSql(`
     SELECT path, first(value) AS first_val, last(value) AS last_val, count() AS n
     FROM signalk
-    WHERE context = '${escapedCtx}'
+    WHERE context = '${QUESTDB_SELF_CONTEXT_SQL}'
       AND path IN (${escapedPaths})
       AND ts > '${fromIso}'
       AND ts <= '${toIso}'
@@ -244,25 +242,20 @@ async function queryWindow(
 
   // A query fault propagates: aging requires QuestDB, so a fault is a real
   // analyzer failure and must surface as a failure report, not a silent skip.
-  const out = new Map<string, PathSummary>();
   const r = await client.query(sql);
-  const cols = indexColumns(r);
-  const pIdx = cols.get('path') ?? -1;
-  if (pIdx < 0) return out;
-  const fIdx = cols.get('first_val') ?? -1;
-  const lIdx = cols.get('last_val') ?? -1;
-  const nIdx = cols.get('n') ?? -1;
-  for (const row of r.dataset) {
-    const path = row[pIdx];
-    if (typeof path !== 'string') continue;
-    const firstV = fIdx >= 0 ? row[fIdx] : null;
-    const lastV = lIdx >= 0 ? row[lIdx] : null;
-    const nV = nIdx >= 0 ? row[nIdx] : 0;
-    out.set(path, {
-      first: typeof firstV === 'number' ? firstV : Number.NaN,
-      last: typeof lastV === 'number' ? lastV : Number.NaN,
-      n: typeof nV === 'number' ? nV : 0,
-    });
-  }
-  return out;
+  return decodePathKeyed(r, (cols) => {
+    const fIdx = cols.get('first_val') ?? -1;
+    const lIdx = cols.get('last_val') ?? -1;
+    const nIdx = cols.get('n') ?? -1;
+    return (row) => {
+      const firstV = fIdx >= 0 ? row[fIdx] : null;
+      const lastV = lIdx >= 0 ? row[lIdx] : null;
+      const nV = nIdx >= 0 ? row[nIdx] : 0;
+      return {
+        first: typeof firstV === 'number' ? firstV : Number.NaN,
+        last: typeof lastV === 'number' ? lastV : Number.NaN,
+        n: typeof nV === 'number' ? nV : 0,
+      };
+    };
+  });
 }

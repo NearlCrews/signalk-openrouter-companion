@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { type BatteryEvent, BatteryMonitor } from '../src/core/batteryMonitor.js';
 
+// BatteryEvent is a discriminated union; soc lives only on low-soc-* variants
+// and imbalanceV only on cell-imbalance-*. These narrow by presence so the
+// assertions can read the variant-specific field without a cast.
+function socOf(e: BatteryEvent | undefined): number | undefined {
+  return e && 'soc' in e ? e.soc : undefined;
+}
+function imbalanceOf(e: BatteryEvent | undefined): number | undefined {
+  return e && 'imbalanceV' in e ? e.imbalanceV : undefined;
+}
+
 function makeMonitor() {
   const events: BatteryEvent[] = [];
   const monitor = new BatteryMonitor(
@@ -29,7 +39,7 @@ describe('BatteryMonitor low-soc', () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('low-soc-enter');
     expect(events[0]?.bankId).toBe('house');
-    expect(events[0]?.soc).toBe(0.25);
+    expect(socOf(events[0])).toBe(0.25);
   });
 
   it('does not emit again on further drop while already low', () => {
@@ -48,7 +58,7 @@ describe('BatteryMonitor low-soc', () => {
     monitor.observeSoc('house', 'bms', 0.36, 1_002_000);
     expect(events).toHaveLength(2);
     expect(events[1]?.kind).toBe('low-soc-exit');
-    expect(events[1]?.soc).toBe(0.36);
+    expect(socOf(events[1])).toBe(0.36);
   });
 
   it('aggregates SoC across sources (min wins: conservative for a safety alarm)', () => {
@@ -62,7 +72,7 @@ describe('BatteryMonitor low-soc', () => {
     monitor.observeSoc('house', 'bms-a', 0.2, 1_001_000);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('low-soc-enter');
-    expect(events[0]?.soc).toBe(0.2);
+    expect(socOf(events[0])).toBe(0.2);
   });
 
   it('tracks banks independently', () => {
@@ -85,7 +95,7 @@ describe('BatteryMonitor low-soc', () => {
     monitor.observeSoc('house', 'bms-b', 0.25, 1_007_000);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('low-soc-enter');
-    expect(events[0]?.soc).toBe(0.25);
+    expect(socOf(events[0])).toBe(0.25);
   });
 });
 
@@ -116,7 +126,7 @@ describe('BatteryMonitor cell-imbalance', () => {
     monitor.tick(1_063_000);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('cell-imbalance-enter');
-    expect(events[0]?.imbalanceV).toBeGreaterThan(0.1);
+    expect(imbalanceOf(events[0])).toBeGreaterThan(0.1);
   });
 
   it('emits exit when imbalance drops back below threshold', () => {
@@ -162,7 +172,7 @@ describe('BatteryMonitor cell-imbalance', () => {
     monitor.tick(1_075_000);
     expect(events).toHaveLength(2);
     expect(events[1]?.kind).toBe('cell-imbalance-exit');
-    expect(events[1]?.imbalanceV).toBe(0);
+    expect(imbalanceOf(events[1])).toBe(0);
   });
 
   it('resets the settle timer without emitting when the imbalance resolves before settling', () => {

@@ -5,7 +5,7 @@ import {
   resolveSystemPrompt,
 } from '../core/cfg.js';
 import { discoverEngineIds, WATCH_PREFIXES } from '../core/discovery.js';
-import { fmtNumber } from '../core/format.js';
+import { fmtNumber, pushBankLines } from '../core/format.js';
 import {
   BATTERIES_PARENT_PATH,
   bankPaths,
@@ -113,7 +113,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       // No engine session is supplied on a cron/PUT fire. Recover the engine
       // id from the buffer when the vessel has exactly one, so the fallback
       // report both names the engine and scopes its telemetry correctly.
-      const discovered = discoverEngineIds(Array.from(deps.buffer.pathKeys()));
+      const discovered = discoverEngineIds(deps.buffer.pathKeys());
       engineId = discovered.length === 1 && discovered[0] ? discovered[0] : UNKNOWN_ENGINE;
     } else {
       return null;
@@ -170,7 +170,10 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     lines.push('');
     lines.push('## Batteries (end-of-session snapshot)');
     for (const b of batteries) {
-      lines.push(`- ${b.id}: ${JSON.stringify(b)}`);
+      pushBankLines(lines, b.id, b, [
+        { label: 'voltage (session)', summary: b.voltageSession },
+        { label: 'state of charge (session)', summary: b.socSession },
+      ]);
     }
     return { system: this.systemPrompt, user: lines.join('\n') };
   }

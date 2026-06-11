@@ -20,7 +20,7 @@ function makeCfg(overrides: Partial<{ events: string[] }> = {}) {
   return {
     triggers: {
       cron: { enabled: false, pattern: '', timezone: '' },
-      put: { enabled: false, path: '' },
+      put: { enabled: false },
       events: overrides.events ?? [
         'low-soc-enter',
         'low-soc-exit',

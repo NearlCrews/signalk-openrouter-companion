@@ -9,15 +9,15 @@ import {
   WIND_DIRECTION_PATH,
 } from '../core/paths.js';
 import {
-  escapeSqlLiteral,
+  decodePathKeyed,
   flattenSql,
-  indexColumns,
-  QUESTDB_SELF_CONTEXT,
+  isoRange,
+  QUESTDB_SELF_CONTEXT_SQL,
   type QuestDBClient,
   quotedPathList,
 } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
-import { isSeverityFloor } from '../severityFloors.js';
+import { isSeverityFloor, SEVERITY_GRADES, type SeverityGrade } from '../severityFloors.js';
 import {
   type AnalyzerTriggerCfg,
   FORECAST_DEFAULT_SEVERITY_FLOOR,
@@ -49,11 +49,6 @@ const PA_PER_HPA = 100;
 // imported above, so the bucketMeans circular gate below cannot drift from the
 // canonical path list.
 
-// Four-level severity scale, ordered weakest to strongest so the array index
-// doubles as the rank used for the severity-floor comparison.
-const SEVERITY_GRADES = ['none', 'minor', 'moderate', 'severe'] as const;
-type SeverityGrade = (typeof SEVERITY_GRADES)[number];
-
 // Maps an LLM grade to the Signal K notification state used when the grade
 // meets or exceeds the configured floor. Below the floor the state is forced
 // to 'nominal' (see resolveForecastState).
@@ -67,63 +62,39 @@ const GRADE_STATE: Record<SeverityGrade, NotificationState> = {
 type PathFamily = 'canonical' | 'extension';
 
 interface WeatherPathMeta {
-  family: PathFamily;
   label: string;
   unit: string;
 }
 
-// Per-path family/label/unit metadata. Units are Signal K SI base units, named
-// in the prompt so the LLM does not misread Pa as hPa or radians as degrees.
+// Per-path label/unit metadata. Units are Signal K SI base units, named in the
+// prompt so the LLM does not misread Pa as hPa or radians as degrees. A path's
+// family is not stored here: it is derived from membership in
+// WEATHER_EXTENSION_PATHS (see familyForPath) so it cannot drift from the
+// canonical/extension split single-sourced in paths.ts.
 const WEATHER_PATH_META: Record<string, WeatherPathMeta> = {
-  'environment.outside.pressure': { family: 'canonical', label: 'barometric pressure', unit: 'Pa' },
-  'environment.outside.temperature': {
-    family: 'canonical',
-    label: 'air temperature',
-    unit: 'K',
-  },
-  'environment.outside.dewPointTemperature': {
-    family: 'canonical',
-    label: 'dew point',
-    unit: 'K',
-  },
-  'environment.outside.relativeHumidity': {
-    family: 'canonical',
-    label: 'relative humidity',
-    unit: 'ratio 0-1',
-  },
-  'environment.wind.speedOverGround': {
-    family: 'canonical',
-    label: 'wind speed',
-    unit: 'm/s',
-  },
-  [WIND_DIRECTION_PATH]: {
-    family: 'canonical',
-    label: 'wind direction (true)',
-    unit: 'rad',
-  },
-  'environment.weather.speedGust': { family: 'extension', label: 'wind gust', unit: 'm/s' },
-  'environment.weather.cloudCover': {
-    family: 'extension',
-    label: 'cloud cover',
-    unit: 'ratio 0-1',
-  },
-  'environment.weather.cloudCeiling': {
-    family: 'extension',
-    label: 'cloud ceiling',
-    unit: 'm',
-  },
-  'environment.weather.visibility': { family: 'extension', label: 'visibility', unit: 'm' },
-  'environment.weather.precipitationLastHour': {
-    family: 'extension',
-    label: 'precipitation (last hour)',
-    unit: 'm',
-  },
-  'environment.weather.temperatureDeparture24h': {
-    family: 'extension',
-    label: '24h temperature departure',
-    unit: 'K',
-  },
+  'environment.outside.pressure': { label: 'barometric pressure', unit: 'Pa' },
+  'environment.outside.temperature': { label: 'air temperature', unit: 'K' },
+  'environment.outside.dewPointTemperature': { label: 'dew point', unit: 'K' },
+  'environment.outside.relativeHumidity': { label: 'relative humidity', unit: 'ratio 0-1' },
+  'environment.wind.speedOverGround': { label: 'wind speed', unit: 'm/s' },
+  [WIND_DIRECTION_PATH]: { label: 'wind direction (true)', unit: 'rad' },
+  'environment.weather.speedGust': { label: 'wind gust', unit: 'm/s' },
+  'environment.weather.cloudCover': { label: 'cloud cover', unit: 'ratio 0-1' },
+  'environment.weather.cloudCeiling': { label: 'cloud ceiling', unit: 'm' },
+  'environment.weather.visibility': { label: 'visibility', unit: 'm' },
+  'environment.weather.precipitationLastHour': { label: 'precipitation (last hour)', unit: 'm' },
+  'environment.weather.temperatureDeparture24h': { label: '24h temperature departure', unit: 'K' },
 };
+
+// A weather path's family is determined solely by membership in the extension
+// list, the single source of the canonical/extension split (paths.ts). Both
+// the buildPrompt section split and the PathTrend.family tag read this, so the
+// classification cannot diverge from that list.
+const WEATHER_EXTENSION_PATH_SET: ReadonlySet<string> = new Set(WEATHER_EXTENSION_PATHS);
+
+function familyForPath(path: string): PathFamily {
+  return WEATHER_EXTENSION_PATH_SET.has(path) ? 'extension' : 'canonical';
+}
 
 const ALL_WEATHER_PATHS: ReadonlyArray<string> = [
   ...WEATHER_CANONICAL_PATHS,
@@ -209,7 +180,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     let baseline = new Map<string, number>();
     if (questdb) {
       try {
-        baseline = await queryBaseline(questdb, QUESTDB_SELF_CONTEXT, firedMs);
+        baseline = await queryBaseline(questdb, firedMs);
       } catch (err) {
         deps.logger.debug(`forecast: QuestDB baseline query failed: ${String(err)}`);
       }
@@ -244,7 +215,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
       const latest = latestEntry(entries);
       return {
         path,
-        family: meta?.family ?? 'canonical',
+        family: familyForPath(path),
         label: meta?.label ?? path,
         unit: meta?.unit ?? '',
         source: latest?.source ?? null,
@@ -419,36 +390,29 @@ function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): vo
 // since the baseline is a strict enhancement.
 async function queryBaseline(
   questdb: QuestDBClient,
-  context: string,
   firedMs: number,
 ): Promise<Map<string, number>> {
-  const escapedCtx = escapeSqlLiteral(context);
-  const fromIso = new Date(firedMs - BASELINE_FROM_HOURS * HOUR_MS).toISOString();
-  const toIso = new Date(firedMs - BASELINE_TO_HOURS * HOUR_MS).toISOString();
+  const [fromIso, toIso] = isoRange(
+    firedMs - BASELINE_FROM_HOURS * HOUR_MS,
+    firedMs - BASELINE_TO_HOURS * HOUR_MS,
+  );
   const pathList = quotedPathList(ALL_WEATHER_PATHS);
   const sql = flattenSql(`
     SELECT path, avg(value) AS mean_value FROM signalk
     WHERE path IN (${pathList})
-      AND context = '${escapedCtx}'
+      AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
       AND ts >= '${fromIso}'
       AND ts < '${toIso}'
     GROUP BY path
   `);
 
-  const out = new Map<string, number>();
   const res = await questdb.query(sql);
-  const cols = indexColumns(res);
-  const pathIdx = cols.get('path') ?? -1;
-  const meanIdx = cols.get('mean_value') ?? -1;
-  if (pathIdx < 0 || meanIdx < 0) return out;
-  for (const row of res.dataset) {
-    const path = row[pathIdx];
-    const mean = asFiniteNumber(row[meanIdx]);
-    if (typeof path === 'string' && mean != null) {
-      out.set(path, mean);
-    }
-  }
-  return out;
+  // A path with no rows in the window has a null mean, which asFiniteNumber
+  // maps to null so decodePathKeyed drops it from the baseline.
+  return decodePathKeyed(res, (cols) => {
+    const meanIdx = cols.get('mean_value') ?? -1;
+    return (row) => (meanIdx >= 0 ? asFiniteNumber(row[meanIdx]) : null);
+  });
 }
 
 interface ParsedForecast {
@@ -495,6 +459,8 @@ export function resolveForecastState(
   floor: SeverityFloor,
 ): NotificationState {
   const gradeRank = SEVERITY_GRADES.indexOf(grade);
+  // The floor presets are typed as a subset of SEVERITY_GRADES (severityFloors.ts),
+  // so this rank lookup can never return -1.
   const floorRank = SEVERITY_GRADES.indexOf(floor);
   const raised = gradeRank > 0 && gradeRank >= floorRank;
   return raised ? GRADE_STATE[grade] : 'nominal';

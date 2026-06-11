@@ -3,6 +3,8 @@
 // readValueAt returns the raw value (any type) so callers can handle string,
 // object, or null leaves themselves.
 
+import { asFiniteNumber } from './format.js';
+
 function walk(node: unknown, subpath: string): unknown {
   const segs = subpath.split('.');
   let cur: unknown = node;
@@ -14,8 +16,7 @@ function walk(node: unknown, subpath: string): unknown {
 }
 
 export function readNumberAt(node: unknown, subpath: string): number | null {
-  const v = readValueAt(node, subpath);
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  return asFiniteNumber(readValueAt(node, subpath));
 }
 
 export function readValueAt(node: unknown, subpath: string): unknown {

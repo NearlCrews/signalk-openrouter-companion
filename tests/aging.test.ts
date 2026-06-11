@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
+import type { Analyzer, TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { AgingAnalyzer } from '../src/analyzers/aging.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { DAY_MS } from '../src/core/format.js';
@@ -27,7 +27,7 @@ function makeCfg(overrides: Partial<{ shortWindowDays: number; longWindowDays: n
   return {
     triggers: {
       cron: { enabled: true, pattern: '0 8 1 * *', timezone: '' },
-      put: { enabled: true, path: 'plugins.openrouter-companion.aging.run' },
+      put: { enabled: true },
       events: [] as string[],
     },
     shortWindowDays: overrides.shortWindowDays ?? 30,
@@ -45,10 +45,7 @@ function windowDaysFromSql(sql: string): number {
   return Math.round((Date.parse(upper[1]) - Date.parse(lower[1])) / DAY_MS);
 }
 
-function windowStats<B extends { windows: { days: number; stats: S }[] }, S>(
-  bank: B,
-  days: number,
-): S {
+function windowStats<S>(bank: { windows: { days: number; stats: S }[] }, days: number): S {
   const w = bank.windows.find((x) => x.days === days);
   if (!w) throw new Error(`no ${days}d window`);
   return w.stats;
@@ -432,7 +429,7 @@ describe('AgingAnalyzer', () => {
   });
 
   it('omits publishOutput so the router uses the publishReport default on the canonical aging path', async () => {
-    const a = new AgingAnalyzer(makeCfg());
+    const a: Analyzer = new AgingAnalyzer(makeCfg());
     // Aging delegates publish-side responsibility to the router default
     // (publisher.publishReport(this.id, ctx, text) on
     // notifications.openrouter-companion.<id>.report with state: nominal).

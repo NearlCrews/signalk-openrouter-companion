@@ -86,6 +86,14 @@ export class RollingBuffer {
   // behind a timestamp inversion. Compact in place over every entry instead.
   private evict(arr: BufferEntry[], now: number): void {
     const cutoff = now - this.opts.maxAgeMs;
+    // Steady-state fast path: the first-arrived entry is still inside the
+    // window and the path is under its cap, so there is nothing to drop. Skip
+    // the O(n) compaction; record() then stays O(1) until the front ages out
+    // or the cap is reached. A stale entry stranded behind a timestamp
+    // inversion lingers harmlessly here: slice() and summarize() re-filter by
+    // window on read, and the over-cap splice below still bounds memory.
+    const oldest = arr[0];
+    if (oldest && oldest.ts >= cutoff && arr.length <= this.opts.maxEntriesPerPath) return;
     let write = 0;
     for (let read = 0; read < arr.length; read += 1) {
       const e = arr[read];

@@ -14,7 +14,7 @@ function makeCfg() {
   return {
     triggers: {
       cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
-      put: { enabled: true, path: 'plugins.openrouter-companion.health.run' },
+      put: { enabled: true },
       events: [],
     },
   };
@@ -91,7 +91,7 @@ describe('HealthAnalyzer', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date(now) };
     const r = await a.collectContext(ctx, makeDeps(app, buf));
     expect(r).not.toBeNull();
-    const banks = r?.banks as Array<Record<string, unknown>>;
+    const banks = r?.banks ?? [];
     expect(banks).toHaveLength(1);
     expect(banks[0]?.id).toBe('house');
     expect(banks[0]?.stateOfCharge).toBe(0.85);
@@ -111,6 +111,7 @@ describe('HealthAnalyzer', () => {
           stateOfCharge: 0.85,
           nominalCapacityJ: 5_400_000,
           cycles: 12,
+          temperatureK: null,
           voltage24h: { min: 12.3, max: 12.7, mean: 12.5, count: 60, sources: ['bms'] },
           cells: null,
         },

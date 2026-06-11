@@ -1,6 +1,7 @@
 import { TypedEmitter } from './emitter.js';
 import { asFiniteNumber } from './format.js';
 import type { Logger } from './logger.js';
+import { fuseMax } from './readings.js';
 
 type EngineEventKind = 'engine-start' | 'engine-stop' | 'possible-stop';
 
@@ -46,6 +47,9 @@ interface PerSourceReading {
   hz: number;
   ts: number;
 }
+
+// Module-level extractor so the per-delta fuse scan allocates no closure.
+const hzOf = (r: PerSourceReading): number => r.hz;
 
 interface EngineState {
   engineId: string;
@@ -143,14 +147,10 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
     }
     s.recentBySource.set(source, { hz, ts });
     const cutoff = ts - this.opts.sourceWindowMs;
-    let effectiveHz = Number.NEGATIVE_INFINITY;
-    for (const [src, r] of s.recentBySource) {
-      if (r.ts < cutoff) {
-        s.recentBySource.delete(src);
-        continue;
-      }
-      if (r.hz > effectiveHz) effectiveHz = r.hz;
-    }
+    // Fuse multiple sources with the MAXIMUM RPM: the conservative direction
+    // here is to avoid falsely cutting a session short, so one slow or stale
+    // source must not pull the effective RPM below the stop threshold.
+    const effectiveHz = fuseMax(s.recentBySource, cutoff, hzOf);
 
     if (!s.running) {
       if (effectiveHz >= this.opts.startRpmHz) {

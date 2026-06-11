@@ -4,7 +4,7 @@ import {
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
 } from '../core/cfg.js';
-import { DAY_MS, fmtNumber } from '../core/format.js';
+import { DAY_MS, fmtNumber, pushBankLines } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
 import {
   asTreeMap,
@@ -100,19 +100,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     lines.push(`## Generated ${input.generatedAt}`);
     lines.push('');
     for (const b of banks) {
-      lines.push(`### Bank: ${b.id}`);
-      lines.push(`- voltage now: ${fmtNumber(b.voltage)}`);
-      lines.push(`- current now: ${fmtNumber(b.current)}`);
-      lines.push(`- state of charge: ${fmtNumber(b.stateOfCharge)}`);
-      if (b.nominalCapacityJ != null)
-        lines.push(`- nominal capacity (J): ${fmtNumber(b.nominalCapacityJ)}`);
-      if (b.cycles != null) lines.push(`- cycles: ${fmtNumber(b.cycles)}`);
-      if (b.temperatureK != null) lines.push(`- temperature (K): ${fmtNumber(b.temperatureK)}`);
-      if (b.voltage24h) {
-        lines.push(
-          `- voltage 24h: min=${fmtNumber(b.voltage24h.min)} max=${fmtNumber(b.voltage24h.max)} mean=${fmtNumber(b.voltage24h.mean)} count=${fmtNumber(b.voltage24h.count)}`,
-        );
-      }
+      pushBankLines(lines, b.id, b, [{ label: 'voltage 24h', summary: b.voltage24h }]);
       if (b.cells && b.cells.length > 0) {
         const cellLine = b.cells.map((c) => `${c.index}=${fmtNumber(c.voltage)}`).join(' ');
         lines.push(`- cells: ${cellLine}`);

@@ -16,7 +16,7 @@ function makeCfg(overrides: Partial<{ baselineDays: number }> = {}) {
   return {
     triggers: {
       cron: { enabled: true, pattern: '0 8 * * 0', timezone: '' },
-      put: { enabled: true, path: 'plugins.openrouter-companion.drift.run' },
+      put: { enabled: true },
       events: [] as string[],
     },
     baselineDays: overrides.baselineDays ?? 30,

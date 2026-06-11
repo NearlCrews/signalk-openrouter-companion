@@ -81,11 +81,15 @@ describe('QuestDBClient', () => {
     expect(init.signal?.aborted).toBe(true);
   });
 
-  it('withTimeout aborts the in-flight request when the timeout fires', async () => {
-    vi.useFakeTimers();
+  it('aborts the in-flight request when the request timeout fires', async () => {
+    // QuestDBClient delegates to fetchWithTimeout, which bounds the request
+    // with AbortSignal.timeout. That is a platform timer fake timers do not
+    // drive, so stub it to a few-ms real signal instead of waiting the full
+    // 30s. The request only settles on abort, so the win must come from the
+    // timeout.
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => realTimeout(10));
     try {
-      // The request never resolves on its own; it settles only when its signal
-      // aborts. That forces the win to come from withTimeout's setTimeout path.
       fetchMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => {
         return new Promise((_resolve, reject) => {
           init.signal.addEventListener('abort', () => reject(new Error('request aborted')), {
@@ -94,14 +98,9 @@ describe('QuestDBClient', () => {
         });
       });
       const q = new QuestDBClient({ url: 'http://localhost:9000' });
-      const p = q.probe();
-      // Attach the rejection handler before advancing timers so the rejection
-      // is never unhandled. The default QuestDB timeout is 30s; advance past it.
-      const expectation = expect(p).rejects.toThrow();
-      await vi.advanceTimersByTimeAsync(31_000);
-      await expectation;
+      await expect(q.probe()).rejects.toThrow();
     } finally {
-      vi.useRealTimers();
+      spy.mockRestore();
     }
   });
 });

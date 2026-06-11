@@ -14,7 +14,7 @@ function makeCfg(overrides: Record<string, unknown> = {}) {
   return {
     triggers: {
       cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
-      put: { enabled: true, path: 'plugins.openrouter-companion.liveness.run' },
+      put: { enabled: true },
       events: [],
     },
     stalenessThresholdSec: 300,

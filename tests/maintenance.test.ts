@@ -36,7 +36,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        put: { enabled: true },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,
@@ -72,7 +72,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        put: { enabled: true },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,
@@ -120,7 +120,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        put: { enabled: true },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,
@@ -142,7 +142,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        put: { enabled: true },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,
@@ -166,7 +166,7 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true, path: 'plugins.openrouter-companion.maintenance.run' },
+        put: { enabled: true },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,
@@ -192,6 +192,10 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
           current: 0.5,
           stateOfCharge: 0.92,
           nominalCapacityJ: 5_400_000,
+          cycles: 120,
+          temperatureK: 298,
+          voltageSession: { min: 13.4, max: 13.7, mean: 13.6, count: 12, sources: ['bms'] },
+          socSession: { min: 0.9, max: 0.95, mean: 0.92, count: 12, sources: ['bms'] },
         },
       ],
     });
@@ -201,14 +205,20 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     expect(out.user).toContain('propulsion.port.revolutions');
     expect(out.user).toContain('maintenanceNeeded');
     expect(out.user).toContain('Service due');
-    expect(out.user).toContain('house');
+    // Batteries are formatted per field, not dumped as raw BufferSummary JSON.
+    expect(out.user).toContain('### Bank: house');
+    expect(out.user).toContain('voltage now: 13.600');
+    expect(out.user).toContain('state of charge: 0.920');
+    expect(out.user).toContain('cycles: 120');
+    expect(out.user).toContain('voltage (session): min=13.400 max=13.700 mean=13.600 count=12');
+    expect(out.user).not.toContain('"voltageSession"');
   });
 
   it('uses customSystemPrompt when provided', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false, path: 'p' },
+        put: { enabled: false },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,
@@ -227,7 +237,7 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     const a = new MaintenanceAnalyzer({
       triggers: {
         cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false, path: 'p' },
+        put: { enabled: false },
         events: ['engine-stop'],
       },
       minSessionSeconds: 60,

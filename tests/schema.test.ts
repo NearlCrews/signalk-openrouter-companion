@@ -9,6 +9,17 @@ import {
 import { mergeWithDefaults } from '../src/types.js';
 
 /**
+ * Index into a Record by key, asserting the key is present. Narrows away the
+ * `| undefined` that noUncheckedIndexedAccess adds to every index access, so
+ * the tests read the known schema shape without scattered non-null assertions.
+ */
+function at<T>(record: Record<string, T>, key: string): T {
+  const value = record[key];
+  if (value === undefined) throw new Error(`missing key: ${key}`);
+  return value;
+}
+
+/**
  * Walks into the enabled-true branch of a `dependencies.enabled.oneOf` block.
  * Locates the branch by predicate rather than by index so the test still
  * targets the right branch if the order of the two oneOf entries ever flips.
@@ -123,7 +134,7 @@ describe('schema', () => {
       properties: Record<string, EnabledGatedNode>;
     };
     expect(analyzers.properties.liveness).toBeDefined();
-    const onBranch = enabledTrueBranch(analyzers.properties.liveness);
+    const onBranch = enabledTrueBranch(at(analyzers.properties, 'liveness'));
     expect(onBranch.properties.triggers).toBeDefined();
     expect(onBranch.properties.stalenessThresholdSec).toBeDefined();
   });
@@ -134,7 +145,7 @@ describe('schema', () => {
       properties: Record<string, EnabledGatedNode>;
     };
     for (const name of ['maintenance', 'health', 'alerts']) {
-      const onBranch = enabledTrueBranch(analyzers.properties[name]);
+      const onBranch = enabledTrueBranch(at(analyzers.properties, name));
       const triggers = onBranch.properties.triggers as unknown as TriggerSchemaNode;
       const cronOn = enabledTrueBranch(triggers.properties.cron);
       const pattern = cronOn.properties.pattern as {
@@ -200,7 +211,7 @@ describe('schema', () => {
       properties: Record<string, EnabledGatedNode>;
     };
     expect(analyzers.properties.forecast).toBeDefined();
-    const onBranch = enabledTrueBranch(analyzers.properties.forecast);
+    const onBranch = enabledTrueBranch(at(analyzers.properties, 'forecast'));
     expect(onBranch.properties.triggers).toBeDefined();
     const severityFloor = onBranch.properties.severityFloor as {
       type: string;
@@ -221,7 +232,7 @@ describe('schema', () => {
   it('uiSchema marks apiKey as password and drops the advanced-fields list entirely', () => {
     const u = buildUiSchema() as Record<string, Record<string, unknown>>;
     const openrouter = u.openrouter as Record<string, Record<string, unknown>>;
-    expect(openrouter.apiKey['ui:widget']).toBe('password');
+    expect(at(openrouter, 'apiKey')['ui:widget']).toBe('password');
     // Advanced openrouter fields (baseUrl, requestTimeoutMs) are now dropped
     // from the schema entirely rather than hidden via ui:widget, because
     // 'hidden' does not fully hide a field in the SK admin UI (the custom
@@ -237,11 +248,14 @@ describe('schema', () => {
     const u = buildUiSchema() as Record<string, unknown>;
     const analyzers = u.analyzers as Record<string, Record<string, Record<string, unknown>>>;
 
-    const maintEvents = analyzers.maintenance.triggers.events as Record<string, unknown>;
+    const maintEvents = at(at(analyzers, 'maintenance'), 'triggers').events as Record<
+      string,
+      unknown
+    >;
     expect(maintEvents['ui:widget']).toBe('checkboxes');
     expect(maintEvents['ui:enumNames']).toEqual(['Engine session ended']);
 
-    const alertsEvents = analyzers.alerts.triggers.events as Record<string, unknown>;
+    const alertsEvents = at(at(analyzers, 'alerts'), 'triggers').events as Record<string, unknown>;
     expect(alertsEvents['ui:widget']).toBe('checkboxes');
     expect(alertsEvents['ui:enumNames']).toEqual([
       'Low SoC: bank entered low state',
@@ -252,7 +266,7 @@ describe('schema', () => {
 
     // health has no supported events: the events field is omitted from the
     // schema entirely so there is no uiSchema entry for it either.
-    expect(analyzers.health.triggers.events).toBeUndefined();
+    expect(at(at(analyzers, 'health'), 'triggers').events).toBeUndefined();
   });
 
   it('schema omits the events field for analyzers with no supported events', () => {
@@ -269,7 +283,7 @@ describe('schema', () => {
     const u = buildUiSchema() as Record<string, unknown>;
     const analyzers = u.analyzers as Record<string, Record<string, unknown>>;
     for (const name of ['maintenance', 'health', 'alerts']) {
-      const order = analyzers[name]['ui:order'] as string[];
+      const order = at(analyzers, name)['ui:order'] as string[];
       expect(Array.isArray(order)).toBe(true);
       expect(order[0]).toBe('enabled');
       expect(order[1]).toBe('triggers');

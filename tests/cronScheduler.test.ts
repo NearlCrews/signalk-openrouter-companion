@@ -17,18 +17,6 @@ describe('CronScheduler', () => {
     scheduler.stopAll();
   });
 
-  it('returns a working unregister function', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-10T07:59:30Z'));
-    const cb = vi.fn();
-    const scheduler = new CronScheduler();
-    const unregister = scheduler.register('0 8 * * *', cb, 'UTC');
-    unregister();
-    vi.advanceTimersByTime(60_000);
-    expect(cb).not.toHaveBeenCalled();
-    scheduler.stopAll();
-  });
-
   it('stopAll cancels all registered jobs', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-10T07:59:30Z'));

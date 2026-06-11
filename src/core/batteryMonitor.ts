@@ -1,6 +1,7 @@
 import type { BatteryEventKind } from '../analyzers/Analyzer.js';
 import { TypedEmitter } from './emitter.js';
 import type { Logger } from './logger.js';
+import { evictStaleSpan, fuseMin } from './readings.js';
 
 export type { BatteryEventKind } from '../analyzers/Analyzer.js';
 
@@ -33,6 +34,11 @@ interface CellReading {
   v: number;
   ts: number;
 }
+
+// Module-level extractors so the per-delta fuse/span scans allocate no
+// closures.
+const socOf = (r: SocReading): number => r.soc;
+const cellVOf = (r: CellReading): number => r.v;
 
 interface BankState {
   bankId: string;
@@ -86,14 +92,7 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
     // which is the conservative direction there: harder to falsely cut a
     // session short. The conservative direction differs per alarm.)
     const cutoff = ts - this.opts.sourceWindowMs;
-    let effective = Number.POSITIVE_INFINITY;
-    for (const [src, r] of b.recentSoc) {
-      if (r.ts < cutoff) {
-        b.recentSoc.delete(src);
-        continue;
-      }
-      if (r.soc < effective) effective = r.soc;
-    }
+    const effective = fuseMin(b.recentSoc, cutoff, socOf);
     if (!Number.isFinite(effective)) return;
 
     if (!b.socLow && effective < this.lowThreshold) {
@@ -109,10 +108,9 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
     const b = this.getBank(bankId);
     b.recentCells.set(cellIndex, { v, ts });
     const cutoff = ts - this.opts.sourceWindowMs;
-    for (const [idx, r] of b.recentCells) {
-      if (r.ts < cutoff) b.recentCells.delete(idx);
-    }
-    const imbalance = this.computeImbalance(b);
+    // Single pass: age out cells past the source window and read the imbalance
+    // (max - min of cell voltage over the survivors) from the same scan.
+    const imbalance = evictStaleSpan(b.recentCells, cutoff, cellVOf);
     const overEnter = imbalance > this.opts.cellImbalanceV;
     const overExit = imbalance > this.opts.cellImbalanceV * CELL_IMBALANCE_EXIT_FRACTION;
     if (overEnter) {
@@ -138,9 +136,7 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
       // evicting readings older than the source window, the settle timer
       // would fire a false cell-imbalance-enter on hours-old data.
       const cutoff = now - this.opts.sourceWindowMs;
-      for (const [idx, r] of b.recentCells) {
-        if (r.ts < cutoff) b.recentCells.delete(idx);
-      }
+      const imbalance = evictStaleSpan(b.recentCells, cutoff, cellVOf);
       if (b.recentCells.size === 0) {
         b.imbalanceSince = null;
         // The BMS went silent. observeCellV is the only other exit path and it
@@ -162,7 +158,6 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
       if (!b.imbalanceHigh && b.imbalanceSince !== null) {
         const elapsed = now - b.imbalanceSince;
         if (elapsed >= this.imbalanceSettleMs) {
-          const imbalance = this.computeImbalance(b);
           if (imbalance > this.opts.cellImbalanceV) {
             b.imbalanceHigh = true;
             this.emit({
@@ -177,16 +172,5 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
         }
       }
     }
-  }
-
-  private computeImbalance(b: BankState): number {
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    for (const r of b.recentCells.values()) {
-      if (r.v < min) min = r.v;
-      if (r.v > max) max = r.v;
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return 0;
-    return max - min;
   }
 }

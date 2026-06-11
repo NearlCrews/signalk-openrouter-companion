@@ -37,7 +37,7 @@ function makeCfg(
   return {
     triggers: {
       cron: { enabled: overrides.cron ?? true, pattern: '0 */3 * * *', timezone: '' },
-      put: { enabled: overrides.put ?? true, path: 'plugins.openrouter-companion.forecast.run' },
+      put: { enabled: overrides.put ?? true },
       events: [] as string[],
     },
     severityFloor: overrides.severityFloor ?? ('moderate' as SeverityFloor),

@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from './http.js';
+
 interface QuestDBCfg {
   url: string;
 }
@@ -27,6 +29,11 @@ export function quotedPathList(paths: readonly string[]): string {
 // returns. Analyzer queries must filter on this or they match no rows.
 export const QUESTDB_SELF_CONTEXT = 'self';
 
+// Pre-escaped form for embedding directly in a SQL `context = '...'` clause.
+// Escaped once here so the trend analyzers single-source it instead of each
+// calling escapeSqlLiteral(QUESTDB_SELF_CONTEXT) per query.
+export const QUESTDB_SELF_CONTEXT_SQL = escapeSqlLiteral(QUESTDB_SELF_CONTEXT);
+
 // Collapse a multi-line template-literal SQL string to a single space-separated
 // line before sending it over the /exec query string. The trend analyzers all
 // author SQL as indented template literals for readability; this is the shared
@@ -46,6 +53,41 @@ export function indexColumns(r: QueryResult): Map<string, number> {
   return out;
 }
 
+// Decode a path-keyed GROUP BY result into a Map keyed by the `path` column.
+// Shared by the trend analyzers, which all run `... GROUP BY path` and then
+// fold each row into a per-path summary. Two-stage: `build` receives the
+// column index map once and returns the per-row decoder, so callers resolve
+// their aggregate-column indexes once per result instead of once per row.
+// The decoder returning null drops that row from the Map. A result missing
+// the `path` column yields an empty Map rather than throwing, matching the
+// per-analyzer bail that returned the empty accumulator when the path index
+// was negative.
+export function decodePathKeyed<T>(
+  res: QueryResult,
+  build: (cols: ReadonlyMap<string, number>) => (row: readonly unknown[]) => T | null,
+): Map<string, T> {
+  const out = new Map<string, T>();
+  const cols = indexColumns(res);
+  const pIdx = cols.get('path') ?? -1;
+  if (pIdx < 0) return out;
+  const decodeRow = build(cols);
+  for (const row of res.dataset) {
+    const path = row[pIdx];
+    if (typeof path !== 'string') continue;
+    const built = decodeRow(row);
+    if (built == null) continue;
+    out.set(path, built);
+  }
+  return out;
+}
+
+// The two ISO bounds every windowed query builder needs from a millisecond
+// range. Returns [fromIso, toIso] so the SQL `ts > fromIso AND ts <= toIso`
+// clauses read straight from a destructure.
+export function isoRange(fromMs: number, toMs: number): [fromIso: string, toIso: string] {
+  return [new Date(fromMs).toISOString(), new Date(toMs).toISOString()];
+}
+
 export class QuestDBClient {
   constructor(private cfg: QuestDBCfg) {}
 
@@ -54,56 +96,26 @@ export class QuestDBClient {
   // connection, DNS, timeout) so callers that want the reason, such as the
   // QuestDB test endpoint, can report it instead of a bare "unreachable".
   async probe(abortSignal?: AbortSignal): Promise<boolean> {
-    return withTimeout(abortSignal, async (signal) => {
-      const r = await fetch(`${this.cfg.url}/exec?query=SELECT%201`, { signal });
-      if (!r.ok) return false;
-      const j = (await r.json()) as Partial<QueryResult>;
-      return Array.isArray(j.dataset);
-    });
+    const r = await fetchWithTimeout(
+      `${this.cfg.url}/exec?query=SELECT%201`,
+      {},
+      QUESTDB_DEFAULT_TIMEOUT_MS,
+      abortSignal,
+    );
+    if (!r.ok) return false;
+    const j = (await r.json()) as Partial<QueryResult>;
+    return Array.isArray(j.dataset);
   }
 
   async query(sql: string, abortSignal?: AbortSignal): Promise<QueryResult> {
-    return withTimeout(abortSignal, async (signal) => {
-      const r = await fetch(`${this.cfg.url}/exec?query=${encodeURIComponent(sql)}`, {
-        signal,
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const body = (await r.json()) as QueryResult;
-      return { columns: body.columns ?? [], dataset: body.dataset ?? [] };
-    });
-  }
-}
-
-// Wrap a fetch in a per-request timeout that also honors the caller's
-// lifecycle signal. Aborts on whichever fires first; the trend analyzers
-// pass their lifecycle signal, the REST test endpoint passes the runtime's.
-async function withTimeout<T>(
-  caller: AbortSignal | undefined,
-  fn: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const ctrl = new AbortController();
-  // Guard every abort path against double-call. AbortController.abort is
-  // idempotent today, but the second call shadows nothing (reason wins on
-  // first-call); a future runtime that throws on second abort would crash.
-  const safeAbort = (reason: unknown): void => {
-    if (!ctrl.signal.aborted) ctrl.abort(reason);
-  };
-  const onCaller = (): void => safeAbort(caller?.reason);
-  if (caller?.aborted) {
-    // Already aborted at call time: prefer the explicit sync abort over a
-    // listener that will never fire (the event has already happened).
-    safeAbort(caller.reason);
-  } else {
-    caller?.addEventListener('abort', onCaller, { once: true });
-  }
-  const timer = setTimeout(
-    () => safeAbort(new Error('QuestDB request timed out')),
-    QUESTDB_DEFAULT_TIMEOUT_MS,
-  );
-  try {
-    return await fn(ctrl.signal);
-  } finally {
-    clearTimeout(timer);
-    caller?.removeEventListener('abort', onCaller);
+    const r = await fetchWithTimeout(
+      `${this.cfg.url}/exec?query=${encodeURIComponent(sql)}`,
+      {},
+      QUESTDB_DEFAULT_TIMEOUT_MS,
+      abortSignal,
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = (await r.json()) as QueryResult;
+    return { columns: body.columns ?? [], dataset: body.dataset ?? [] };
   }
 }

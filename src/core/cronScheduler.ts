@@ -5,7 +5,9 @@ export class CronScheduler {
 
   // `tz` is the per-job IANA timezone. Each analyzer carries its own
   // `triggers.cron.timezone`, so callers pass that per-analyzer value here.
-  register(pattern: string, cb: () => void, tz?: string): () => void {
+  // Jobs are torn down together via stopAll(); there is no per-job removal
+  // because the lifecycle only ever stops the whole scheduler.
+  register(pattern: string, cb: () => void, tz?: string): void {
     const job = new Cron(pattern, tz ? { timezone: tz } : {}, () => {
       try {
         cb();
@@ -15,10 +17,6 @@ export class CronScheduler {
       }
     });
     this.jobs.add(job);
-    return () => {
-      job.stop();
-      this.jobs.delete(job);
-    };
   }
 
   stopAll(): void {

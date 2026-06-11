@@ -43,6 +43,7 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 // with the panel); these aliases are kept for backward-compat with the
 // analyzer constructor and the existing config shape.
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
+import { clampMin, clampRange, finiteOr } from './core/cfg.js';
 import { DEFAULT_SEVERITY_FLOOR_VALUE, type SeverityFloorPresetValue } from './severityFloors.js';
 
 export type SeverityFloor = SeverityFloorPresetValue;
@@ -361,18 +362,6 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
     imbalanceSettleSec: clampMin(a.imbalanceSettleSec, 1, d.analyzers.alerts.imbalanceSettleSec),
   };
   return cfg;
-}
-
-function clampMin(v: unknown, min: number, fallback: number): number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= min ? v : fallback;
-}
-
-function clampRange(v: unknown, min: number, max: number, fallback: number): number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
-}
-
-function finiteOr(v: unknown, fallback: number): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
 
 function clone<T>(v: T): T {

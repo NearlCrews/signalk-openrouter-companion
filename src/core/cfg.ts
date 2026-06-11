@@ -1,3 +1,26 @@
+import { asFiniteNumber } from './format.js';
+
+// Return v when it is a finite number at or above `min`, else the fallback.
+// Used to sanitize float configuration values (RPM thresholds, seconds) that,
+// unlike clampPositiveInt, keep their fractional part.
+export function clampMin(v: unknown, min: number, fallback: number): number {
+  const n = asFiniteNumber(v);
+  return n != null && n >= min ? n : fallback;
+}
+
+// Return v when it is a finite number within [min, max], else the fallback.
+export function clampRange(v: unknown, min: number, max: number, fallback: number): number {
+  const n = asFiniteNumber(v);
+  return n != null && n >= min && n <= max ? n : fallback;
+}
+
+// Return v when it is any finite number, else the fallback. No range gate, for
+// signed configuration values (an RPM threshold may legitimately be any finite
+// value the operator picks).
+export function finiteOr(v: unknown, fallback: number): number {
+  return asFiniteNumber(v) ?? fallback;
+}
+
 // Sanitize a numeric configuration value. Falls back to `fallback` when the
 // input is not a finite number >= 1; otherwise it is truncated to an integer
 // and clamped into the caller-supplied min/max range.

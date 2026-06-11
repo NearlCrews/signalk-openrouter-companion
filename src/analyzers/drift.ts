@@ -11,7 +11,8 @@ import {
   escapeSqlLiteral,
   flattenSql,
   indexColumns,
-  QUESTDB_SELF_CONTEXT,
+  isoRange,
+  QUESTDB_SELF_CONTEXT_SQL,
 } from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
@@ -142,10 +143,9 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
     const { questdb } = deps;
     if (!questdb) return null;
-    const engineIds = discoverEngineIds(Array.from(deps.buffer.pathKeys()));
+    const engineIds = discoverEngineIds(deps.buffer.pathKeys());
     if (engineIds.length === 0) return null;
 
-    const context = QUESTDB_SELF_CONTEXT;
     const firedMs = ctx.firedAt.getTime();
     const weekStart = firedMs - PAST_WEEK_DAYS * DAY_MS;
     const weekEnd = firedMs;
@@ -156,8 +156,8 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
       await Promise.all(
         engineIds.map(async (engineId): Promise<EngineDrift | null> => {
           const [thisWeek, baseline] = await Promise.all([
-            binEngineWindow(questdb, context, engineId, weekStart, weekEnd),
-            binEngineWindow(questdb, context, engineId, baselineStart, baselineEnd),
+            binEngineWindow(questdb, engineId, weekStart, weekEnd),
+            binEngineWindow(questdb, engineId, baselineStart, baselineEnd),
           ]);
           if (!thisWeek || totalBinCount(thisWeek) === 0) return null;
           if (!baseline || totalBinCount(baseline) === 0) return null;
@@ -222,24 +222,21 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 // fuel-sample density.
 async function binEngineWindow(
   questdb: NonNullable<AnalyzerDeps['questdb']>,
-  context: string,
   engineId: string,
   fromMs: number,
   toMs: number,
 ): Promise<Record<BinKey, BinStats> | null> {
-  const escapedCtx = escapeSqlLiteral(context);
   const { rpm, fuelRate } = enginePaths(engineId);
   const rpmPath = escapeSqlLiteral(rpm);
   const fuelPath = escapeSqlLiteral(fuelRate);
   // Escaped to match the sibling rpm and fuel paths; a no-op on this constant.
   const sogPath = escapeSqlLiteral(SOG_PATH);
-  const fromIso = new Date(fromMs).toISOString();
-  const toIso = new Date(toMs).toISOString();
+  const [fromIso, toIso] = isoRange(fromMs, toMs);
   const sql = flattenSql(`
     WITH r AS (
       SELECT ts, value FROM signalk
       WHERE path = '${rpmPath}'
-        AND context = '${escapedCtx}'
+        AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
         AND ts >= '${fromIso}'
         AND ts < '${toIso}'
         AND value >= ${RPM_RUNNING_THRESHOLD_HZ}
@@ -247,14 +244,14 @@ async function binEngineWindow(
     f AS (
       SELECT ts, value FROM signalk
       WHERE path = '${fuelPath}'
-        AND context = '${escapedCtx}'
+        AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
         AND ts >= '${fromIso}'
         AND ts < '${toIso}'
     ),
     s AS (
       SELECT ts, value FROM signalk
       WHERE path = '${sogPath}'
-        AND context = '${escapedCtx}'
+        AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
         AND ts >= '${fromIso}'
         AND ts < '${toIso}'
     )

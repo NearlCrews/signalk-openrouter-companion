@@ -1,10 +1,10 @@
-const ENGINE_RPM_PATTERN = /^propulsion\.([^.]+)\.revolutions$/;
-// Some gateways publish coolantTemperature, runTime, or oilPressure but not
+// Match an engine id (group 1) off revolutions or any of the aux fields. Some
+// gateways publish coolantTemperature, runTime, or oilPressure but not
 // revolutions (e.g. an older NMEA-2000 engine that only emits PGN 127489 /
-// 127488 fragments). Discover the engine off any of those so analyzers
-// come up.
-const ENGINE_AUX_PATTERN =
-  /^propulsion\.([^.]+)\.(?:coolantTemperature|runTime|oilPressure|temperature|alternatorVoltage|fuel\.rate)$/;
+// 127488 fragments), so discovering the engine off any of those keeps the
+// analyzers coming up.
+const ENGINE_PATTERN =
+  /^propulsion\.([^.]+)\.(?:revolutions|coolantTemperature|runTime|oilPressure|temperature|alternatorVoltage|fuel\.rate)$/;
 const BANK_PATTERN = /^electrical\.batteries\.([^.]+)\./;
 
 export const SOC_PATH_RE = /^electrical\.batteries\.([^.]+)\.capacity\.stateOfCharge$/;
@@ -12,22 +12,24 @@ export const SOC_PATH_RE = /^electrical\.batteries\.([^.]+)\.capacity\.stateOfCh
 // and `cells.<n>.voltage` (the more common community form). Accept both.
 export const CELL_VOLT_PATH_RE = /^electrical\.batteries\.([^.]+)\.(?:cell|cells\.)(\d+)\.voltage$/;
 
-export function discoverEngineIds(paths: string[]): string[] {
+// Collect the group-1 capture of every path matching `regex` into a sorted,
+// de-duplicated id list. Shared by the engine and bank discoverers, which
+// differ only in their pattern.
+function collectGroup1(paths: Iterable<string>, regex: RegExp): string[] {
   const out = new Set<string>();
   for (const p of paths) {
-    const m = p.match(ENGINE_RPM_PATTERN) ?? p.match(ENGINE_AUX_PATTERN);
+    const m = p.match(regex);
     if (m?.[1]) out.add(m[1]);
   }
   return Array.from(out).sort();
 }
 
-export function discoverBankIds(paths: string[]): string[] {
-  const out = new Set<string>();
-  for (const p of paths) {
-    const m = p.match(BANK_PATTERN);
-    if (m?.[1]) out.add(m[1]);
-  }
-  return Array.from(out).sort();
+export function discoverEngineIds(paths: Iterable<string>): string[] {
+  return collectGroup1(paths, ENGINE_PATTERN);
+}
+
+export function discoverBankIds(paths: Iterable<string>): string[] {
+  return collectGroup1(paths, BANK_PATTERN);
 }
 
 export const WATCH_PREFIXES: ReadonlyArray<string> = [
@@ -41,7 +43,7 @@ export const WATCH_PREFIXES: ReadonlyArray<string> = [
   'tanks.fuel.',
 ];
 
-export function discoverWatchedPaths(paths: string[], extras: string[]): string[] {
+export function discoverWatchedPaths(paths: Iterable<string>, extras: Iterable<string>): string[] {
   const out = new Set<string>();
   for (const p of paths) {
     if (WATCH_PREFIXES.some((prefix) => p.startsWith(prefix))) out.add(p);

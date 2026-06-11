@@ -21,6 +21,23 @@ describe('RollingBuffer', () => {
     expect(buf.slice('a.b', 0, 10_000)).toEqual([{ value: 3, ts: 2000, source: 's1' }]);
   });
 
+  it('reads stay window-correct when a stale entry lingers behind a fresh front (evict fast path)', () => {
+    const buf = new RollingBuffer({ maxAgeMs: 1000, maxEntriesPerPath: 100 });
+    // A fresh delta (ts 5000) arrives first and becomes arr[0]; a stale delta
+    // (ts 1000, a timestamp inversion across sources) arrives after. evict's
+    // fast path sees a fresh front under the cap and skips compaction, so the
+    // stale entry lingers in the array. slice() and summarize() must still
+    // exclude it by window, which is what keeps the lingering entry harmless.
+    buf.record('x', 10, 5000, 'a');
+    buf.record('x', 99, 1000, 'b');
+    const sliced = buf.slice('x', 4000, 5000);
+    expect(sliced).toHaveLength(1);
+    expect(sliced[0]?.value).toBe(10);
+    const summary = buf.summarize('x', 4000, 5000);
+    expect(summary?.count).toBe(1);
+    expect(summary?.mean).toBe(10);
+  });
+
   it('evicts oldest entries when path exceeds maxEntriesPerPath', () => {
     const buf = new RollingBuffer({ maxAgeMs: 60_000, maxEntriesPerPath: 3 });
     buf.record('a.b', 1, 1000, 's1');
