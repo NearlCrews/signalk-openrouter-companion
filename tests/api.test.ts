@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Analyzer } from '../src/analyzers/Analyzer.js';
 import type { AnalyzerId } from '../src/analyzers/ids.js';
 import type { PluginRuntime, RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
-import { _resetOpenRouterModelsCache, registerApiRoutes } from '../src/core/api.js';
+import { _resetOpenRouterModelsCache, getOpenApi, registerApiRoutes } from '../src/core/api.js';
 import { OpenRouterError } from '../src/core/openrouter.js';
 import createPlugin from '../src/index.js';
 import {
@@ -103,6 +103,24 @@ describe('plugin REST API', () => {
       ]);
     });
 
+    it('publishes an OpenAPI doc whose operations match the registered routes', () => {
+      // Both are built from the same route table; this guards the table
+      // plumbing itself (a route added to the table must appear in both).
+      const plugin = createPlugin(app as never);
+      const { router, routes } = makeRecordingRouter();
+      plugin.registerWithRouter(router);
+      const doc = getOpenApi() as { paths: Record<string, Record<string, unknown>> };
+      const docOps = Object.entries(doc.paths)
+        .flatMap(([path, ops]) =>
+          Object.keys(ops).map((method) => `${method.toUpperCase()} ${path}`),
+        )
+        .sort();
+      const registered = routes
+        .map((r) => `${r.method.toUpperCase()} ${r.path.replace('/:id/', '/{id}/')}`)
+        .sort();
+      expect(docOps).toEqual(registered);
+    });
+
     it('returns 503 from /api/status before plugin start', async () => {
       const plugin = createPlugin(app as never);
       const { router, routes } = makeRecordingRouter();
@@ -147,6 +165,7 @@ describe('plugin REST API', () => {
         analyzers: Array<{
           id: string;
           enabled: boolean;
+          hasSeverityFloor: boolean;
           cron: { enabled: boolean; pattern: string };
         }>;
       };
@@ -164,6 +183,11 @@ describe('plugin REST API', () => {
       const byId = new Map(body.analyzers.map((a) => [a.id, a]));
       expect(byId.get('maintenance')?.cron.enabled).toBe(false);
       expect(byId.get('health')?.cron).toEqual({ enabled: true, pattern: '0 8 * * *' });
+      // hasSeverityFloor is derived from the config shape (only forecast's
+      // section carries a severityFloor today), so the panel can render the
+      // floor dropdown without a hardcoded id list.
+      expect(byId.get('forecast')?.hasSeverityFloor).toBe(true);
+      expect(byId.get('health')?.hasSeverityFloor).toBe(false);
 
       vi.unstubAllGlobals();
       await plugin.stop();
@@ -357,7 +381,7 @@ describe('plugin REST API', () => {
         params: { id: 'health' },
       });
       expect(r.status).toBe(200);
-      expect(r.body).toEqual({ analyzer: 'health', reports: [] });
+      expect(r.body).toEqual({ ok: true, analyzer: 'health', reports: [] });
     });
 
     it('returns reports for the requested analyzer in newest-first order, respecting limit', async () => {
@@ -465,11 +489,27 @@ describe('plugin REST API', () => {
 
     const emptyRuntime = (): PluginRuntime => makePluginRuntime();
 
-    it('returns 503 before plugin start', async () => {
+    it('serves the model list before plugin start (no runtime gate)', async () => {
+      // The models route does not require a runtime, so the picker populates
+      // before the plugin starts, the same way the prompt route serves its
+      // compile-time default.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ data: [{ id: 'x/y' }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+        ),
+      );
       const { router, routes } = makeRecordingRouter();
       registerApiRoutes(router, () => null);
       const r = await call(routes, 'get', '/api/openrouter/models');
-      expect(r.status).toBe(503);
+      expect(r.status).toBe(200);
+      const body = r.body as { ok: boolean; data: Array<{ id: string }> };
+      expect(body.ok).toBe(true);
+      expect(body.data[0]?.id).toBe('x/y');
     });
 
     it('proxies upstream JSON on success and caches the result', async () => {
@@ -551,7 +591,7 @@ describe('plugin REST API', () => {
 
     it('uses the url from the request body if provided', async () => {
       const fetchMock = vi.fn(
-        async () =>
+        async (..._args: unknown[]) =>
           new Response(JSON.stringify({ columns: [], dataset: [] }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
@@ -579,7 +619,11 @@ describe('plugin REST API', () => {
       registerApiRoutes(router, () => rt);
       const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
       expect(r.status).toBe(200);
-      expect((r.body as { ok: boolean }).ok).toBe(false);
+      const body = r.body as { ok: boolean; error?: string };
+      expect(body.ok).toBe(false);
+      // Every ok:false response carries an error string, including the
+      // reachable-but-wrong-answer probe (HTTP 200 with a falsy result).
+      expect(typeof body.error).toBe('string');
     });
   });
 });

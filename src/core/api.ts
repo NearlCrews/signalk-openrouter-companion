@@ -4,6 +4,7 @@ import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '..
 import { ANALYZER_DEFAULT_SYSTEM_PROMPTS } from '../analyzers/registry.js';
 import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
+import { fetchWithTimeout } from './http.js';
 import { stringify } from './logger.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
@@ -67,6 +68,9 @@ interface StatusResponse {
     id: AnalyzerId;
     title: string;
     enabled: boolean;
+    // True when the analyzer's config section carries a severityFloor, so the
+    // panel knows to render the floor dropdown (today only forecast).
+    hasSeverityFloor: boolean;
     // The analyzer's cron trigger. `enabled: false` marks an event-driven
     // analyzer with no schedule; the panel shows its frequency dropdown
     // disabled rather than hiding it.
@@ -90,11 +94,15 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
       reachable: rt.cfg.questdb.enabled && rt.questdbProbed ? rt.questdbLive !== null : null,
     },
     analyzers: ANALYZER_IDS.map((id) => {
-      const cron = rt.cfg.analyzers[id].triggers.cron;
+      const section = rt.cfg.analyzers[id];
+      const cron = section.triggers.cron;
       return {
         id,
         title: ANALYZER_TITLES[id],
         enabled: enabled.has(id),
+        // Derived from the config shape, not an id list, so a future analyzer
+        // gaining a floor needs no edit here.
+        hasSeverityFloor: 'severityFloor' in section,
         cron: { enabled: cron.enabled, pattern: cron.pattern },
       };
     }),
@@ -111,6 +119,10 @@ interface OpenRouterModelsResponse {
 }
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+// Bounds the upstream models fetch: a hung connection would otherwise pin
+// modelsInFlight (and with it the admin model picker) until process restart.
+// Same magnitude as the OpenRouter completion timeout and the QuestDB ceiling.
+const MODELS_FETCH_TIMEOUT_MS = 30_000;
 const MODELS_CACHE_TTL_MS = 60 * 60 * 1000;
 let modelsCache: { fetchedAt: number; body: OpenRouterModelsResponse } | null = null;
 let modelsInFlight: Promise<OpenRouterModelsResponse> | null = null;
@@ -132,7 +144,7 @@ async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
   if (modelsInFlight) return modelsInFlight;
   modelsInFlight = (async () => {
     try {
-      const res = await fetch(OPENROUTER_MODELS_URL);
+      const res = await fetchWithTimeout(OPENROUTER_MODELS_URL, {}, MODELS_FETCH_TIMEOUT_MS);
       if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
       const body = (await res.json()) as OpenRouterModelsResponse;
       // Validate the shape before caching: a malformed-but-valid-JSON
@@ -141,6 +153,10 @@ async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
       if (!Array.isArray(body?.data)) {
         throw new Error('upstream returned an unexpected models payload');
       }
+      // Stamp with a fresh read, not the `now` from the staleness check above:
+      // that value predates the awaited fetch, so reusing it would shorten the
+      // effective TTL by the request's own latency. The cache is fresh from
+      // when the data actually arrived.
       modelsCache = { fetchedAt: Date.now(), body };
       return body;
     } finally {
@@ -205,153 +221,287 @@ function requireAnalyzerId(req: RouteRequest, res: RouteResponse): AnalyzerId | 
   return id;
 }
 
+// Success envelope shared by every route's happy path: the same { ok, ... }
+// shape the panel's fetchJson wrapper reads on the guard failure paths above.
+function sendOk(res: RouteResponse, payload: object = {}): void {
+  res.json({ ok: true, ...payload });
+}
+
+type RouteHandler = (req: RouteRequest, res: RouteResponse) => unknown;
+
+// One row per REST route. registerApiRoutes registers each row's handler and
+// the OpenAPI document is built from the same rows, so the published API docs
+// cannot drift from the registered surface.
+interface ApiRoute {
+  method: 'get' | 'post';
+  // Express-style path; ':id' is rendered as the OpenAPI '{id}' parameter.
+  path: string;
+  summary: string;
+  // OpenAPI parameters beyond the ':id' path parameter derived from `path`
+  // (the reports route's `limit` query).
+  extraParameters?: ReadonlyArray<object>;
+  handler: (getRuntime: () => PluginRuntime | null) => RouteHandler;
+}
+
+const ID_PATH_PARAM = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  description: 'Analyzer id (one of the seven analyzer ids).',
+  schema: { type: 'string' },
+} as const;
+
+const OK_RESPONSE = { '200': { description: 'OK' } } as const;
+
+const API_ROUTES: ReadonlyArray<ApiRoute> = [
+  {
+    method: 'get',
+    path: '/api/status',
+    summary: 'Plugin, budget, and analyzer status snapshot.',
+    handler: (getRuntime) => (_req, res) => {
+      const rt = requireRuntime(getRuntime, res);
+      if (!rt) return;
+      sendOk(res, buildStatus(rt));
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/openrouter/test',
+    summary: 'Send a one-token ping to verify the OpenRouter API key.',
+    handler: (getRuntime) => async (_req, res) => {
+      const rt = requireRuntime(getRuntime, res);
+      if (!rt) return;
+      if (!rt.apiKeySet) {
+        res.status(400).json({ ok: false, error: 'API key not configured' });
+        return;
+      }
+      try {
+        // The lifecycle signal aborts the request if stop() runs (admin
+        // disables or saves config); without it, an in-flight ping holds a
+        // socket open for the full requestTimeoutMs. The Test button is
+        // operator-driven and explicitly does NOT consume the daily budget:
+        // an admin debugging connectivity should not run themselves out of
+        // analyzer calls.
+        const result = await rt.llm.complete({
+          system: 'Reply with the single word OK.',
+          user: 'ping',
+          abortSignal: rt.signal,
+        });
+        sendOk(res, {
+          model: result.model,
+          totalTokens: result.usage.totalTokens,
+          text: result.text.trim().slice(0, 80),
+        });
+      } catch (err) {
+        // An OpenRouterError can carry status 0 (transport failure) or 200
+        // (empty completion); neither is a valid HTTP error status to echo, so
+        // anything below 400 collapses to 500.
+        const status = err instanceof OpenRouterError && err.status >= 400 ? err.status : 500;
+        res.status(status).json({ ok: false, status, error: stringify(err) });
+      }
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/analyzers/:id/fire',
+    summary: 'Run one analyzer immediately, bypassing its triggers.',
+    handler: (getRuntime) => async (req, res) => {
+      const id = requireAnalyzerId(req, res);
+      if (!id) return;
+      const rt = requireRuntime(getRuntime, res);
+      if (!rt) return;
+      if (!rt.router) {
+        res.status(503).json({ ok: false, error: 'plugin not started' });
+        return;
+      }
+      if (!rt.analyzers.some((a) => a.id === id)) {
+        res.status(409).json({ ok: false, error: 'analyzer not enabled' });
+        return;
+      }
+      // Run the named analyzer directly. A manual fire uses a put-kind ctx; an
+      // analyzer with nothing to report (alerts has no pending battery event)
+      // returns null from collectContext and the router skips the LLM call. The
+      // outcome lets the panel distinguish a real report from a silent no-op.
+      try {
+        const outcome = await rt.router.runById(id, manualPutCtx());
+        sendOk(res, { analyzer: id, outcome });
+      } catch (err) {
+        res.status(500).json({ ok: false, error: stringify(err) });
+      }
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/analyzers/:id/prompt',
+    summary: "An analyzer's default and current system prompt.",
+    handler: (getRuntime) => (req, res) => {
+      const id = requireAnalyzerId(req, res);
+      if (!id) return;
+      const rt = getRuntime();
+      // Deliberately does NOT go through requireRuntime: the default prompt
+      // is a compile-time constant, so the endpoint can serve it before the
+      // plugin's runtime is built. The panel's promptValueFor reads from
+      // its own `cfg` first (which the SK admin populates from the saved
+      // configuration), so a transient `current: null` here does not
+      // overwrite a real saved override the panel already has.
+      const defaultPrompt = ANALYZER_DEFAULT_SYSTEM_PROMPTS[id];
+      const current = rt?.cfg.analyzers[id]?.customSystemPrompt ?? null;
+      sendOk(res, {
+        analyzer: id,
+        default: defaultPrompt,
+        current,
+        runtimeReady: rt !== null,
+      });
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/openrouter/models',
+    summary: 'List the available OpenRouter models.',
+    handler: () => async (_req, res) => {
+      // No runtime gate: the model list is fetched from OpenRouter independently
+      // of plugin state, so the picker populates before the plugin starts, the
+      // same way the prompt route serves its compile-time default.
+      try {
+        const result = await getOpenRouterModels();
+        sendOk(res, result);
+      } catch (err) {
+        res.status(502).json({ ok: false, error: stringify(err) });
+      }
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/questdb/test',
+    summary: 'Probe a QuestDB URL for reachability.',
+    handler: (getRuntime) => async (req, res) => {
+      const body = (req.body ?? {}) as { url?: string };
+      const rt = getRuntime();
+      const url = body.url || rt?.cfg.questdb.url;
+      if (!url) {
+        res.status(400).json({ ok: false, error: 'no URL provided and none in saved config' });
+        return;
+      }
+      // Validate the URL before constructing the client: the admin gate keeps
+      // unauthenticated callers out, but even an admin should not be able to
+      // probe an arbitrary scheme (file://, gopher://, javascript:) from the
+      // SK host. Restrict to http/https, the only schemes QuestDB serves.
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        res.status(400).json({ ok: false, error: 'invalid URL' });
+        return;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
+        return;
+      }
+      // Use the normalized URL the parser produced (with a stripped trailing
+      // slash) so probe() builds `${url}/exec?query=...` without a double
+      // slash on inputs like 'http://qdb:9000/'.
+      const normalized = parsed.href.replace(/\/$/, '');
+      try {
+        const client = new QuestDBClient({ url: normalized });
+        const reachable = await client.probe(rt?.signal);
+        // A false probe means the server answered but not with a dataset (wrong
+        // service, or QuestDB returning an error payload). Carry an `error` so
+        // every ok:false response, transport fault or bad answer, has the same
+        // shape for the panel to read.
+        if (reachable) {
+          sendOk(res, { url: normalized });
+        } else {
+          res.json({
+            ok: false,
+            url: normalized,
+            error: 'reachable but did not return a result set',
+          });
+        }
+      } catch (err) {
+        res.status(502).json({ ok: false, url: normalized, error: stringify(err) });
+      }
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/analyzers/:id/reports',
+    summary: "Recent entries from an analyzer's report history.",
+    extraParameters: [
+      {
+        name: 'limit',
+        in: 'query',
+        required: false,
+        description: 'Maximum entries to return (1 to 100, default 10).',
+        schema: { type: 'integer' },
+      },
+    ],
+    handler: (getRuntime) => async (req, res) => {
+      const id = requireAnalyzerId(req, res);
+      if (!id) return;
+      const rt = requireRuntime(getRuntime, res);
+      if (!rt) return;
+      const limitRaw = req.query?.limit;
+      const limitStr = Array.isArray(limitRaw) ? limitRaw[0] : limitRaw;
+      const parsed = limitStr ? Number.parseInt(limitStr, 10) : REPORTS_DEFAULT_LIMIT;
+      const limit = Number.isFinite(parsed)
+        ? Math.min(REPORTS_MAX_LIMIT, Math.max(1, parsed))
+        : REPORTS_DEFAULT_LIMIT;
+      try {
+        const reports = await tailReports(rt.logPath, id, limit);
+        sendOk(res, { analyzer: id, reports });
+      } catch (err) {
+        res.status(500).json({ ok: false, error: stringify(err) });
+      }
+    },
+  },
+];
+
+// OpenAPI operations derived from API_ROUTES, one per route, with the ':id'
+// path parameter inferred from the route path.
+function buildOpenApiPaths(): Record<string, Record<string, object>> {
+  const paths: Record<string, Record<string, object>> = {};
+  for (const r of API_ROUTES) {
+    const parameters = [
+      ...(r.path.includes('/:id/') ? [ID_PATH_PARAM] : []),
+      ...(r.extraParameters ?? []),
+    ];
+    const docPath = r.path.replace('/:id/', '/{id}/');
+    const ops = paths[docPath] ?? {};
+    paths[docPath] = ops;
+    ops[r.method] = {
+      summary: r.summary,
+      ...(parameters.length > 0 ? { parameters } : {}),
+      responses: OK_RESPONSE,
+    };
+  }
+  return paths;
+}
+
+// Minimal OpenAPI 3 description of the plugin's REST surface, built from the
+// same route table the registrations use. SK serves it at
+// /skServer/plugins/<id>/openapi.json and renders it in the admin API docs.
+const OPENAPI_DOC = {
+  openapi: '3.0.0',
+  info: {
+    title: 'OpenRouter Companion API',
+    version: '1.0.0',
+    description: 'Admin-gated REST routes that back the OpenRouter Companion configuration panel.',
+  },
+  servers: [{ url: '/plugins/signalk-openrouter-companion' }],
+  paths: buildOpenApiPaths(),
+};
+
+// Wired into the plugin object in index.ts. SK calls this once to publish the
+// API docs; the document is static, so there is nothing to recompute per call.
+export function getOpenApi(): object {
+  return OPENAPI_DOC;
+}
+
 export function registerApiRoutes(
   router: RouterLike,
   getRuntime: () => PluginRuntime | null,
 ): void {
-  router.get('/api/status', (_req, res) => {
-    const rt = requireRuntime(getRuntime, res);
-    if (!rt) return;
-    res.json(buildStatus(rt));
-  });
-
-  router.post('/api/openrouter/test', async (_req, res) => {
-    const rt = requireRuntime(getRuntime, res);
-    if (!rt) return;
-    if (!rt.apiKeySet) {
-      res.status(400).json({ ok: false, error: 'API key not configured' });
-      return;
-    }
-    try {
-      // The lifecycle signal aborts the request if stop() runs (admin
-      // disables or saves config); without it, an in-flight ping holds a
-      // socket open for the full requestTimeoutMs. The Test button is
-      // operator-driven and explicitly does NOT consume the daily budget:
-      // an admin debugging connectivity should not run themselves out of
-      // analyzer calls.
-      const result = await rt.llm.complete({
-        system: 'Reply with the single word OK.',
-        user: 'ping',
-        abortSignal: rt.signal,
-      });
-      res.json({
-        ok: true,
-        model: result.model,
-        totalTokens: result.usage.totalTokens,
-        text: result.text.trim().slice(0, 80),
-      });
-    } catch (err) {
-      // An OpenRouterError can carry status 0 (transport failure) or 200
-      // (empty completion); neither is a valid HTTP error status to echo, so
-      // anything below 400 collapses to 500.
-      const status = err instanceof OpenRouterError && err.status >= 400 ? err.status : 500;
-      res.status(status).json({ ok: false, status, error: stringify(err) });
-    }
-  });
-
-  router.post('/api/analyzers/:id/fire', async (req, res) => {
-    const id = requireAnalyzerId(req, res);
-    if (!id) return;
-    const rt = requireRuntime(getRuntime, res);
-    if (!rt) return;
-    if (!rt.router) {
-      res.status(503).json({ ok: false, error: 'plugin not started' });
-      return;
-    }
-    if (!rt.analyzers.some((a) => a.id === id)) {
-      res.status(409).json({ ok: false, error: 'analyzer not enabled' });
-      return;
-    }
-    // Run the named analyzer directly. A manual fire uses a put-kind ctx; an
-    // analyzer with nothing to report (alerts has no pending battery event)
-    // returns null from collectContext and the router skips the LLM call. The
-    // outcome lets the panel distinguish a real report from a silent no-op.
-    try {
-      const outcome = await rt.router.runById(id, manualPutCtx());
-      res.json({ ok: true, analyzer: id, outcome });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: stringify(err) });
-    }
-  });
-
-  router.get('/api/analyzers/:id/prompt', (req, res) => {
-    const id = requireAnalyzerId(req, res);
-    if (!id) return;
-    const rt = getRuntime();
-    // Deliberately does NOT go through requireRuntime: the default prompt
-    // is a compile-time constant, so the endpoint can serve it before the
-    // plugin's runtime is built. The panel's promptValueFor reads from
-    // its own `cfg` first (which the SK admin populates from the saved
-    // configuration), so a transient `current: null` here does not
-    // overwrite a real saved override the panel already has.
-    const defaultPrompt = ANALYZER_DEFAULT_SYSTEM_PROMPTS[id];
-    const current = rt?.cfg.analyzers[id]?.customSystemPrompt ?? null;
-    res.json({ analyzer: id, default: defaultPrompt, current, runtimeReady: rt !== null });
-  });
-
-  router.get('/api/openrouter/models', async (_req, res) => {
-    const rt = requireRuntime(getRuntime, res);
-    if (!rt) return;
-    try {
-      const result = await getOpenRouterModels();
-      res.json(result);
-    } catch (err) {
-      res.status(502).json({ ok: false, error: stringify(err) });
-    }
-  });
-
-  router.post('/api/questdb/test', async (req, res) => {
-    const body = (req.body ?? {}) as { url?: string };
-    const rt = getRuntime();
-    const url = body.url || rt?.cfg.questdb.url;
-    if (!url) {
-      res.status(400).json({ ok: false, error: 'no URL provided and none in saved config' });
-      return;
-    }
-    // Validate the URL before constructing the client: the admin gate keeps
-    // unauthenticated callers out, but even an admin should not be able to
-    // probe an arbitrary scheme (file://, gopher://, javascript:) from the
-    // SK host. Restrict to http/https, the only schemes QuestDB serves.
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      res.status(400).json({ ok: false, error: 'invalid URL' });
-      return;
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
-      return;
-    }
-    // Use the normalized URL the parser produced (with a stripped trailing
-    // slash) so probe() builds `${url}/exec?query=...` without a double
-    // slash on inputs like 'http://qdb:9000/'.
-    const normalized = parsed.href.replace(/\/$/, '');
-    try {
-      const client = new QuestDBClient({ url: normalized });
-      const ok = await client.probe(rt?.signal);
-      res.json({ ok, url: normalized });
-    } catch (err) {
-      res.status(502).json({ ok: false, url: normalized, error: stringify(err) });
-    }
-  });
-
-  router.get('/api/analyzers/:id/reports', async (req, res) => {
-    const id = requireAnalyzerId(req, res);
-    if (!id) return;
-    const rt = requireRuntime(getRuntime, res);
-    if (!rt) return;
-    const limitRaw = req.query?.limit;
-    const limitStr = Array.isArray(limitRaw) ? limitRaw[0] : limitRaw;
-    const parsed = limitStr ? Number.parseInt(limitStr, 10) : REPORTS_DEFAULT_LIMIT;
-    const limit = Number.isFinite(parsed)
-      ? Math.min(REPORTS_MAX_LIMIT, Math.max(1, parsed))
-      : REPORTS_DEFAULT_LIMIT;
-    try {
-      const reports = await tailReports(rt.logPath, id, limit);
-      res.json({ analyzer: id, reports });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: stringify(err) });
-    }
-  });
+  for (const { method, path, handler } of API_ROUTES) {
+    router[method](path, handler(getRuntime));
+  }
 }
