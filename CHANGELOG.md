@@ -2,9 +2,65 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+<a id="v057"></a>
+
+## [0.5.7] - 2026-06-11
+
+### Fixed
+
+- **Shutdown during an in-flight analyzer run is now silent.** When the plugin
+  stops mid-run, the aborted analyzer no longer publishes a failure report, and
+  the `alerts` analyzer no longer raises its audible alarm for the interrupted
+  run.
+- **A PUT fired before the plugin has finished starting returns a clean 503.**
+  The early request used to get a 503 carrying a pending body and a dead href;
+  it now returns a plain, well-formed 503.
+- **Malformed `Retry-After` headers no longer misparse.** A value such as
+  `12abc` is rejected rather than read as 12 seconds, so a bad upstream header
+  cannot shorten the backoff.
+- **The budget file rejects a corrupted negative call count** instead of
+  trusting it, so a truncated or hand-edited counter cannot hand out extra
+  calls.
+- **The Max calls per day field can be cleared while editing** and no longer
+  changes value when the scroll wheel passes over it.
+
+### Added
+
+- **Config panel theme support**: light, dark, and a red-preserving night mode,
+  with a persisted theme toggle.
+- **A Discard button and an unsaved-changes warning**, so in-progress edits are
+  not lost by accident.
+- **An "updated Xs ago" staleness cue** on the live status block, so a stalled
+  poll is obvious at a glance.
+- **A Retry button** for when the OpenRouter model list fails to load.
+- **A first-run callout** prompting for an API key when none is configured.
+- **An OpenAPI document** for the plugin's REST routes, served at the plugin's
+  `openapi.json` and rendered in the Signal K admin API browser.
+
+### Changed
+
+- New plugin icon badge: the routing-graph glyph is replaced with a chat
+  bubble carrying a white four-point sparkle on the violet badge,
+  reflecting the plugin's role of narrating vessel data into Signal K
+  notifications. The family base (deep-ocean gradient and three wave
+  lines) is unchanged, and all PNG sizes are regenerated from the new SVG.
+- **The config panel is now TypeScript** with larger marine-friendly touch
+  targets (22px checkboxes, 36px buttons) and screen-reader fixes: alert roles
+  on status, real headings, disclosure wiring, and focus management for the
+  prompt drawer.
+- **Status polling pauses in hidden browser tabs** and resumes on return, and a
+  keystroke now re-renders only the field it edits instead of the whole panel.
+- **Duplicated helpers are consolidated**: one finite-number coercion, shared
+  clamp helpers, shared QuestDB row decode and time-range builders, shared
+  monitor eviction, and one fetch-timeout helper.
+- **Type checking now covers `tests/` and the config panel**, and the esbuild
+  bundle target is aligned to the Node 20.18 engines floor.
+
+<a id="v056"></a>
+
 ## [0.5.6] - 2026-06-04
 
-A review-and-hardening pass from a multi-agent code review. No new analyzers and
+A hardening release. No new analyzers and
 no config migration. Analyzer-run failure notifications now differentiate by
 analyzer class so a transient OpenRouter or QuestDB fault on a best-effort report
 no longer sounds the helm alarm, while the safety alerts analyzer keeps its
@@ -70,10 +126,12 @@ and the shared daily budget is now documented, and 23 tests close coverage holes
   pairing with a hardware or BMS alarm. The deliberate low-SoC latch-on-silence
   asymmetry with cell-imbalance is also documented in `src/core/batteryMonitor.ts`.
 
+<a id="v055"></a>
+
 ## [0.5.5] - 2026-05-28
 
-A maintainability and registry-compliance pass with no behavior change for
-existing installs. A four-angle cleanup of the whole codebase consolidated
+A maintainability and registry-compliance release with no behavior change for
+existing installs. A cleanup of the whole codebase consolidated
 duplicated logic into shared helpers and pushed several analyzer-specific
 special-cases down into the shared extension point: the lifecycle no longer
 hardcodes the forecast analyzer's weather paths, config merging is driven by the
@@ -113,11 +171,12 @@ so it scores full marks on the community SignalK plugin registry.
   analyzer id, and dead code (an unused export, two unused `bankPaths` fields,
   an unreachable error block) was removed.
 
+<a id="v054"></a>
+
 ## [0.5.4] - 2026-05-25
 
-A 15-finding follow-up to the 0.5.3 conformance pass: a five-angle code review
-of the 0.5.3 diff surfaced regressions and weak spots the review pass had not
-caught. The biggest is symmetric clock-skew clamping on inbound deltas (0.5.3
+A 15-finding follow-up to 0.5.3, fixing regressions and weak spots in that
+release's diff. The biggest is symmetric clock-skew clamping on inbound deltas (0.5.3
 only clamped future-stamped deltas, so a 1970 timestamp still produced a phantom
 multi-decade engine session). The Save button's new stuck-on-error edge, the
 config panel's React 19 state-updater purity violations, the dirty-flag
@@ -202,9 +261,11 @@ settle guarantee are also fixed.
   separate-log-vs-display behavior so a future refactor cannot silently
   drop either.
 
+<a id="v053"></a>
+
 ## [0.5.3] - 2026-05-25
 
-A three-agent Signal K conformance pass. The headlines: the plugin's seven REST
+A Signal K conformance release. The headlines: the plugin's seven REST
 routes were unauthenticated and could be hit by any caller on the SK admin
 network (one route spends OpenRouter budget, one probed arbitrary URLs from the
 boat, several leak operational data and report history); a single delta carrying
@@ -301,13 +362,15 @@ same release.
 - **Internal-only type exports** dropped across `src/core/` and `src/schema.ts`
   for symbols that were only ever referenced inside their declaring file.
 
+<a id="v052"></a>
+
 ## [0.5.2] - 2026-05-21
 
-A six-agent full-codebase review pass with no feature changes. The headline fix
+A full-codebase hardening release with no feature changes. The headline fix
 is in the engine detector: a start or stop settle anchor left stale across a
 long gap in the RPM feed could satisfy its settle check on the first delta
 after the gap and backdate a session by the whole gap, reporting a multi-hour
-trip that never happened. The pass also stops trend-analyzer QuestDB query
+trip that never happened. The release also stops trend-analyzer QuestDB query
 faults from being swallowed, where the scheduled report would silently never
 appear, re-probes QuestDB so a database that starts after the plugin is picked
 up without a restart, and clears a batch of analyzer, config-panel, and
@@ -353,21 +416,23 @@ dead-code findings.
   blanket "Dispatched".
 - The plugin shutdown signal is threaded into the LLM call, so a stop cancels
   an in-flight request.
-- Internal cleanup from the review: a shared `BufferSummary` type and the core
+- Internal cleanup: a shared `BufferSummary` type and the core
   `BankSnapshot` replace re-declared shapes, the seven repeated analyzer schema
   skeletons collapse into one helper, schema config bounds are enforced at
   runtime, and several unused exports, fields, and styles were removed. No
   behavior change.
 
+<a id="v051"></a>
+
 ## [0.5.1] - 2026-05-19
 
 Makes the maintenance analyzer fire reliably and resolves a large batch of
-audit-identified defects. A switched-off NMEA 2000 engine stops broadcasting
+latent defects. A switched-off NMEA 2000 engine stops broadcasting
 RPM entirely rather than reporting zero, so the detector's stop path never ran
 for a real shutdown and the per-trip maintenance report never fired; the
 detector now ends a session on sustained silence and survives a Signal K
-restart mid-trip. A three-lane code audit fixed 15 further bugs across the
-plugin lifecycle, core infra, the analyzers, and the config panel.
+restart mid-trip. Fifteen further bugs were fixed across the plugin
+lifecycle, core infra, the analyzers, and the config panel.
 
 ### Added
 
@@ -426,10 +491,12 @@ plugin lifecycle, core infra, the analyzers, and the config panel.
 
 ### Changed
 
-- Internal cleanup from a code-review pass: shared `HOUR_MS` / `DAY_MS` time
+- Internal cleanup: shared `HOUR_MS` / `DAY_MS` time
   constants and a `quotedPathList` SQL helper replace per-file duplicates, and
   the engine detector's two session-end blocks are unified into one
   `endSession` helper. No behavior change.
+
+<a id="v050"></a>
 
 ## [0.5.0] - 2026-05-16
 
@@ -511,9 +578,11 @@ config panel into collapsible sections with a per-analyzer schedule control.
 
 183 -> 228 tests across 21 test files.
 
+<a id="v042"></a>
+
 ## [0.4.2] - 2026-05-16
 
-Bug-fix release: two low-severity items carried over from the 0.4.1 codebase audit.
+Bug-fix release: two low-severity items carried over from 0.4.1.
 
 ### Fixed
 
@@ -534,10 +603,12 @@ Bug-fix release: two low-severity items carried over from the 0.4.1 codebase aud
 
 182 -> 183 tests across 20 test files.
 
+<a id="v041"></a>
+
 ## [0.4.1] - 2026-05-16
 
 Bug-fix release. A user-reported "Fire now" failure led to a full-codebase
-audit (4-agent pass) that surfaced several latent defects, all fixed here.
+sweep that surfaced several latent defects, all fixed here.
 173 -> 182 tests across 20 test files.
 
 ### Fixed
@@ -590,6 +661,8 @@ audit (4-agent pass) that surfaced several latent defects, all fixed here.
 - Trimmed `README.md` to a concise npm and GitHub landing page; the REST
   API reference moved to `DEVELOPMENT.md`. Removed the internal
   `docs/superpowers/` design specs and plans.
+
+<a id="v040"></a>
 
 ## [0.4.0] - 2026-05-16
 
@@ -646,9 +719,11 @@ against transport-level failures. 173 tests pass across 20 test files.
 
 156 -> 173 tests across 20 test files. dist 130.9 kB -> 136.5 kB.
 
+<a id="v032"></a>
+
 ## [0.3.2] - 2026-05-13
 
-Codebase-wide simplify pass driven by a 5-agent review across reuse,
+Codebase-wide simplification across reuse,
 quality, efficiency, SignalK semantics, and type design. No behavior
 change; 156 tests pass (one new test for the registry's fallback
 publish path).
@@ -752,13 +827,14 @@ publish path).
 
 ### Docs
 
-- `CLAUDE.md`, `DEVELOPMENT.md`, `CONTRIBUTING.md`, and the
-  `signalk-analyzer-scaffold` skill updated to reflect the registry
-  flow, the new shared helpers, and the actual Node 20.18+ engines
-  floor. The user-memory `triggers_contract.md` mirrored.
+- `CLAUDE.md`, `DEVELOPMENT.md`, and `CONTRIBUTING.md` updated to
+  reflect the registry flow, the new shared helpers, and the actual
+  Node 20.18+ engines floor.
 - `.gitignore` explicitly lists `.remember/` (an inner
   `.remember/.gitignore` already covers contents; the top-level
   entry makes the rule grep-discoverable).
+
+<a id="v031"></a>
 
 ## [0.3.1] - 2026-05-12
 
@@ -784,6 +860,8 @@ publish path).
   `react-dom` directly (host owns the root render) and
   `react/jsx-runtime` is small and stateless, so a bundled copy
   is fine. Drops one devDependency (`react-dom`).
+
+<a id="v030"></a>
 
 ## [0.3.0] - 2026-05-12
 
@@ -907,12 +985,14 @@ inherit SK admin authentication; no separate auth wiring is needed.
 
 127 -> 155 tests across 19 test files. dist 122.6 kB -> 130.9 kB.
 
+<a id="v021"></a>
+
 ## [0.2.1] - 2026-05-12
 
 This release aligns the plugin's notification output with the NMEA 2000
 alert PGN family (126983 / 126985) as bridged by
 [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon).
-The changes were derived from a signalk-plugin-expert audit of
+The changes were derived from a study of
 `signalk-nmea2000-emitter-cannon`'s actual mapping conventions.
 
 ### Breaking changes
@@ -998,6 +1078,8 @@ The changes were derived from a signalk-plugin-expert audit of
 - `core/publisher.ts::makeDelta` signature simplified: dropped the unused
   `_meta` parameter, made `path` required, added optional `alertId`.
 
+<a id="v020"></a>
+
 ## [0.2.0] - 2026-05-12
 
 ### Added (trend analyzers and configurable history)
@@ -1028,7 +1110,7 @@ The changes were derived from a signalk-plugin-expert audit of
 - `src/index.ts` `subscribeWatchedPath` hoists the SOC/cell regex match to subscribe-time so the per-delta callback doesn't recompile and re-match regexes.
 - `tests/drift.test.ts` injects a typed stub matching the QuestDBClient `query` surface instead of stubbing global `fetch`. The global-fetch approach was process-wide and clashed with parallel test workers, producing intermittent flakes.
 - Dropped dead `discoverBatteryWatchedPaths`, `ServerApiLike.subscriptionmanager`, and the test-mock `pushSubscriptionDelta`/`registeredSubscriptions` scaffolding.
-- Third simplify pass over the entire codebase:
+- A further simplification pass over the entire codebase:
   - `paths.ts` adds `BATTERIES_PARENT_PATH` and `PROPULSION_PREFIX`. health, alerts, and maintenance read the parent path through the constant; maintenance.snapshotBatteries uses `bankPaths(id).voltage` and `.soc`; listWatchedPaths uses `PROPULSION_PREFIX`.
   - `format.ts::asFiniteNumber(v)` consolidates aging's `numOrNull` and three inline `typeof === number && isFinite ? v : null|0` checks in `drift.binEngineWindow`.
   - `skNode.ts::readValueAt(node, subpath)` for non-numeric leaf reads. `maintenance.snapshotEngineNotifications` consumes it.
@@ -1087,6 +1169,8 @@ The changes were derived from a signalk-plugin-expert audit of
 - Post-consolidation cleanup pass: prompt overhauls (SI-units contract, "cause not determinable" hint, unit-suffixed numeric lines, JSON-dump rewritten as labeled lines for alerts), tighter type narrowing across analyzers (generic `Analyzer<I>`, discriminated `BatteryEvent` union, type-guard for `BatteryEventKind`), shared `readNumberAt` helper extracted to `src/core/skNode.ts`, magic numbers hoisted to module-level named constants in `src/index.ts`, widened notification-state enum to the full Signal K `ALARM_STATE`, new tests (start/stop cycle, PUT-handler invocation, 500/502 retries, stall+restart debounce, source eviction, cron timezone, QuestDB validation), README rewritten to cover all three analyzers.
 - Schema refactor: `triggerSchema` / `triggerUiSchema` take options bags instead of positional args, and two named helper types (`EnabledGatedNode`, `TriggerSchemaNode`) are exported from `PluginSchema` so test inline casts shrink and changes to the public type surface fail at the builder rather than at test time.
 - CI: GitHub Actions workflows for `plugin-ci` (type-check + lint + build) and `test`.
+
+<a id="v010"></a>
 
 ## [0.1.0] - 2026-05-10
 

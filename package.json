@@ -1,7 +1,7 @@
 {
   "name": "signalk-openrouter-companion",
-  "version": "0.5.6",
-  "description": "OpenRouter-powered LLM analyzers for Signal K: plain-prose engine and battery reports. OpenRouter API key required.",
+  "version": "0.5.7",
+  "description": "OpenRouter-powered LLM analyzers for Signal K: plain-prose engine, battery, and weather reports. OpenRouter API key required.",
   "main": "dist/index.js",
   "type": "module",
   "files": [
@@ -9,6 +9,7 @@
     "public/",
     "assets/icons/",
     "assets/screenshots/",
+    "docs/",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -65,7 +66,8 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "@signalk/server-api": "2.25.0",
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
     "@vitest/coverage-v8": "^4.1.6",
     "esbuild": "^0.28.0",
     "esbuild-loader": "^4.3.0",
@@ -87,13 +89,12 @@
     "test:run": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc --noEmit && tsc -p tsconfig.tests.json && tsc -p tsconfig.panel.json",
     "lint": "biome check src/ tests/",
     "lint:fix": "biome check --write src/ tests/",
     "format": "biome format --write src/ tests/",
     "security-audit": "npm audit --audit-level=moderate",
     "validate": "npm run type-check && npm run lint && npm run test:run",
-    "prepack": "npm run build",
     "prepublishOnly": "npm run type-check && npm run lint && npm run test && npm run build"
   }
 }
