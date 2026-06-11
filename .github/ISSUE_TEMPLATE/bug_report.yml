@@ -29,6 +29,8 @@ body:
         - alerts
         - aging
         - drift
+        - liveness
+        - forecast
         - Plugin core (lifecycle / schema / triggers)
         - Not sure
     validations:
@@ -78,7 +80,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      placeholder: "0.2.0"
+      placeholder: "0.5.6"
     validations:
       required: true
 
@@ -123,7 +125,7 @@ body:
     id: questdb
     attributes:
       label: QuestDB co-installed?
-      description: Required for the trend analyzers (aging, drift). State analyzers ignore it.
+      description: The aging and drift analyzers require it, forecast uses it as an optional baseline, and the other analyzers ignore it.
       options:
         - Yes, reachable at the configured URL
         - Yes, but unreachable from the plugin

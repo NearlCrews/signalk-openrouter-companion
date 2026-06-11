@@ -24,6 +24,8 @@
 - [ ] alerts
 - [ ] aging
 - [ ] drift
+- [ ] liveness
+- [ ] forecast
 - [ ] Plugin core (lifecycle / schema / triggers / shared infrastructure)
 - [ ] None (docs / CI / tooling)
 
@@ -47,7 +49,7 @@
 - [ ] `publishOutput` uses `publisher.publishReport(this.id, ctx, text)` unless the analyzer publishes on a per-event path (like `alerts`).
 - [ ] Config block added to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS` (use `pluginPutPath('<id>')` for the default PUT path).
 - [ ] Schema section added to `src/schema.ts` with sensible field bounds and admin-UI titles.
-- [ ] README Analyzers table and Defaults table updated.
+- [ ] README Analyzers section and Configuration table updated.
 - [ ] CHANGELOG entry added.
 
 ## Breaking changes

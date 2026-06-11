@@ -1,101 +1,126 @@
-# Contributing to Signal K OpenRouter Companion
+# Contributing
 
-Thanks for your interest. This is a beta project; PRs and issues are welcome.
+Thanks for your interest in contributing to OpenRouter Companion
+(`signalk-openrouter-companion`).
 
-## Getting started
+## Code of Conduct
 
-1. Fork the repository on GitHub.
-2. Clone your fork:
+This project follows the [Code of Conduct](CODE_OF_CONDUCT.md). By
+participating, you agree to uphold it.
 
-   ```bash
-   git clone https://github.com/YOUR-USERNAME/signalk-openrouter-companion.git
-   cd signalk-openrouter-companion
-   ```
+## Reporting bugs
 
-3. Add the upstream remote:
+Check existing issues first to avoid duplicates, then open a
+[bug report](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=bug_report.yml)
+with:
 
-   ```bash
-   git remote add upstream https://github.com/NearlCrews/signalk-openrouter-companion.git
-   ```
+- A clear title and description
+- Steps to reproduce
+- Expected and actual behavior
+- Environment details (plugin version, Signal K server version, Node.js
+  version, OS, and the affected analyzer)
+- Relevant log output, with API keys redacted
 
-4. Install dependencies:
+## Suggesting enhancements
 
-   ```bash
-   npm install
-   ```
+Open a [feature request](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=feature_request.yml)
+describing the proposed feature, the use case it serves, and any
+implementation ideas you have. New monitoring domains are usually a fit
+for the `Analyzer` extension point; check whether your idea is one of
+those before proposing a structural change.
 
-5. Build and verify:
+## Pull requests
 
-   ```bash
-   npm run build
-   npm run test
-   ```
-
-## Architecture
-
-This repo is **ONE npm package**. New monitoring domains go in as `Analyzer` modules under `src/analyzers/`, not as sibling packages. See [DEVELOPMENT.md](../docs/DEVELOPMENT.md) for the full architectural rules and the standardized triggers contract.
-
-Six analyzers ship today: `maintenance`, `health`, `alerts`, `aging`, `drift`, `liveness`. Split by purpose:
-
-- **State** analyzers describe "now" (`maintenance`, `health`, `liveness`).
-- **Transition** analyzers describe a threshold crossing (`alerts`).
-- **Trend** analyzers describe gradual change over a configurable window from QuestDB history (`aging`, `drift`).
-
-## Development workflow
-
-1. Create a feature branch from `main`:
-
-   ```bash
-   git checkout -b feat/your-feature
-   ```
-
-2. Make your changes. Add or update tests under `tests/`.
-
-3. Run the pre-publish gate locally before pushing:
+1. Fork the repository and create a feature branch from `main`.
+2. Install dependencies with `npm install`, then build and verify with
+   `npm run build` and `npm test`.
+3. Make focused commits with clear messages (see below).
+4. Add or update tests under `tests/` and keep the existing suite green.
+5. Run the pre-publish gate locally before pushing:
 
    ```bash
    npm run prepublishOnly
    ```
 
-   This runs type-check + Biome lint + Vitest + esbuild build. It must be clean.
+   This runs the type check, Biome lint, the Vitest suite, and the build.
+   It must be clean.
 
-4. Commit with a [Conventional Commits](https://www.conventionalcommits.org/) prefix:
+6. Update documentation (`README.md`, `CHANGELOG.md`, `docs/`) as needed.
+7. Open a pull request against `main` with a clear description, and fill
+   in the PR template.
 
-   - `feat`: new feature
-   - `fix`: bug fix
-   - `refactor`: internal cleanup with no behavior change
-   - `perf`: measurable per-request, per-delta, or per-render win
-   - `docs`, `test`, `chore`, `ci`: docs, tests, maintenance, CI
+## Code style
 
-5. Push and open a PR against `main`. Fill in the PR template.
+- TypeScript 6, strict mode, ESM. Node 20.18 or newer (CI runs on Node 20
+  and 22).
+- Biome handles lint and format: `npm run lint`, or `npm run lint:fix` to
+  auto-fix. The Biome config in `biome.json` is the source of truth.
+- No em dashes anywhere: in code, commits, PR descriptions, or docs. Use
+  a colon, a comma, or split into two sentences.
+- Default to no comments. Add a comment only when it explains a
+  non-obvious WHY (a hidden constraint, a subtle invariant, a
+  workaround). Skip WHAT-comments and change-narrative comments; the code
+  says what, the PR description says why.
+- Trust internal callers. Only validate at system boundaries (user input,
+  external APIs). Skip defensive runtime checks for scenarios that cannot
+  happen.
+- Prefer the shared helpers in `src/core/`: `buildTriggers` and
+  `manualPutCtx`, `bankPaths`, `enginePaths`, and
+  `notificationReportPath`, `escapeSqlLiteral` plus `indexColumns`,
+  `publishReport`, `clampPositiveInt`, `fmtNumber`, `fmtPct`, `fmtUnit`,
+  and `fmtRatio`, and `asTreeMap` plus `readBankSnapshot` for Signal K
+  battery trees. Adding a new analyzer should mostly be wiring these
+  together.
 
-## Coding standards
+## Architecture rule
 
-- TypeScript 6, strict mode, ESM. Node 20.18+ (CI runs on Node 20 and 22).
-- Biome handles lint and format: `npm run lint` / `npm run lint:fix`. The Biome config in `biome.json` is the source of truth.
-- **No em dashes** anywhere: in code, commits, PR descriptions, or docs. Use a colon, a comma, or split into two sentences.
-- Default to no comments. Add a comment only when it explains a non-obvious WHY (a hidden constraint, a subtle invariant, a workaround). Skip WHAT-comments and change-narrative comments; the code says what, the PR description says why.
-- Trust internal callers. Only validate at system boundaries (user input, external APIs). Skip defensive runtime checks for scenarios that can't happen.
-- Prefer the shared helpers in `src/core/`: `buildTriggers` and `manualPutCtx`, `bankPaths`/`enginePaths`/`notificationReportPath`, `escapeSqlLiteral` + `indexColumns`, `publishReport`, `clampPositiveInt`, `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio`, `asTreeMap` + `readBankSnapshot` for SK battery trees. Adding a new analyzer should mostly be wiring these together.
+This repository ships exactly ONE npm package and ONE Signal K plugin.
+New monitoring domains go in as `Analyzer` modules under
+`src/analyzers/`, not as sibling packages or a monorepo. See the
+[development guide](../docs/DEVELOPMENT.md) for the full architectural
+rules and the standardized triggers contract.
 
-## Adding a new analyzer
+Seven analyzers ship today: `maintenance`, `health`, `alerts`, `aging`,
+`drift`, `liveness`, and `forecast`. Split by purpose:
 
-See [DEVELOPMENT.md](../docs/DEVELOPMENT.md) for the full walkthrough. Short version:
+- **State** analyzers describe "now" (`maintenance`, `health`,
+  `liveness`).
+- **Transition** analyzers describe a threshold crossing (`alerts`).
+- **Trend** analyzers describe gradual change over time (`aging`,
+  `drift`, and `forecast`; `aging` and `drift` read QuestDB history, and
+  `forecast` uses it as an optional baseline).
 
-1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`: `id` (typed as `AnalyzerId`), `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`.
-2. Use `buildTriggers(cfg.triggers, eventMapper?)` so the cron + PUT + events block stays uniform.
-3. Use `publisher.publishReport(this.id, ctx, text)` for the canonical `notifications.openrouter-companion.<id>.report` shape.
-4. Append the id to `src/analyzers/ids.ts::ANALYZER_IDS`, the factory closure to `src/analyzers/registry.ts::ANALYZER_FACTORIES` and the default prompt to `ANALYZER_DEFAULT_SYSTEM_PROMPTS` in the same file, and the config section to `src/schema.ts` plus `src/types.ts`. `index.ts` instantiates from the registry automatically.
-5. Add tests under `tests/` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`.
+### Adding a new analyzer
 
-## Reporting bugs
+See the [development guide](../docs/DEVELOPMENT.md) for the full
+walkthrough. Short version:
 
-Open a [bug report](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=bug_report.yml). Include the plugin version, Signal K server version, Node version, the relevant analyzer, and any log output (with API keys redacted).
+1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`:
+   `id` (typed as `AnalyzerId`), `title`, `triggers`, `collectContext`,
+   `buildPrompt`, optional `publishOutput`, and optional `watchedPaths`.
+2. Use `buildTriggers(cfg.triggers, eventMapper?)` so the cron, PUT, and
+   events block stays uniform.
+3. Use `publisher.publishReport(this.id, ctx, text)` for the canonical
+   `notifications.openrouter-companion.<id>.report` shape.
+4. Append the id to `src/analyzers/ids.ts::ANALYZER_IDS`, the factory
+   closure to `src/analyzers/registry.ts::ANALYZER_FACTORIES` and the
+   default prompt to `ANALYZER_DEFAULT_SYSTEM_PROMPTS` in the same file,
+   and the config section to `src/schema.ts` plus `src/types.ts`.
+   `index.ts` instantiates from the registry automatically.
+5. Add tests under `tests/` using `makeAnalyzerDeps` (and
+   `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`.
 
-## Requesting features
+## Commit messages
 
-Open a [feature request](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=feature_request.yml). New monitoring domains are usually a fit for the `Analyzer` extension point; check whether your idea is one of those before proposing a structural change.
+Use conventional-commit prefixes that match the actual diff scope:
 
-## License
+- `feat`: new feature
+- `fix`: bug fix
+- `refactor`: internal cleanup with no behavior change
+- `perf`: measurable per-request, per-delta, or per-render win
+- `docs`, `test`, `chore`, `ci`: docs, tests, maintenance, CI
 
-By contributing you agree your contributions are licensed under the Apache-2.0 License. See [LICENSE](../LICENSE).
+## License and attribution
+
+By contributing, you agree your contributions are licensed under the
+Apache-2.0 License that covers this project. See [LICENSE](../LICENSE).

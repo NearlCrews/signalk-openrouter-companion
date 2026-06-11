@@ -1,46 +1,57 @@
 # Security Policy
 
-This is a beta project. The plugin runs inside a Signal K server on a vessel and makes outbound HTTPS calls to OpenRouter, so the most important security boundary is your OpenRouter API key.
+The plugin runs inside a Signal K server on a vessel and makes outbound
+HTTPS calls to OpenRouter, so the most important security boundary is
+your OpenRouter API key.
 
-## Supported versions
+## Supported Versions
 
-Only the latest release line is supported with security updates.
+We actively support the following versions with security updates:
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.4.x   | Yes (current)      |
-| < 0.4   | No                 |
+| Version | Supported |
+| ------- | --------- |
+| 0.5.x   | Yes       |
+| < 0.5   | No        |
 
-## Reporting a vulnerability
+## Reporting a Vulnerability
 
-**Do not open a public GitHub issue for a security report.**
+We take the security of OpenRouter Companion seriously. If you discover a
+security vulnerability, please follow these guidelines.
 
-Use one of:
+### How to Report
 
-1. **GitHub Security Advisory** (preferred): open the [Security tab](https://github.com/NearlCrews/signalk-openrouter-companion/security) and click "Report a vulnerability".
-2. **Direct contact**: reach the maintainer via GitHub with "SECURITY" in the subject line.
+**Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Include:
+Instead, please report them via one of these methods:
 
-- The vulnerability class (e.g., credential leak, injection, denial of service).
-- Affected file paths and the smallest reproducer you can provide.
-- An impact assessment.
-- Any suggested fix or mitigation.
+1. **GitHub Security Advisory**: use the [GitHub Security Advisory](https://github.com/NearlCrews/signalk-openrouter-companion/security/advisories/new) feature (preferred).
+2. **Direct contact**: reach the maintainer via [GitHub](https://github.com/NearlCrews) with "SECURITY" in the subject line.
 
-A first reply is sent within a few business days. Severity and a fix timeline follow once the issue is reproduced.
+### What to Include
 
-## Disclosure timeline
+Please include the following information in your report:
 
-- Initial response: within 48 hours of the report on a best-effort basis (this is a one-maintainer project, not a 24/7 security team).
-- Investigation: within 7 days, severity and scope are confirmed.
-- Fix: critical within 1 week, high within 2 weeks, medium within 1 month, low best-effort.
-- Public disclosure: after a patched release is published and users have had at least 7 days to update.
+- **Description** of the vulnerability (the class, such as credential
+  leak, injection, or denial of service)
+- **Steps to reproduce** the issue, with affected file paths and the
+  smallest reproducer you can provide
+- **Potential impact** of the vulnerability
+- **Suggested fix** (if you have one)
+- **Your contact information** for follow-up
 
-## What is in scope
+### Response Timeline
 
-- The plugin's own code under `src/`.
-- The plugin's published package surface (npm tarball contents, when published).
-- Dependencies declared in `package.json` (one direct runtime dep today: `croner`).
+- **Initial Response**: within 48 hours of the report on a best-effort
+  basis (this is a one-maintainer project, not a 24/7 security team)
+- **Status Update**: within 7 days, severity and scope are confirmed
+- **Fix Timeline**: critical within 1 week, high within 2 weeks, medium
+  within 1 month, low best-effort
+
+### Scope
+
+In scope: the plugin's own code under `src/`, the published npm tarball
+contents, and the dependencies declared in `package.json` (one direct
+runtime dependency today: `croner`).
 
 Out of scope:
 
@@ -49,25 +60,84 @@ Out of scope:
 - QuestDB: report to [questdb/questdb](https://github.com/questdb/questdb).
 - The user's local NMEA 2000 bus.
 
-## Sensitive data this plugin handles
+## Security Best Practices
 
-- **OpenRouter API key**. Stored only in Signal K's plugin config (`~/.signalk/plugin-config-data/signalk-openrouter-companion.json`) and is never logged. The schema marks the field with `ui:widget: 'password'`. If you see the key echoed in logs, that's a bug, please report it.
-- **Vessel telemetry sent to OpenRouter**: each analyzer's `buildPrompt` includes the relevant subset of telemetry (engine RPM, fuel rate, battery voltage / SoC, etc.). No GPS coordinates and no identifying metadata are included. If you do not want telemetry leaving the boat, do not enable the analyzers.
-- **Generated reports**: written locally to `<plugin-config-data>/signalk-openrouter-companion/reports.jsonl` and published as Signal K notifications. They contain the same telemetry that was sent to OpenRouter plus the LLM's prose response.
+When using this plugin:
 
-## Hardening recommendations for operators
+1. **Use a dedicated API key**: give this plugin its own OpenRouter API
+   key so you can revoke it without impacting other tools.
+2. **Cap the spend**: set "Max calls per day" to a hard cap so a stuck
+   loop cannot burn through credit.
+3. **Access Control**: keep the Signal K server's admin UI behind
+   authentication. The plugin's REST routes are admin-gated, and its PUT
+   triggers go through `app.registerPutHandler`, so anyone who can write
+   `vessels.self` paths on your server can fire analyzer runs.
+4. **Treat report text as untrusted**: LLM prompts are not sandboxed. If
+   an attacker can write arbitrary deltas to the watched paths
+   (`propulsion.*`, `electrical.batteries.*`), they can influence the
+   model's input, and the published prose could carry attacker text. The
+   output is only published as Signal K notifications, never executed.
+5. **Monitor disk usage**: the JSONL report log is not pruned, so reports
+   accumulate in `reports.jsonl` indefinitely on a constrained device.
+6. **Keep Updated**: always use the latest version, and keep your Node.js
+   runtime up to date. There is no outbound TLS pinning; the plugin
+   trusts the system CA store for openrouter.ai and the QuestDB URL.
 
-- Use an OpenRouter API key dedicated to this plugin so you can revoke it without impacting other tools.
-- Set `openrouter.maxCallsPerDay` to a hard cap so a stuck loop can't burn through credit.
-- Keep the Signal K server's admin UI behind authentication. The plugin's PUT triggers are routed through `app.registerPutHandler`, so anyone who can write `vessels.self` paths on your SK server can fire analyzer runs.
-- Keep your Node.js runtime up to date.
+## Dependency Security
 
-## Known security considerations
+This project uses:
 
-- **LLM prompts are not sandboxed**. If an attacker can write arbitrary deltas to the watched paths (`propulsion.*`, `electrical.batteries.*`), they can influence the LLM's input. Output is published only as Signal K notifications, not executed, but the prose itself could carry attacker text. Treat report text as untrusted.
-- **JSONL log is not pruned**. Reports accumulate in `reports.jsonl` forever. On a constrained device, monitor disk usage.
-- **No outbound TLS pinning**. The plugin trusts the system CA store for `openrouter.ai` and `localhost:9000` (QuestDB). If your CA store is compromised, the plugin can be MITM'd.
+- `npm audit` for vulnerability scanning (run in CI on every push)
+- Automated dependency updates via Dependabot for security patches
 
-## License
+Run a security audit:
 
-This security policy is covered by the project's [Apache-2.0 License](../LICENSE). Copyright 2026 Nearl Crews.
+```bash
+npm audit
+```
+
+## Data Handling
+
+- **OpenRouter API key**: stored only in Signal K's plugin config
+  (`~/.signalk/plugin-config-data/signalk-openrouter-companion.json`) and
+  never logged. The schema marks the field as a password input. If you
+  see the key echoed in logs, that is a bug, please report it.
+- **Vessel telemetry sent to OpenRouter**: each analyzer's prompt
+  includes the relevant subset of telemetry (engine RPM, fuel rate,
+  battery voltage and state of charge, weather readings). No GPS
+  coordinates and no identifying metadata are included. If you do not
+  want telemetry leaving the boat, do not enable the analyzers.
+- **Generated reports**: written locally to `reports.jsonl` in the
+  plugin's data directory and published as Signal K notifications. They
+  contain the same telemetry that was sent to OpenRouter plus the model's
+  prose response.
+
+## Signal K Security
+
+This plugin operates within the Signal K server environment. Please also
+refer to the [Signal K documentation](https://signalk.org/documentation/)
+and Signal K server security best practices.
+
+## Marine Safety Notice
+
+This plugin reports on engine, battery, and weather telemetry aboard a
+vessel. While we strive for security and reliability:
+
+- **Not for Safety-Critical Use**: the battery threshold alerts are
+  written by a cloud LLM call bounded by a shared daily budget, so a
+  crossing can go unreported when the budget is spent or OpenRouter is
+  unreachable. Pair the alerts with a hardware or BMS alarm.
+- **Professional Equipment**: always maintain certified monitoring and
+  alarm equipment for engine and electrical systems.
+- **Regular Verification**: the reports are generated prose; verify any
+  surprising claim against your instruments before acting on it.
+- **Test Thoroughly**: test in non-critical conditions before relying on
+  this plugin.
+
+## Disclosure Policy
+
+- We will coordinate disclosure timing with the reporter.
+- Public disclosure will occur after a patched release is available and
+  users have had at least 7 days to update.
+- Credit will be given to reporters (if desired).
+- A security advisory will be published on GitHub.
