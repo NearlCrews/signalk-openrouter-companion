@@ -43,7 +43,7 @@ src/
     ├── discovery.ts          Engine and bank id discovery from SK paths
     ├── skNode.ts             readNumberAt + readValueAt + asTreeMap + readBankSnapshot
     ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
-    ├── triggers.ts           buildTriggers(cfg, eventMapper?) + manualPutCtx(value?)
+    ├── triggers.ts           buildTriggers(analyzerId, cfg, eventMapper?) + manualPutCtx(value?)
     ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
     ├── cfg.ts                clampPositiveInt + resolveSystemPrompt
     └── logger.ts             Wraps app.debug / app.error / stringify
@@ -76,12 +76,12 @@ Every analyzer's config carries the same `triggers` shape:
 ```typescript
 interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
-  put:  { enabled: boolean; path: string };
+  put:  { enabled: boolean };
   events: string[]; // per-analyzer subkind enum
 }
 ```
 
-Each analyzer constructor calls `buildTriggers(cfg.triggers, eventMapper?)` which returns the `TriggerSpec[]` consumed by the lifecycle in `index.ts`. The lifecycle reads `analyzer.triggers` and wires cron via `CronScheduler`, PUT via `app.registerPutHandler`, and events from `EngineDetector` / `BatteryMonitor`. Adding a new trigger kind means adding a `TriggerSpec` variant in `Analyzer.ts` and a dispatch arm in `TriggerRouter`. The analyzers themselves are decoupled.
+Each analyzer constructor calls `buildTriggers(this.id, cfg.triggers, eventMapper?)` which returns the `TriggerSpec[]` consumed by the lifecycle in `index.ts`. The PUT path is derived from the analyzer id inside `buildTriggers`, not stored on the cfg, so it cannot drift from the convention. The lifecycle reads `analyzer.triggers` and wires cron via `CronScheduler`, PUT via `app.registerPutHandler`, and events from `EngineDetector` / `BatteryMonitor`. Adding a new trigger kind means adding a `TriggerSpec` variant in `Analyzer.ts` and a dispatch arm in `TriggerRouter`. The analyzers themselves are decoupled.
 
 Full rules for adding a new analyzer live in [CLAUDE.md](../CLAUDE.md) and the project's memory at `~/.claude/projects/-home-dietpi-src-signalk-openrouter-companion/memory/triggers_contract.md`.
 
@@ -148,11 +148,11 @@ npm run clean          # rm -rf dist public
 
 Outputs:
 
-- `dist/index.js` (single ESM backend bundle, ~169 KB)
+- `dist/index.js` (single ESM backend bundle, ~173 KB)
 - `dist/*.d.ts` (TypeScript declarations)
-- `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~18 KB total)
+- `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~48 KB total)
 
-esbuild externalizes `@signalk/server-api` and `croner`; everything else in the backend is bundled. The panel bundle shares `react` 19 as a Module Federation `singleton: true` so it reuses the SK admin UI's React runtime. The panel is built with `experiments.outputModule: true` and `library: { type: 'module' }` because this package's `"type": "module"` makes SK admin inject `<script type="module">`; legacy `library: 'var'` doesn't work under that loader.
+esbuild externalizes only `@signalk/server-api`; everything else in the backend, including `croner`, is bundled. The panel bundle shares `react` 19 as a Module Federation `singleton: true` so it reuses the SK admin UI's React runtime. The panel is built with `experiments.outputModule: true` and `library: { type: 'module' }` because this package's `"type": "module"` makes SK admin inject `<script type="module">`; legacy `library: 'var'` doesn't work under that loader.
 
 ## Tests
 
@@ -162,7 +162,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-236 tests across 21 files cover:
+310 tests across 27 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
@@ -185,7 +185,7 @@ npm run format         # biome format --write src/ tests/
 npm run type-check     # tsc --noEmit
 ```
 
-Biome is the source of truth for style. The repo follows strict mode TypeScript with no implicit `any`, no unchecked indexed access, and `exactOptionalPropertyTypes`.
+Biome is the source of truth for style. The repo follows strict-mode TypeScript (`strict: true`) with no implicit `any` and no unchecked indexed access (`noUncheckedIndexedAccess`). The `type-check` script runs `tsc` twice: once for `src/` via `tsconfig.json`, then for `tests/` via `tsconfig.tests.json`, so dead fixture keys in tests fail the gate too.
 
 ## Pre-publish gate
 
@@ -228,7 +228,7 @@ Credentials must come from environment variables; do not hardcode.
 - **Default to no comments.** Add a comment only when it captures non-obvious WHY: a hidden constraint, a subtle invariant, a workaround. Skip WHAT-comments (the code says what) and change-narrative comments (the PR description says why).
 - **Trust internal callers.** Only validate at system boundaries (user input, external APIs). Don't add `Number.isFinite` checks against your own helpers; let the type system carry that.
 - **Notification paths**: `notifications.openrouter-companion.<analyzer>.<...>`. Use `notificationReportPath(id)` from `core/paths.ts`.
-- **PUT paths**: `plugins.openrouter-companion.<analyzer>.<verb>`. Use `pluginPutPath(id, verb)` from `core/paths.ts`.
+- **PUT paths**: `plugins.openrouter-companion.<analyzer>.run` (the verb is fixed at `run`). Use `pluginPutPath(id)` from `core/paths.ts`.
 - **All numbers in SI base units** unless the SK spec dictates otherwise: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio, RPM as Hz (1 Hz = 60 RPM, per SK v1.8.2 vocabulary for `propulsion.*.revolutions`). Do NOT convert RPM to rad/s; the SK spec uses Hz for this path.
 
 ## Adding a new analyzer
@@ -253,7 +253,7 @@ Step by step:
      readonly triggers: ReadonlyArray<TriggerSpec>;
      private readonly systemPrompt: string;
      constructor(cfg: MyCfg) {
-       this.triggers = buildTriggers(cfg.triggers);
+       this.triggers = buildTriggers(this.id, cfg.triggers);
        this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, MYNAME_DEFAULT_SYSTEM_PROMPT);
      }
      async collectContext(ctx, deps) { /* ... return MyInput | null */ }
