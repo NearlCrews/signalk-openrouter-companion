@@ -8,13 +8,13 @@
   project-specific colour with a small glyph. The badge is the only
   region that varies between sibling plugins.
 
-  This variant's badge: violet (#7E57C2) with a routing-node glyph: a
-  central hub linked to three peripheral nodes. The metaphor nods to
-  OpenRouter's role as a router across many LLMs, and to the plugin's
-  job of fanning vessel data out to a model and the result back into
-  Signal K notifications. Violet is distinct from the sibling yellow
-  (weather), orange (NMEA2000 emitter), and green (predecessor chat)
-  badges, keeping the family visually separable at thumbnail size.
+  This variant's badge: violet (#7E57C2) with a chat bubble carrying a
+  white four-point sparkle. The bubble is the plugin's voice (LLM
+  reports and alerts narrated into Signal K notifications) and the
+  sparkle is the AI doing the narrating. Violet is distinct from the
+  sibling yellow (weather), orange (NMEA 2000 emitter), and crimson
+  (Crow's Nest lighthouse) badges, keeping the family visually
+  separable at thumbnail size.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="OpenRouter Companion plugin icon">
   <defs>
@@ -34,26 +34,15 @@
     <path d="M 80,336 q 44,-36 88,0 t 88,0 t 88,0 t 88,0"/>
   </g>
 
-  <!-- Project badge: bottom-right circle (violet for routing/AI) -->
+  <!-- Project badge: bottom-right circle (violet for AI narration) -->
   <circle cx="388" cy="388" r="84" fill="#7E57C2" stroke="#FFFFFF" stroke-width="8"/>
 
   <!--
-    Badge glyph: routing-node graph. Three peripheral nodes (top, lower-left,
-    lower-right) linked to a central hub by short edges. Connectors are
-    drawn first so the node disks sit on top and read cleanly. Geometry is
-    laid out on a small triangle around the badge centre (388, 388).
+    Badge glyph: rounded chat bubble with a lower-left tail, filled in
+    the family glyph dark (#1B3A4B), carrying a white four-point sparkle
+    at its centre. Two shapes, so the "AI speaks" metaphor still reads
+    at 32px. Laid out around the badge centre (388, 388).
   -->
-  <g stroke="#1B3A4B" stroke-width="7" stroke-linecap="round" fill="none">
-    <line x1="388" y1="388" x2="388" y2="350"/>
-    <line x1="388" y1="388" x2="356" y2="416"/>
-    <line x1="388" y1="388" x2="420" y2="416"/>
-  </g>
-  <g fill="#1B3A4B">
-    <!-- Central hub node, slightly larger to read as the router -->
-    <circle cx="388" cy="388" r="11"/>
-    <!-- Three peripheral model nodes -->
-    <circle cx="388" cy="346" r="9"/>
-    <circle cx="352" cy="420" r="9"/>
-    <circle cx="424" cy="420" r="9"/>
-  </g>
+  <path d="M 360 350 L 416 350 Q 444 350 444 378 L 444 390 Q 444 418 416 418 L 384 418 L 360 438 L 360 418 Q 332 418 332 390 L 332 378 Q 332 350 360 350 Z" fill="#1B3A4B"/>
+  <path d="M 388 360 L 395 377 L 412 384 L 395 391 L 388 408 L 381 391 L 364 384 L 381 377 Z" fill="#FFFFFF"/>
 </svg>
