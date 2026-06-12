@@ -1,1 +1,0 @@
-/home/dietpi/.claude/agents/signalk-plugin-expert.md

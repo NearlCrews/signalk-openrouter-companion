@@ -99,8 +99,8 @@ Every version push updates four things together, then ships:
 
 ## Useful tools and agents
 
-- The `signalk-plugin-expert` agent (symlinked from user-global into `.claude/agents/`) is the source of truth for Signal K plugin semantics. Use it for any SK API or convention question.
-- The `openrouter-marine-expert` agent (`.claude/agents/`) is the expert on the OpenRouter API, marine telemetry analysis, and combining the two. Use it for model, routing, and cost decisions, for prompt design over telemetry, and for judging whether telemetry values are normal or anomalous. It verifies OpenRouter specifics against live docs rather than assuming.
+- The `signalk-plugin-expert` agent (user-global, `~/.claude/agents/`) is the source of truth for Signal K plugin semantics. Use it for any SK API or convention question.
+- The `openrouter-marine-expert` agent (user-global, `~/.claude/agents/`) is the expert on the OpenRouter API, marine telemetry analysis, and combining the two. Use it for model, routing, and cost decisions, for prompt design over telemetry, and for judging whether telemetry values are normal or anomalous. It verifies OpenRouter specifics against live docs rather than assuming.
 - The `Read` tool gives access to the engine-plugin source under `/home/dietpi/src/signalk-server/` for reference. Don't modify it.
 - The user's vessel exposes battery banks (house, starter, console, trolling) and a single engine (`port`). Use these for testing.
 
