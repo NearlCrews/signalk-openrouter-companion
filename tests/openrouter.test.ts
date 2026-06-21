@@ -53,7 +53,13 @@ describe('OpenRouterClient', () => {
     });
     const r = await c.complete({ system: 'sys', user: 'usr' });
     expect(r.text).toBe('hello world');
-    expect(r.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+    expect(r.usage).toEqual({
+      promptTokens: 10,
+      completionTokens: 5,
+      totalTokens: 15,
+      cachedTokens: 0,
+      cost: 0,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const firstCall = fetchMock.mock.calls[0];
     if (!firstCall) throw new Error('expected fetch call');
@@ -434,6 +440,44 @@ describe('OpenRouterClient', () => {
     const r = await p;
     expect(r.text).toBe('date-ok');
     vi.useRealTimers();
+  });
+
+  it('parses cost and cached tokens from usage', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        choices: [{ message: { content: 'hi' } }],
+        model: 'anthropic/claude-haiku-4.5',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cost: 0.0042,
+          prompt_tokens_details: { cached_tokens: 64 },
+        },
+      }),
+    );
+    const c = makeClient();
+    const r = await c.complete({ system: 's', user: 'u' });
+    expect(r.usage).toEqual({
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      cachedTokens: 64,
+      cost: 0.0042,
+    });
+  });
+
+  it('defaults cost and cached tokens to 0 when usage omits them', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        choices: [{ message: { content: 'hi' } }],
+        usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
+      }),
+    );
+    const c = makeClient();
+    const r = await c.complete({ system: 's', user: 'u' });
+    expect(r.usage.cachedTokens).toBe(0);
+    expect(r.usage.cost).toBe(0);
   });
 
   it('rejects from the backoff when the caller signal is already aborted at delay time', async () => {

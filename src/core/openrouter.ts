@@ -19,7 +19,13 @@ interface CompleteArgs {
 export interface CompleteResult {
   text: string;
   model: string;
-  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedTokens: number;
+    cost: number;
+  };
 }
 
 export class OpenRouterError extends Error {
@@ -36,7 +42,13 @@ export class OpenRouterError extends Error {
 interface ApiResponse {
   choices: { message: { content?: string } }[];
   model?: string;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    cost?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
 }
 
 interface ApiErrorBody {
@@ -136,6 +148,8 @@ export class OpenRouterClient {
             promptTokens: u.prompt_tokens ?? 0,
             completionTokens: u.completion_tokens ?? 0,
             totalTokens: u.total_tokens ?? 0,
+            cachedTokens: u.prompt_tokens_details?.cached_tokens ?? 0,
+            cost: u.cost ?? 0,
           },
         },
       };
