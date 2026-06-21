@@ -244,6 +244,7 @@ export interface RouterDepsMocks {
   publishOnPath: Spy;
   canSpend: Spy;
   recordCall: Spy;
+  recordUsage: Spy;
   complete: Spy;
   setStatus: Spy;
   debug: Spy;
@@ -260,11 +261,12 @@ export function makeRouterDeps(
     publishOnPath: vi.fn().mockResolvedValue(undefined),
     canSpend: vi.fn().mockReturnValue(true),
     recordCall: vi.fn().mockResolvedValue(undefined),
+    recordUsage: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(
       overrides.completeResult ?? {
         text: 'ok',
         model: 'stub',
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, cost: 0 },
       },
     ),
     setStatus: vi.fn(),
@@ -284,6 +286,7 @@ export function makeRouterDeps(
     budget: {
       canSpend: mocks.canSpend,
       recordCall: mocks.recordCall,
+      recordUsage: mocks.recordUsage,
     } as unknown as AnalyzerDeps['budget'],
     llm: { complete: mocks.complete } as unknown as AnalyzerDeps['llm'],
     logger: new Logger({ debug: mocks.debug, error: mocks.error }),

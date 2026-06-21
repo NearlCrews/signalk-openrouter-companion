@@ -81,16 +81,17 @@ export class TriggerRouter {
       // intended conservative behavior for a spend cap.
       await this.deps.budget.recordCall();
       const { system, user } = a.buildPrompt(input);
-      const { text } = await this.deps.llm.complete({
+      const result = await this.deps.llm.complete({
         system,
         user,
         abortSignal: this.deps.signal,
       });
+      await this.deps.budget.recordUsage(result.usage);
       this.setStatus(this.deps.okStatus ?? 'Running');
       if (a.publishOutput) {
-        await a.publishOutput(text, ctx, this.deps);
+        await a.publishOutput(result.text, ctx, this.deps);
       } else {
-        await this.deps.publisher.publishReport(a.id, ctx, text);
+        await this.deps.publisher.publishReport(a.id, ctx, result.text);
       }
       return 'reported';
     } catch (err) {

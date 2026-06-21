@@ -313,4 +313,20 @@ describe('TriggerRouter', () => {
     expect(mocks.publishReport).toHaveBeenCalledTimes(1);
     expect(mocks.publishReport.mock.calls[0]?.[0]).toBe('maintenance');
   });
+
+  it('records token/cost usage on a successful run', async () => {
+    const { deps, mocks } = makeRouterDeps({
+      completeResult: {
+        text: 'Headline\nbody',
+        model: 'anthropic/claude-haiku-4.5',
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 4, cost: 0.001 },
+      },
+    });
+    const a = makeAnalyzer({ id: 'health', triggers: [] });
+    const router = new TriggerRouter([a], deps);
+    await router.runById('health', { kind: 'cron', firedAt: new Date() });
+    expect(mocks.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ totalTokens: 15, cost: 0.001 }),
+    );
+  });
 });
