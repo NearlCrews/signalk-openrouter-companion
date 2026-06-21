@@ -87,6 +87,46 @@ describe('BudgetTracker', () => {
     }
   });
 
+  it('accumulates tokens and cost via recordUsage', async () => {
+    const path = join(dir, 'budget.json');
+    const t0 = new Date('2026-05-10T01:00:00Z');
+    const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
+    await b.recordUsage({ totalTokens: 120, cost: 0.004 });
+    await b.recordUsage({ totalTokens: 80, cost: 0.002 });
+    expect(b.tokensToday()).toBe(200);
+    expect(b.costToday()).toBeCloseTo(0.006, 6);
+  });
+
+  it('resets tokens and cost on UTC day rollover', async () => {
+    const path = join(dir, 'budget.json');
+    let now = new Date('2026-05-10T23:30:00Z');
+    const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => now });
+    await b.recordUsage({ totalTokens: 100, cost: 0.01 });
+    now = new Date('2026-05-11T00:30:00Z');
+    expect(b.tokensToday()).toBe(0);
+    expect(b.costToday()).toBe(0);
+  });
+
+  it('loads a pre-upgrade state file without token/cost fields', async () => {
+    const path = join(dir, 'budget.json');
+    const t0 = new Date('2026-05-10T01:00:00Z');
+    await writeFile(path, JSON.stringify({ day: '2026-05-10', callsToday: 2 }));
+    const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
+    expect(b.callsToday()).toBe(2);
+    expect(b.tokensToday()).toBe(0);
+    expect(b.costToday()).toBe(0);
+  });
+
+  it('persists tokens and cost across instances', async () => {
+    const path = join(dir, 'budget.json');
+    const t0 = new Date('2026-05-10T01:00:00Z');
+    const b1 = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
+    await b1.recordUsage({ totalTokens: 50, cost: 0.005 });
+    const b2 = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
+    expect(b2.tokensToday()).toBe(50);
+    expect(b2.costToday()).toBeCloseTo(0.005, 6);
+  });
+
   it('logs and does not throw when the state write fails', async () => {
     const messages: string[] = [];
     // statePath under a non-existent subdirectory: load reads ENOENT (the clean

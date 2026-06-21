@@ -13,6 +13,8 @@ interface BudgetOptions {
 interface PersistedState {
   day: string;
   callsToday: number;
+  tokensToday: number;
+  costToday: number;
 }
 
 function utcDay(d: Date): string {
@@ -32,7 +34,7 @@ export class BudgetTracker {
     let state: PersistedState;
     try {
       const raw = await readFile(opts.statePath, 'utf-8');
-      const parsed = JSON.parse(raw) as PersistedState;
+      const parsed = JSON.parse(raw) as Partial<PersistedState> & { day?: string; callsToday?: number };
       // callsToday gates the spend cap, so reject a NaN, fractional, or
       // negative count rather than letting it through to the comparison.
       if (
@@ -42,14 +44,22 @@ export class BudgetTracker {
       ) {
         throw new Error('invalid state shape');
       }
-      state = { day: parsed.day, callsToday: parsed.callsToday };
+      const tokensToday =
+        Number.isFinite(parsed.tokensToday) && (parsed.tokensToday as number) >= 0
+          ? (parsed.tokensToday as number)
+          : 0;
+      const costToday =
+        Number.isFinite(parsed.costToday) && (parsed.costToday as number) >= 0
+          ? (parsed.costToday as number)
+          : 0;
+      state = { day: parsed.day, callsToday: parsed.callsToday, tokensToday, costToday };
     } catch (err) {
       // ENOENT is the expected first-run case. Anything else means an existing
       // budget file failed to load, which silently resets the daily spend cap.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         opts.log?.(`budget state unreadable, resetting daily counter: ${String(err)}`);
       }
-      state = { day: utcDay(now()), callsToday: 0 };
+      state = { day: utcDay(now()), callsToday: 0, tokensToday: 0, costToday: 0 };
     }
     return new BudgetTracker({ ...opts, now }, state);
   }
@@ -57,7 +67,7 @@ export class BudgetTracker {
   private rolloverIfNeeded(): void {
     const today = utcDay(this.opts.now());
     if (this.state.day !== today) {
-      this.state = { day: today, callsToday: 0 };
+      this.state = { day: today, callsToday: 0, tokensToday: 0, costToday: 0 };
     }
   }
 
@@ -80,7 +90,7 @@ export class BudgetTracker {
   async recordCall(): Promise<void> {
     this.rolloverIfNeeded();
     this.state = {
-      day: this.state.day,
+      ...this.state,
       callsToday: this.state.callsToday + 1,
     };
     try {
@@ -94,5 +104,34 @@ export class BudgetTracker {
       // failing write quietly weakens the cap, so log it.
       this.opts.log?.(`budget state write failed: ${String(err)}`);
     }
+  }
+
+  // Daily token/cost accounting. Unlike recordCall (which runs before the LLM
+  // await to bound the call cap under concurrency), recordUsage runs only after
+  // a successful call, so it reflects real spend. It does not gate anything; the
+  // call cap remains the sole hard spend bound. Best-effort persist, like
+  // recordCall: a failed write only loses the running total across a restart.
+  async recordUsage(usage: { totalTokens: number; cost: number }): Promise<void> {
+    this.rolloverIfNeeded();
+    this.state = {
+      ...this.state,
+      tokensToday: this.state.tokensToday + (Number.isFinite(usage.totalTokens) ? usage.totalTokens : 0),
+      costToday: this.state.costToday + (Number.isFinite(usage.cost) ? usage.cost : 0),
+    };
+    try {
+      await writeFile(this.opts.statePath, JSON.stringify(this.state));
+    } catch (err) {
+      this.opts.log?.(`budget state write failed: ${String(err)}`);
+    }
+  }
+
+  tokensToday(): number {
+    this.rolloverIfNeeded();
+    return this.state.tokensToday;
+  }
+
+  costToday(): number {
+    this.rolloverIfNeeded();
+    return this.state.costToday;
   }
 }
