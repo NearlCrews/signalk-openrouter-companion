@@ -294,6 +294,52 @@ function buildSchemaInner(): PluginSchema {
             default: DEFAULT_OPTIONS.openrouter.maxCallsPerDay,
             minimum: 0,
           },
+          fallbackModels: {
+            type: 'array',
+            title: 'Fallback models',
+            description:
+              'Optional ordered list of model slugs to try if the primary model is unavailable. Leave empty to use only the primary model.',
+            items: { type: 'string' },
+            default: [],
+          },
+          provider: {
+            type: 'object',
+            title: 'Provider routing (advanced)',
+            description:
+              'Optional OpenRouter provider controls. Tight routing can leave no eligible provider and fail a run.',
+            properties: {
+              sort: {
+                type: 'string',
+                title: 'Routing preference',
+                enum: ['price', 'throughput', 'latency'],
+              },
+              allowFallbacks: {
+                type: 'boolean',
+                title: 'Allow provider fallbacks',
+                description: 'When off, a run fails rather than substituting a different provider.',
+              },
+              dataCollection: {
+                type: 'string',
+                title: 'Provider data collection',
+                description:
+                  'Set to deny to route only to providers that do not retain or train on request data.',
+                enum: ['allow', 'deny'],
+              },
+              zdr: {
+                type: 'boolean',
+                title: 'Require zero-data-retention providers',
+              },
+              maxPrice: {
+                type: 'object',
+                title: 'Maximum price (USD per million tokens)',
+                properties: {
+                  prompt: { type: 'number', title: 'Max prompt price' },
+                  completion: { type: 'number', title: 'Max completion price' },
+                  request: { type: 'number', title: 'Max per-request price' },
+                },
+              },
+            },
+          },
         },
       },
       questdb: {
@@ -578,7 +624,7 @@ function triggerUiSchema(opts: {
 function buildUiSchemaInner(): PluginUiSchema {
   return {
     openrouter: {
-      'ui:order': ['apiKey', 'model', 'maxCallsPerDay'],
+      'ui:order': ['apiKey', 'model', 'maxCallsPerDay', 'fallbackModels', 'provider'],
       apiKey: {
         'ui:widget': 'password',
         'ui:autocomplete': 'off',

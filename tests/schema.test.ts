@@ -205,6 +205,17 @@ describe('schema', () => {
     expect(pattern.enumNames.length).toBe(pattern.enum.length);
   });
 
+  it('exposes openrouter fallbackModels and provider in the schema', () => {
+    const s = buildSchema();
+    const or = (s.properties.openrouter as { properties: Record<string, Record<string, unknown>> })
+      .properties;
+    expect(at(or, 'fallbackModels').type).toBe('array');
+    expect(at(or, 'provider').type).toBe('object');
+    const pp = at(or, 'provider').properties as Record<string, Record<string, unknown>>;
+    expect(at(pp, 'dataCollection').enum).toEqual(['allow', 'deny']);
+    expect(at(pp, 'sort').enum).toEqual(['price', 'throughput', 'latency']);
+  });
+
   it('exposes the forecast analyzer with a severity-floor enum dropdown', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {
