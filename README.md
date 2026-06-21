@@ -147,6 +147,28 @@ trend window lengths, custom cron patterns) are not in the panel; they
 live in the saved JSON config at
 `~/.signalk/plugin-config-data/signalk-openrouter-companion.json`.
 
+Advanced OpenRouter settings, edited in the saved JSON config under
+`openrouter`:
+
+| Key | Meaning | Default |
+|-----|---------|---------|
+| `fallbackModels` | Ordered list of model slugs to try if the primary is unavailable. | none |
+| `provider.sort` | Routing preference: `price`, `throughput`, or `latency`. | unset |
+| `provider.maxPrice` | Per-call price ceiling in USD per million tokens (`prompt`, `completion`, `request`). | unset |
+| `provider.allowFallbacks` | When `false`, a run fails rather than substituting another provider. | `true` |
+| `provider.dataCollection` | Set to `deny` to route only to providers that do not retain request data. Also available as a panel toggle. | `allow` |
+| `provider.zdr` | Require zero-data-retention providers. | `false` |
+
+Token use and estimated cost per day are shown in the panel status block, and
+per-report model and cost are recorded in `reports.jsonl`. The cost figure is
+OpenRouter's reported `usage.cost`. If you use a Bring-Your-Own-Key provider,
+that figure reflects only OpenRouter's fee, not the upstream provider charge,
+so it understates true spend.
+
+A tight provider configuration (a low `maxPrice`, `dataCollection: deny`,
+`zdr: true`, or `allowFallbacks: false`) can leave no eligible provider; the
+run then fails fast with OpenRouter's routing message rather than retrying.
+
 ## Analyzers
 
 Seven analyzers ship; six are enabled by default. The weather outlook is
