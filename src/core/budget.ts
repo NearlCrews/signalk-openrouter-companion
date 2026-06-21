@@ -39,6 +39,7 @@ export class BudgetTracker {
       // negative count rather than letting it through to the comparison.
       if (
         typeof parsed.day !== 'string' ||
+        typeof parsed.callsToday !== 'number' ||
         !Number.isInteger(parsed.callsToday) ||
         parsed.callsToday < 0
       ) {

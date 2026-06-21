@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { type Mock, vi } from 'vitest';
 import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime } from '../src/core/api.js';
+import type { CompleteResult } from '../src/core/openrouter.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
 import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
@@ -253,7 +254,7 @@ export interface RouterDepsMocks {
 }
 
 export function makeRouterDeps(
-  overrides: { okStatus?: string; completeResult?: { text: string } } = {},
+  overrides: { okStatus?: string; completeResult?: CompleteResult } = {},
 ): { deps: AnalyzerDeps; mocks: RouterDepsMocks } {
   const mocks: RouterDepsMocks = {
     publishReport: vi.fn().mockResolvedValue(undefined),
@@ -301,7 +302,7 @@ export function makeRouterDeps(
 // analyzers but mock the LLM/publish boundary.
 export function makeRouter(
   analyzers: Analyzer[],
-  overrides: { okStatus?: string; completeResult?: { text: string } } = {},
+  overrides: { okStatus?: string; completeResult?: CompleteResult } = {},
 ): { router: TriggerRouter; mocks: RouterDepsMocks } {
   const { deps, mocks } = makeRouterDeps(overrides);
   return { router: new TriggerRouter(analyzers, deps), mocks };
