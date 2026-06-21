@@ -78,6 +78,16 @@ export const StatusBlock = memo(function StatusBlock({
           <div style={S.statSub}>UTC daily cap</div>
         </div>
         <div style={S.statCard}>
+          <div style={S.statLabel}>Tokens today</div>
+          <div style={S.statValue}>{(o.tokensToday ?? 0).toLocaleString()}</div>
+          <div style={S.statSub}>prompt + completion</div>
+        </div>
+        <div style={S.statCard}>
+          <div style={S.statLabel}>Est. cost today</div>
+          <div style={S.statValue}>${(o.costToday ?? 0).toFixed(4)}</div>
+          <div style={S.statSub}>OpenRouter usage.cost</div>
+        </div>
+        <div style={S.statCard}>
           <div style={S.statLabel}>QuestDB</div>
           <div style={S.statValue}>
             <span style={qdbState.dot} aria-hidden="true" />

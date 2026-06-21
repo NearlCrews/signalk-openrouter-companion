@@ -42,6 +42,8 @@ export interface PanelStatus {
     model: string;
     callsToday: number;
     maxCallsPerDay: number;
+    tokensToday?: number;
+    costToday?: number;
   };
   questdb: { enabled: boolean; reachable: boolean | null };
   analyzers: AnalyzerStatus[];
