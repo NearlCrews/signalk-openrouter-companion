@@ -249,7 +249,9 @@ export const AnalyzerRow = memo(function AnalyzerRow({
                         {r.model && (
                           <div style={S.statSub}>
                             {r.model}
-                            {typeof r.totalTokens === 'number' ? ` · ${r.totalTokens.toLocaleString()} tok` : ''}
+                            {typeof r.totalTokens === 'number'
+                              ? ` · ${r.totalTokens.toLocaleString()} tok`
+                              : ''}
                             {typeof r.costUsd === 'number' ? ` · $${r.costUsd.toFixed(4)}` : ''}
                           </div>
                         )}

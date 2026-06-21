@@ -24,7 +24,14 @@ import {
   type NotificationState,
   type SeverityFloor,
 } from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, PublishRunMeta, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type {
+  AnalysisInput,
+  Analyzer,
+  AnalyzerDeps,
+  PublishRunMeta,
+  TriggerCtx,
+  TriggerSpec,
+} from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
 // Hourly-mean trend buckets span the last 12h of the rolling buffer.

@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { type Mock, vi } from 'vitest';
 import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime } from '../src/core/api.js';
-import type { CompleteResult } from '../src/core/openrouter.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
+import type { CompleteResult } from '../src/core/openrouter.js';
 import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
 import type { QueryResult } from '../src/core/questdb.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
@@ -217,7 +217,12 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
       analyzers: { ...DEFAULT_OPTIONS.analyzers, ...(opts.cfg?.analyzers ?? {}) },
     },
     llm: (opts.llm ?? ({} as never)) as PluginRuntime['llm'],
-    budget: (opts.budget ?? ({ callsToday: () => 0, tokensToday: () => 0, costToday: () => 0 } as never)) as PluginRuntime['budget'],
+    budget: (opts.budget ??
+      ({
+        callsToday: () => 0,
+        tokensToday: () => 0,
+        costToday: () => 0,
+      } as never)) as PluginRuntime['budget'],
     questdbLive: opts.questdbLive ?? null,
     questdbProbed: opts.questdbProbed ?? false,
     analyzers: opts.analyzers ?? [],

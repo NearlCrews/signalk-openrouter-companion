@@ -74,7 +74,10 @@ describe('OpenRouterClient', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.model).toBe('anthropic/claude-haiku-4.5');
     expect(body.messages).toEqual([
-      { role: 'system', content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }] },
+      {
+        role: 'system',
+        content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }],
+      },
       { role: 'user', content: 'usr' },
     ]);
   });
@@ -509,7 +512,10 @@ describe('OpenRouterClient', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
     );
-    const c = makeClient({ model: 'anthropic/claude-haiku-4.5', fallbackModels: ['openai/gpt-5-mini'] });
+    const c = makeClient({
+      model: 'anthropic/claude-haiku-4.5',
+      fallbackModels: ['openai/gpt-5-mini'],
+    });
     await c.complete({ system: 's', user: 'u' });
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
@@ -523,7 +529,13 @@ describe('OpenRouterClient', () => {
     );
     const c = makeClient({
       model: 'openai/gpt-5-mini',
-      provider: { sort: 'price', dataCollection: 'deny', allowFallbacks: false, maxPrice: { prompt: 1, completion: 2 }, zdr: true },
+      provider: {
+        sort: 'price',
+        dataCollection: 'deny',
+        allowFallbacks: false,
+        maxPrice: { prompt: 1, completion: 2 },
+        zdr: true,
+      },
     });
     await c.complete({ system: 's', user: 'u' });
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -550,7 +562,9 @@ describe('OpenRouterClient', () => {
 
   it('does not retry a 503 (no provider meets routing)', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse(503, { error: { code: 503, message: 'No allowed providers are available for the selected model.' } }),
+      jsonResponse(503, {
+        error: { code: 503, message: 'No allowed providers are available for the selected model.' },
+      }),
     );
     const c = makeClient();
     await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({ status: 503 });

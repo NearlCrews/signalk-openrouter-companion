@@ -419,12 +419,7 @@ describe('ForecastAnalyzer', () => {
         model: 'anthropic/claude-haiku-4.5',
         usage: { totalTokens: 50, cachedTokens: 0, cost: 0.0005 },
       };
-      await a.publishOutput?.(
-        'SEVERITY: severe\nDeepening low approaching.',
-        cronCtx,
-        deps,
-        run,
-      );
+      await a.publishOutput?.('SEVERITY: severe\nDeepening low approaching.', cronCtx, deps, run);
       expect(mocks.publishOnPath).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ run }),

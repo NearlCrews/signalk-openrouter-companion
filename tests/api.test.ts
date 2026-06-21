@@ -201,7 +201,10 @@ describe('plugin REST API', () => {
       registerApiRoutes(router, () => rt);
       const r = await call(routes, 'get', '/api/status');
       expect(r.status).toBe(200);
-      const body = r.body as { ok: boolean; openrouter: { tokensToday: number; costToday: number } };
+      const body = r.body as {
+        ok: boolean;
+        openrouter: { tokensToday: number; costToday: number };
+      };
       expect(body.openrouter.tokensToday).toBe(4096);
       expect(body.openrouter.costToday).toBeCloseTo(0.12, 6);
     });

@@ -34,7 +34,10 @@ export class BudgetTracker {
     let state: PersistedState;
     try {
       const raw = await readFile(opts.statePath, 'utf-8');
-      const parsed = JSON.parse(raw) as Partial<PersistedState> & { day?: string; callsToday?: number };
+      const parsed = JSON.parse(raw) as Partial<PersistedState> & {
+        day?: string;
+        callsToday?: number;
+      };
       // callsToday gates the spend cap, so reject a NaN, fractional, or
       // negative count rather than letting it through to the comparison.
       if (
@@ -116,7 +119,8 @@ export class BudgetTracker {
     this.rolloverIfNeeded();
     this.state = {
       ...this.state,
-      tokensToday: this.state.tokensToday + (Number.isFinite(usage.totalTokens) ? usage.totalTokens : 0),
+      tokensToday:
+        this.state.tokensToday + (Number.isFinite(usage.totalTokens) ? usage.totalTokens : 0),
       costToday: this.state.costToday + (Number.isFinite(usage.cost) ? usage.cost : 0),
     };
     try {

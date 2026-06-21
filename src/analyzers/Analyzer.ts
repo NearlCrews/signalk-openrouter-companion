@@ -87,5 +87,10 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   // `state: 'nominal'`. Override only when an analyzer needs a different
   // path or state, e.g. `alerts` uses `deps.publisher.publishOnPath` with
   // a per-event canonical path and explicit alert state.
-  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps, run?: PublishRunMeta): Promise<void>;
+  publishOutput?(
+    text: string,
+    ctx: TriggerCtx,
+    deps: AnalyzerDeps,
+    run?: PublishRunMeta,
+  ): Promise<void>;
 }

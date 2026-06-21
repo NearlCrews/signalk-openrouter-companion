@@ -319,7 +319,13 @@ describe('TriggerRouter', () => {
       completeResult: {
         text: 'Headline\nbody',
         model: 'anthropic/claude-haiku-4.5',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 4, cost: 0.001 },
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          cachedTokens: 4,
+          cost: 0.001,
+        },
       },
     });
     const a = makeAnalyzer({ id: 'health', triggers: [] });
@@ -336,7 +342,13 @@ describe('TriggerRouter', () => {
       completeResult: {
         text: 'Headline\nbody',
         model: 'anthropic/claude-haiku-4.5',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 4, cost: 0.001 },
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          cachedTokens: 4,
+          cost: 0.001,
+        },
       },
     });
     deps.publisher.publishReport = publishReport;
@@ -351,13 +363,10 @@ describe('TriggerRouter', () => {
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
     const router = new TriggerRouter([a], deps);
     await router.runById('health', ctx);
-    expect(publishReport).toHaveBeenCalledWith(
-      'health',
-      ctx,
-      'Headline\nbody',
-      undefined,
-      { model: 'anthropic/claude-haiku-4.5', usage: { totalTokens: 15, cachedTokens: 4, cost: 0.001 } },
-    );
+    expect(publishReport).toHaveBeenCalledWith('health', ctx, 'Headline\nbody', undefined, {
+      model: 'anthropic/claude-haiku-4.5',
+      usage: { totalTokens: 15, cachedTokens: 4, cost: 0.001 },
+    });
     // Unused mocks reference to avoid lint complaint.
     void mocks;
   });

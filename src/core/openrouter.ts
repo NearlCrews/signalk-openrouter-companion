@@ -98,7 +98,10 @@ export class OpenRouterClient {
     // automatically and take the plain string. Below the model's cache floor
     // (4,096 tokens on Haiku 4.5) the marker is a silent no-op, not an error.
     if (this.cfg.model.startsWith('anthropic/')) {
-      return { role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] };
+      return {
+        role: 'system',
+        content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+      };
     }
     return { role: 'system', content: system };
   }
@@ -147,7 +150,10 @@ export class OpenRouterClient {
           body: (() => {
             const payload: Record<string, unknown> = {
               max_tokens: MAX_COMPLETION_TOKENS,
-              messages: [this.buildSystemMessage(args.system), { role: 'user', content: args.user }],
+              messages: [
+                this.buildSystemMessage(args.system),
+                { role: 'user', content: args.user },
+              ],
             };
             const fallbacks = this.cfg.fallbackModels;
             if (fallbacks && fallbacks.length > 0) {
