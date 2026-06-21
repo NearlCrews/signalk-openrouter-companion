@@ -27,7 +27,7 @@
 - Response paths: total cost `usage.cost` (credits, 1 = 1 USD); cached input tokens `usage.prompt_tokens_details.cached_tokens`. Both optional; default to 0.
 - **Anthropic prompt caching**: content-array system message with `cache_control: { type: 'ephemeral' }`. Cache floor for Haiku 4.5 is **4,096 tokens**; below it the marker is accepted but caching silently does not engage (no error, `cached_tokens: 0`). Kept anyway as cheap future-proofing. Non-Anthropic models cache automatically with no body change, so the marker is sent ONLY for `anthropic/` model slugs.
 - **Model fallback**: top-level `models: [primary, ...fallbacks]` array, priority order. Send `models` ALONE (omit `model`) when fallbacks are configured, to avoid a documented 400 when both are present.
-- **Provider object**: `provider.sort` ("price"|"throughput"|"latency"), `provider.max_price` ({ prompt?, completion?, request? } in USD per million tokens), `provider.allow_fallbacks` (boolean), `provider.data_collection` ("allow"|"deny"), `provider.zdr` (boolean). Tight routing can yield a 503 "no provider"; that is left to the existing transient-retry path (documented limitation, not handled specially here).
+- **Provider object**: `provider.sort` ("price"|"throughput"|"latency"), `provider.max_price` ({ prompt?, completion?, request? } in USD per million tokens), `provider.allow_fallbacks` (boolean), `provider.data_collection` ("allow"|"deny"), `provider.zdr` (boolean). Tight routing can yield a 503 "no provider meets routing"; Task 10b makes 503 terminal so it fails fast with OpenRouter's routing message instead of retrying.
 
 ## File map
 
@@ -364,39 +364,67 @@ git commit -m "feat(budget): track daily token and cost totals"
 - Consumes: `BudgetTracker.recordUsage` (Task 2); `CompleteResult` (Task 1).
 - Produces: the router now captures `result` and calls `recordUsage`. Run-meta plumbing to publish is added in Task 7; this task only records the daily totals.
 
+> **Harness prerequisite (review finding A1):** `tests/_mocks.ts` `makeRouterDeps` builds a budget stub with only `canSpend`/`recordCall` (lines 284-287) and a mock `complete` result whose `usage` lacks `cachedTokens`/`cost` (line 267). The Task 3 implementation calls `recordUsage` unconditionally, so without this the existing successful-run router tests (and `api.test.ts`'s live-status test) throw `recordUsage is not a function`. Do the `_mocks.ts` edit in **Step 3a below** as part of this task's commit.
+
 - [ ] **Step 1: Write the failing test**
 
-Open `tests/triggerRouter.test.ts` and inspect how `deps`/`budget` are built (it uses the `_mocks.ts` harness). Add a test asserting `recordUsage` is called with the LLM result's usage on a successful run. Mirror the existing successful-run test's setup; the key new assertion:
+The `triggerRouter.test.ts` suite builds deps with `makeRouterDeps()` from `tests/_mocks.ts` (returns `{ deps, mocks }`) and a router via `makeRouter(...)`. Clone the structure of the existing successful-run test (the one that asserts `mocks.publishReport` is called) and add:
 
 ```ts
 it('records token/cost usage on a successful run', async () => {
-  // Arrange a runtime whose llm.complete resolves with a known usage, using the
-  // same _mocks harness the other triggerRouter tests use. Spy on budget.recordUsage.
-  const recordUsage = vi.fn().mockResolvedValue(undefined);
-  // ... build deps via the harness, then override:
-  deps.budget.recordUsage = recordUsage;
-  deps.llm.complete = vi.fn().mockResolvedValue({
-    text: 'Headline\nbody',
-    model: 'anthropic/claude-haiku-4.5',
-    usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 0, cost: 0.001 },
+  const { deps, mocks } = makeRouterDeps({
+    completeResult: {
+      text: 'Headline\nbody',
+      model: 'anthropic/claude-haiku-4.5',
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 4, cost: 0.001 },
+    },
   });
-
-  await router.runById('health', ctx);
-
-  expect(recordUsage).toHaveBeenCalledWith(
+  const router = makeRouter(deps);
+  await router.runById('health', { kind: 'cron', firedAt: new Date() });
+  expect(mocks.recordUsage).toHaveBeenCalledWith(
     expect.objectContaining({ totalTokens: 15, cost: 0.001 }),
   );
 });
 ```
 
-(Match the exact harness/fixture construction already used by the neighboring tests in this file; reuse their `makePluginRuntime`/deps builder rather than hand-rolling.)
+(Confirm the exact `makeRouter` call shape and the `health` cron ctx against a neighboring passing test; reuse that test's ctx literal verbatim. `completeResult` is the existing `makeRouterDeps` override param.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run tests/triggerRouter.test.ts -t "records token/cost"`
-Expected: FAIL (`recordUsage` not called).
+Expected: FAIL (`mocks.recordUsage` is undefined).
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3a: Extend the test harness (`tests/_mocks.ts`)**
+
+Add `recordUsage` to the `RouterDepsMocks` interface (after `recordCall`, line ~246):
+
+```ts
+recordUsage: Spy;
+```
+
+Add it to the `mocks` object (after `recordCall`, line ~262):
+
+```ts
+recordUsage: vi.fn().mockResolvedValue(undefined),
+```
+
+Add it to the budget stub (lines ~284-287):
+
+```ts
+budget: {
+  canSpend: mocks.canSpend,
+  recordCall: mocks.recordCall,
+  recordUsage: mocks.recordUsage,
+} as unknown as AnalyzerDeps['budget'],
+```
+
+Add `cachedTokens`/`cost` to the default mock `complete` usage (line ~267) so Task 7's `result.usage.cachedTokens` is defined:
+
+```ts
+usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, cost: 0 },
+```
+
+- [ ] **Step 3: Implement the router change**
 
 In `src/core/triggerRouter.ts` `runOne`, replace the destructure-and-publish block:
 
@@ -427,7 +455,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/triggerRouter.ts tests/triggerRouter.test.ts
+git add src/core/triggerRouter.ts tests/triggerRouter.test.ts tests/_mocks.ts
 git commit -m "feat(router): record daily token/cost usage after a successful call"
 ```
 
@@ -445,12 +473,18 @@ git commit -m "feat(router): record daily token/cost usage after a successful ca
 
 - [ ] **Step 1: Write the failing test**
 
-In `tests/api.test.ts`, find the test that asserts the `/api/status` payload's `openrouter` block (it checks `callsToday`/`maxCallsPerDay`). Add assertions that the response includes `tokensToday` and `costToday` sourced from the budget. If the harness's budget stub lacks the methods, extend the stub (via `makePluginRuntime`) so `budget.tokensToday()` returns e.g. `4096` and `budget.costToday()` returns e.g. `0.12`, then:
+In `tests/api.test.ts`, find the test that asserts the `/api/status` payload's `openrouter` block (it checks `callsToday`/`maxCallsPerDay`). The `makePluginRuntime` default budget stub is `{ callsToday: () => 0 }` (line ~219), so pass a custom budget opt and assert the new fields:
 
 ```ts
+const rt = makePluginRuntime({
+  budget: { callsToday: () => 0, tokensToday: () => 4096, costToday: () => 0.12 } as never,
+});
+const body = buildStatus(rt); // use the file's existing status-build path
 expect(body.openrouter.tokensToday).toBe(4096);
 expect(body.openrouter.costToday).toBeCloseTo(0.12, 6);
 ```
+
+(Use whatever accessor the neighboring `/api/status` test uses to obtain the payload; the key point is the custom `budget` opt carrying `tokensToday`/`costToday`.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -485,7 +519,11 @@ openrouter: {
 },
 ```
 
-If `makePluginRuntime` in `tests/_mocks.ts` builds a budget stub, add `tokensToday: () => 0` and `costToday: () => 0` defaults there so existing tests keep compiling.
+In `tests/_mocks.ts`, extend the `makePluginRuntime` default budget stub (line ~219) so existing tests that don't pass a custom budget keep compiling:
+
+```ts
+budget: (opts.budget ?? ({ callsToday: () => 0, tokensToday: () => 0, costToday: () => 0 } as never)) as PluginRuntime['budget'],
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -581,11 +619,11 @@ git commit -m "feat(panel): show daily tokens and estimated cost in the status b
 
 - [ ] **Step 1: Write the failing test**
 
-In `tests/publisher.test.ts`, add a test that a published report's JSONL row carries the usage fields when run-meta is supplied. Find how the existing tests read the appended JSONL (they read `cfg.logPath` and parse the last line). Add:
+In `tests/publisher.test.ts`, add a test that a published report's JSONL row carries the usage fields when run-meta is supplied. `publisher` and `logPath` are in scope from the file's `beforeEach`, but there is no shared `ctx` (each test inlines its own), so inline one:
 
 ```ts
 it('records model and usage on the JSONL entry when run-meta is supplied', async () => {
-  // build publisher via the same helper the other tests use
+  const ctx = { kind: 'cron', firedAt: new Date() } as never;
   await publisher.publishReport('health', ctx, 'Headline\nbody', 'nominal', {
     model: 'anthropic/claude-haiku-4.5',
     usage: { totalTokens: 123, cachedTokens: 64, cost: 0.0021 },
@@ -599,6 +637,7 @@ it('records model and usage on the JSONL entry when run-meta is supplied', async
 });
 
 it('omits usage fields when no run-meta is supplied', async () => {
+  const ctx = { kind: 'cron', firedAt: new Date() } as never;
   await publisher.publishReport('health', ctx, 'Headline\nbody');
   const lines = (await readFile(logPath, 'utf-8')).trim().split('\n');
   const entry = JSON.parse(lines[lines.length - 1]);
@@ -607,7 +646,7 @@ it('omits usage fields when no run-meta is supplied', async () => {
 });
 ```
 
-(Match the exact publisher/log construction the file already uses.)
+(Match the file's existing `ctx` literal shape; copy a `kind: 'cron'` ctx from a neighboring test if the `firedAt` field differs.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -628,6 +667,8 @@ export interface PublishRunMeta {
 ```ts
 publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps, run?: PublishRunMeta): Promise<void>;
 ```
+
+> Because the new param is OPTIONAL, the existing 3-arg `publishOutput` overrides in `alerts.ts` and `forecast.ts` still satisfy this type and keep compiling after this task (a function taking fewer params is assignable). They are updated to actually forward `run` in Task 7. Do NOT edit those two files in this task.
 
 In `src/core/publisher.ts`:
 
@@ -760,7 +801,24 @@ it('passes run-meta to publishReport on the default path', async () => {
 });
 ```
 
-In `tests/alerts.test.ts` and `tests/forecast.test.ts`, add a test that calling `publishOutput(text, ctx, deps, run)` results in a JSONL entry carrying `model`/`totalTokens`/`costUsd` (read the appended log like the publisher test). Match each file's existing publish/log fixture.
+In `tests/alerts.test.ts` and `tests/forecast.test.ts`, add a test that calling `publishOutput(text, ctx, deps, run)` forwards the run-meta to publish. These two analyzers call `deps.publisher.publishOnPath`, so the cheapest assertion spies on it rather than reading a log. Clone the existing `publishOutput` test in each file (alerts already has one that exercises the `subkind`/`bankId` ctx path; forecast has one around its `parseForecast` flow) and add a `run` argument plus an assertion:
+
+```ts
+// in alerts.test.ts: reuse the existing test's deps/ctx that provide
+// ctx.batteryEvent.subkind and ctx.bankId (without them publishOutput early-returns).
+const run = {
+  model: 'anthropic/claude-haiku-4.5',
+  usage: { totalTokens: 50, cachedTokens: 0, cost: 0.0005 },
+};
+await analyzer.publishOutput('Headline\nbody', ctx, deps, run);
+expect(publishOnPath).toHaveBeenCalledWith(
+  expect.any(String),
+  expect.objectContaining({ run }),
+  expect.any(Object),
+);
+```
+
+For `forecast.test.ts`, do the same against the existing forecast `publishOutput` test's `deps`/`ctx` (a `kind: 'cron'` ctx is sufficient; forecast does not require `subkind`/`bankId`). Use each file's existing `publishOnPath` spy handle (the `_mocks.ts` harness exposes `mocks.publishOnPath`).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -897,7 +955,7 @@ git commit -m "feat(panel): show model and cost per report in the reports drawer
 
 **Files:**
 - Modify: `src/types.ts` (`PluginOptions.openrouter` ~60-66, `DEFAULT_OPTIONS.openrouter` ~135-141, `validateOptions` ~316-323)
-- Test: `tests/cfg.test.ts` (or `tests/schema.test.ts` if config defaults are asserted there)
+- Test: `tests/schema.test.ts` (the existing `mergeWithDefaults` block; `validateOptions` is NOT exported, so test through the public merge path)
 
 **Interfaces:**
 - Produces: `PluginOptions.openrouter` gains
@@ -907,24 +965,26 @@ git commit -m "feat(panel): show model and cost per report in the reports drawer
 
 - [ ] **Step 1: Write the failing test**
 
-In `tests/cfg.test.ts`, add a test that `validateOptions` preserves the new fields when present and tolerates their absence. If `tests/cfg.test.ts` does not exercise `validateOptions`, add the assertion to wherever `DEFAULT_OPTIONS`/`validateOptions` is already tested (search the suite for `validateOptions` or `DEFAULT_OPTIONS`). Minimum:
+`validateOptions` is module-private in `src/types.ts`; the public entry that exercises it is `mergeWithDefaults`, already tested in `tests/schema.test.ts`. Add a case there that the new optional fields survive the merge (the merge spreads `openrouter`, so it passes them through):
 
 ```ts
-it('preserves openrouter.fallbackModels and provider through validation', () => {
-  const cfg = structuredClone(DEFAULT_OPTIONS);
-  cfg.openrouter.fallbackModels = ['openai/gpt-5-mini'];
-  cfg.openrouter.provider = { dataCollection: 'deny', sort: 'price' };
-  const out = validateOptions(cfg);
-  expect(out.openrouter.fallbackModels).toEqual(['openai/gpt-5-mini']);
-  expect(out.openrouter.provider).toEqual({ dataCollection: 'deny', sort: 'price' });
+it('preserves openrouter.fallbackModels and provider through mergeWithDefaults', () => {
+  const r = mergeWithDefaults({
+    openrouter: {
+      fallbackModels: ['openai/gpt-5-mini'],
+      provider: { dataCollection: 'deny', sort: 'price' },
+    },
+  } as never);
+  expect(r.openrouter.fallbackModels).toEqual(['openai/gpt-5-mini']);
+  expect(r.openrouter.provider).toEqual({ dataCollection: 'deny', sort: 'price' });
 });
 ```
 
-(Import `validateOptions`/`DEFAULT_OPTIONS` as the existing tests do; if `validateOptions` is not exported, assert via the public path that already covers it.)
+(Use the `mergeWithDefaults` import/accessor the existing block already uses. If the project later exports `validateOptions`, this can move to a `cfg.test.ts` case, but do not change the export surface here.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/cfg.test.ts -t "fallbackModels"`
+Run: `npx vitest run tests/schema.test.ts -t "fallbackModels"`
 Expected: FAIL (type error or fields dropped).
 
 - [ ] **Step 3: Implement**
@@ -949,17 +1009,17 @@ openrouter: {
 };
 ```
 
-`DEFAULT_OPTIONS.openrouter` stays as-is (no `fallbackModels`/`provider` keys: both default to undefined). In `validateOptions`, the existing spread `cfg.openrouter = { ...or, maxCallsPerDay: ... }` already preserves the new optional fields, so no change is required beyond confirming the spread keeps them. (If `validateOptions` rebuilds the object field-by-field rather than spreading, add `fallbackModels: or.fallbackModels` and `provider: or.provider` to the rebuild.)
+`DEFAULT_OPTIONS.openrouter` stays as-is (no `fallbackModels`/`provider` keys: both default to undefined). In `validateOptions`, the existing spread `cfg.openrouter = { ...or, maxCallsPerDay: ... }` (types.ts ~321) and the `mergeWithDefaults` openrouter spread (~304) both already preserve the new optional fields, so no source change is required beyond the type widening. (Verified: both are spreads, not field-by-field rebuilds.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npx vitest run tests/cfg.test.ts`
+Run: `npx vitest run tests/schema.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/types.ts tests/cfg.test.ts
+git add src/types.ts tests/schema.test.ts
 git commit -m "feat(config): add openrouter fallbackModels and provider routing options"
 ```
 
@@ -1043,6 +1103,17 @@ it('omits provider when no provider config is set', async () => {
   expect(body.provider).toBeUndefined();
 });
 ```
+
+**Also update the existing `'returns text and usage on a 200'` test (review finding A3):** it overrides `model: 'anthropic/claude-haiku-4.5'`, so after this task its system message becomes the content-array form and its current `body.messages` assertion (the plain-string `{ role: 'system', content: 'sys' }`) will FAIL. Change that assertion to:
+
+```ts
+expect(body.messages).toEqual([
+  { role: 'system', content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }] },
+  { role: 'user', content: 'usr' },
+]);
+```
+
+(Its `expect(body.model).toBe('anthropic/claude-haiku-4.5')` assertion still holds, since with no fallbacks the top-level `model` field is still sent.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1132,6 +1203,67 @@ git commit -m "feat(openrouter): prompt caching, model fallback, and provider ro
 
 ---
 
+### Task 10b: Treat a routing-503 as terminal, not transient
+
+**Files:**
+- Modify: `src/core/openrouter.ts` (`attempt` error branch ~144-154)
+- Test: `tests/openrouter.test.ts`
+
+**Why:** This plan adds `max_price`, `data_collection: 'deny'`, `zdr`, and `allow_fallbacks: false`. Per OpenRouter docs a 503 means "no provider meets your routing requirements" (distinct from 502 = chosen provider down). With those knobs misconfigured, every call deterministically 503s, and `TRANSIENT_STATUSES` currently includes 503, so the client retries the full backoff ladder (~6.5s) and then reports a generic transient failure, masking a fixable config error (and, for `alerts`, suppressing the per-bank alert). Making 503 terminal surfaces OpenRouter's descriptive routing message immediately. This corrects the spec's "503 disambiguation out of scope" note, which predated shipping these knobs.
+
+**Interfaces:** none changed. Behavior: a 503 now throws `OpenRouterError(503, ...)` on the first response instead of retrying.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/openrouter.test.ts`:
+
+```ts
+it('does not retry a 503 (no provider meets routing)', async () => {
+  fetchMock.mockResolvedValue(
+    jsonResponse(503, { error: { code: 503, message: 'No allowed providers are available for the selected model.' } }),
+  );
+  const c = makeClient();
+  await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({ status: 503 });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+```
+
+(Confirm `OpenRouterError` exposes `status`; the existing tests already assert on it. There is an existing test that 503 retries: find it and either remove it or change its status to 502, since 502 stays retryable.)
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/openrouter.test.ts -t "does not retry a 503"`
+Expected: FAIL (503 is retried, so fetch is called 4 times).
+
+- [ ] **Step 3: Implement**
+
+In `src/core/openrouter.ts`, remove `503` from `TRANSIENT_STATUSES`:
+
+```ts
+// 503 is excluded on purpose: OpenRouter returns it for "no provider meets
+// routing requirements" (a config problem from max_price / data_collection /
+// zdr / allow_fallbacks), which retrying cannot fix. It throws terminally so
+// the descriptive routing message reaches the failure report. 502 (chosen
+// provider down) stays retryable.
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 504]);
+```
+
+The existing `attempt` error branch already throws terminally for any status not in the set, so no other change is needed.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx vitest run tests/openrouter.test.ts`
+Expected: PASS (the new test plus the adjusted prior 503/502 retry test).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/openrouter.ts tests/openrouter.test.ts
+git commit -m "fix(openrouter): treat a routing 503 as terminal rather than retrying"
+```
+
+---
+
 ### Task 11: Wire the new config into the client construction
 
 **Files:**
@@ -1188,16 +1320,18 @@ git commit -m "feat(plugin): pass fallbackModels and provider config to the Open
 
 - [ ] **Step 1: Write the failing test**
 
-In `tests/schema.test.ts`, add assertions that the built schema includes the new properties. Match how the file reads the schema (it calls the schema builder and inspects `properties`). Example:
+In `tests/schema.test.ts`, add assertions that the built schema includes the new properties. The schema accessor is `buildSchema()` (schema.ts ~651). `PluginSchema.properties` is typed `Record<string, Record<string, unknown>>`, so `properties.openrouter.properties` is `unknown` in TS; mirror the cast the existing schema tests use (e.g. `s.properties.openrouter as { properties: Record<string, Record<string, unknown>> }`):
 
 ```ts
 it('exposes openrouter fallbackModels and provider in the schema', () => {
-  const schema = buildSchema(); // use the file's existing accessor
-  const or = schema.properties.openrouter.properties;
+  const s = buildSchema();
+  const or = (s.properties.openrouter as { properties: Record<string, Record<string, unknown>> })
+    .properties;
   expect(or.fallbackModels.type).toBe('array');
   expect(or.provider.type).toBe('object');
-  expect(or.provider.properties.dataCollection.enum).toEqual(['allow', 'deny']);
-  expect(or.provider.properties.sort.enum).toEqual(['price', 'throughput', 'latency']);
+  const pp = or.provider.properties as Record<string, Record<string, unknown>>;
+  expect(pp.dataCollection.enum).toEqual(['allow', 'deny']);
+  expect(pp.sort.enum).toEqual(['price', 'throughput', 'latency']);
 });
 ```
 
@@ -1258,7 +1392,7 @@ provider: {
 },
 ```
 
-(Match the surrounding object's exact TypeScript shape. If the schema is a typed literal that disallows extra keys, extend the corresponding interface in `schema.ts` to include these properties. Confirm the schema builder's type for the `openrouter.properties` block and add fields to that interface first if needed.)
+(The `openrouter.properties` values are typed `Record<string, unknown>`, so these literals drop in with no interface change. Insert after the `maxCallsPerDay` property, schema.ts ~296.)
 
 Add `'fallbackModels'` and `'provider'` to the openrouter `ui:order` array (~581):
 
@@ -1292,16 +1426,25 @@ git commit -m "feat(schema): expose fallbackModels and provider routing in the c
 
 - [ ] **Step 1: Extend `PanelConfig`**
 
-In `src/configpanel/types.ts`:
+In `src/configpanel/types.ts`, widen `provider` to the FULL backend shape (review finding C6: the panel only edits `dataCollection`, but `save(fullCfg)` round-trips the whole object, so the type must carry the JSON-only keys or a user's hand-set `sort`/`maxPrice` could be dropped on the next panel save):
 
 ```ts
 openrouter?: {
   apiKey?: string;
   model?: string;
   maxCallsPerDay?: number;
-  provider?: { dataCollection?: 'allow' | 'deny' };
+  fallbackModels?: string[];
+  provider?: {
+    sort?: 'price' | 'throughput' | 'latency';
+    maxPrice?: { prompt?: number; completion?: number; request?: number };
+    allowFallbacks?: boolean;
+    dataCollection?: 'allow' | 'deny';
+    zdr?: boolean;
+  };
 };
 ```
+
+The privacy control still edits only `provider.dataCollection`; the `...o.provider` spread in Step 2 preserves the other keys at runtime, and this wider type keeps them through TypeScript too.
 
 - [ ] **Step 2: Add the control**
 
@@ -1373,7 +1516,14 @@ Advanced OpenRouter settings, edited in the saved JSON config under
 | `provider.zdr` | Require zero-data-retention providers. | `false` |
 
 Token use and estimated cost per day are shown in the panel status block, and
-per-report model and cost are recorded in `reports.jsonl`.
+per-report model and cost are recorded in `reports.jsonl`. The cost figure is
+OpenRouter's reported `usage.cost`. If you use a Bring-Your-Own-Key provider,
+that figure reflects only OpenRouter's fee, not the upstream provider charge,
+so it understates true spend.
+
+A tight provider configuration (a low `maxPrice`, `dataCollection: deny`,
+`zdr: true`, or `allowFallbacks: false`) can leave no eligible provider; the
+run then fails fast with OpenRouter's routing message rather than retrying.
 ```
 
 - [ ] **Step 2: Verify links and dashes**
@@ -1410,6 +1560,7 @@ The CHANGELOG entry, README "What's new", version bump, tag, and GitHub release 
 ## Self-review notes (planner)
 
 - **Spec coverage:** cost/token accounting (Tasks 1-5), prompt caching (Task 10), model fallback + provider routing + max_price (Tasks 9-12), privacy control (Tasks 9, 10, 12, 13), per-report enrichment (Tasks 6-8), docs (Task 14). All four approved pieces plus the spec's per-report enrichment are covered.
-- **Correction vs spec:** the spec said only `alerts` overrides `publishOutput`; `forecast` does too. Task 7 handles both. The spec's "add `usage:{include:true}`" was dropped (deprecated no-op per verification); Task 1 parses the auto-returned usage instead.
-- **Type consistency:** `PublishRunMeta` (Analyzer.ts) is the single run-meta type, consumed by publisher.ts, triggerRouter.ts, alerts.ts, forecast.ts. `CompleteResult.usage` shape (Task 1) is the source the router narrows from. `provider` config shape is identical in `PluginOptions.openrouter` (Task 9) and `OpenRouterCfg` (Task 10).
-- **Known limitation (documented, not handled):** a tight-routing 503 ("no provider meets routing") flows through the existing transient-retry path and then fails the run. Disambiguating it from a genuine gateway 503 is out of scope.
+- **Corrections vs spec:** (1) the spec said only `alerts` overrides `publishOutput`; `forecast` does too, so Task 7 handles both. (2) The spec's "add `usage:{include:true}`" was dropped (deprecated no-op per API verification); Task 1 parses the auto-returned usage instead. (3) The spec listed routing-503 disambiguation as out of scope; since this change ships the knobs that cause it, Task 10b now makes 503 terminal (API-reviewer must-fix). (4) `provider.zdr` is an intentional addition beyond the spec's four provider fields, complementing the privacy goal; it is opt-in and defaults off.
+- **Type consistency:** `PublishRunMeta` (Analyzer.ts) is the single run-meta type, consumed by publisher.ts, triggerRouter.ts, alerts.ts, forecast.ts. `CompleteResult.usage` shape (Task 1) is the source the router narrows from. `provider` config shape is identical in `PluginOptions.openrouter` (Task 9), `OpenRouterCfg` (Task 10), and `PanelConfig.openrouter.provider` (Task 13).
+- **Review fixes folded in (3-agent review, 2026-06-21):** test harness `tests/_mocks.ts` gains `recordUsage`/`tokensToday`/`costToday` and richer mock usage (Tasks 3, 4); Task 9 tests through `mergeWithDefaults` since `validateOptions` is unexported; Task 10 also fixes the existing anthropic-model `messages` assertion; Tasks 6/7 give literal `ctx` setup; Task 12 uses the schema test's cast pattern; Task 13 widens the panel `provider` type for save round-trip honesty; Task 6 notes the optional-param compile guarantee for the two overrides.
+- **BYOK cost caveat:** `usage.cost` understates true spend for Bring-Your-Own-Key providers (it omits the upstream charge). Documented in Task 14, not corrected (no backend pricing math, per the locked decision).
