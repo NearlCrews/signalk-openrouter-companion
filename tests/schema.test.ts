@@ -340,6 +340,17 @@ describe('mergeWithDefaults', () => {
     expect(overridden.analyzers.forecast.triggers.cron.enabled).toBe(true);
   });
 
+  it('preserves openrouter.fallbackModels and provider through mergeWithDefaults', () => {
+    const r = mergeWithDefaults({
+      openrouter: {
+        fallbackModels: ['openai/gpt-5-mini'],
+        provider: { dataCollection: 'deny', sort: 'price' },
+      },
+    } as never);
+    expect(r.openrouter.fallbackModels).toEqual(['openai/gpt-5-mini']);
+    expect(r.openrouter.provider).toEqual({ dataCollection: 'deny', sort: 'price' });
+  });
+
   it('preserves user-provided events and other fields', () => {
     const r = mergeWithDefaults({
       analyzers: {

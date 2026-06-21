@@ -63,6 +63,14 @@ export interface PluginOptions {
     baseUrl: string;
     maxCallsPerDay: number;
     requestTimeoutMs: number;
+    fallbackModels?: string[];
+    provider?: {
+      sort?: 'price' | 'throughput' | 'latency';
+      maxPrice?: { prompt?: number; completion?: number; request?: number };
+      allowFallbacks?: boolean;
+      dataCollection?: 'allow' | 'deny';
+      zdr?: boolean;
+    };
   };
   questdb: {
     enabled: boolean;
