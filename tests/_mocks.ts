@@ -217,7 +217,7 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
       analyzers: { ...DEFAULT_OPTIONS.analyzers, ...(opts.cfg?.analyzers ?? {}) },
     },
     llm: (opts.llm ?? ({} as never)) as PluginRuntime['llm'],
-    budget: (opts.budget ?? ({ callsToday: () => 0 } as never)) as PluginRuntime['budget'],
+    budget: (opts.budget ?? ({ callsToday: () => 0, tokensToday: () => 0, costToday: () => 0 } as never)) as PluginRuntime['budget'],
     questdbLive: opts.questdbLive ?? null,
     questdbProbed: opts.questdbProbed ?? false,
     analyzers: opts.analyzers ?? [],

@@ -62,6 +62,8 @@ interface StatusResponse {
     model: string;
     callsToday: number;
     maxCallsPerDay: number;
+    tokensToday: number;
+    costToday: number;
   };
   questdb: { enabled: boolean; reachable: boolean | null };
   analyzers: Array<{
@@ -88,6 +90,8 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
       model: rt.cfg.openrouter.model,
       callsToday: rt.budget.callsToday(),
       maxCallsPerDay: rt.cfg.openrouter.maxCallsPerDay,
+      tokensToday: rt.budget.tokensToday(),
+      costToday: rt.budget.costToday(),
     },
     questdb: {
       enabled: rt.cfg.questdb.enabled,

@@ -192,6 +192,19 @@ describe('plugin REST API', () => {
       vi.unstubAllGlobals();
       await plugin.stop();
     });
+
+    it('surfaces tokensToday and costToday in the openrouter block', async () => {
+      const rt = makePluginRuntime({
+        budget: { callsToday: () => 0, tokensToday: () => 4096, costToday: () => 0.12 } as never,
+      });
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const r = await call(routes, 'get', '/api/status');
+      expect(r.status).toBe(200);
+      const body = r.body as { ok: boolean; openrouter: { tokensToday: number; costToday: number } };
+      expect(body.openrouter.tokensToday).toBe(4096);
+      expect(body.openrouter.costToday).toBeCloseTo(0.12, 6);
+    });
   });
 
   describe('/api/openrouter/test handler', () => {
