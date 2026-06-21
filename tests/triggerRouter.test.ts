@@ -338,7 +338,7 @@ describe('TriggerRouter', () => {
 
   it('passes run-meta to publishReport on the default path', async () => {
     const publishReport = vi.fn().mockResolvedValue(undefined);
-    const { deps, mocks } = makeRouterDeps({
+    const { deps } = makeRouterDeps({
       completeResult: {
         text: 'Headline\nbody',
         model: 'anthropic/claude-haiku-4.5',
@@ -367,7 +367,5 @@ describe('TriggerRouter', () => {
       model: 'anthropic/claude-haiku-4.5',
       usage: { totalTokens: 15, cachedTokens: 4, cost: 0.001 },
     });
-    // Unused mocks reference to avoid lint complaint.
-    void mocks;
   });
 });

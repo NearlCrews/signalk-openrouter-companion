@@ -48,14 +48,10 @@ export class BudgetTracker {
       ) {
         throw new Error('invalid state shape');
       }
-      const tokensToday =
-        Number.isFinite(parsed.tokensToday) && (parsed.tokensToday as number) >= 0
-          ? (parsed.tokensToday as number)
-          : 0;
-      const costToday =
-        Number.isFinite(parsed.costToday) && (parsed.costToday as number) >= 0
-          ? (parsed.costToday as number)
-          : 0;
+      const t = parsed.tokensToday ?? 0;
+      const c = parsed.costToday ?? 0;
+      const tokensToday = Number.isFinite(t) && t >= 0 ? t : 0;
+      const costToday = Number.isFinite(c) && c >= 0 ? c : 0;
       state = { day: parsed.day, callsToday: parsed.callsToday, tokensToday, costToday };
     } catch (err) {
       // ENOENT is the expected first-run case. Anything else means an existing

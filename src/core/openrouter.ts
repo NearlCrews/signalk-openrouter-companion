@@ -114,7 +114,7 @@ export class OpenRouterClient {
     if (p.maxPrice) out.max_price = p.maxPrice;
     if (p.allowFallbacks !== undefined) out.allow_fallbacks = p.allowFallbacks;
     if (p.dataCollection) out.data_collection = p.dataCollection;
-    if (p.zdr) out.zdr = p.zdr;
+    if (p.zdr !== undefined) out.zdr = p.zdr;
     return Object.keys(out).length > 0 ? out : undefined;
   }
 

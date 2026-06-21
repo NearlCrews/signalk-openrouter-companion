@@ -28,6 +28,16 @@ function makeClient(overrides: Partial<ConstructorParameters<typeof OpenRouterCl
 
 describe('OpenRouterClient', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+
+  // Safely extract and parse the request body from a fetch mock call.
+  // Throws if the expected call index has no entry, avoiding non-null assertions.
+  // biome-ignore lint/suspicious/noExplicitAny: test helper; callers assert specific fields
+  function requestBody(call: number = 0): any {
+    const c = fetchMock.mock.calls[call];
+    if (!c) throw new Error(`expected fetch call at index ${call}`);
+    return JSON.parse((c[1] as RequestInit).body as string);
+  }
+
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
@@ -489,8 +499,7 @@ describe('OpenRouterClient', () => {
     );
     const c = makeClient({ model: 'anthropic/claude-haiku-4.5' });
     await c.complete({ system: 'SYS', user: 'U' });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    const body = requestBody();
     expect(body.messages[0]).toEqual({
       role: 'system',
       content: [{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }],
@@ -503,8 +512,7 @@ describe('OpenRouterClient', () => {
     );
     const c = makeClient({ model: 'openai/gpt-5-mini' });
     await c.complete({ system: 'SYS', user: 'U' });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    const body = requestBody();
     expect(body.messages[0]).toEqual({ role: 'system', content: 'SYS' });
   });
 
@@ -517,8 +525,7 @@ describe('OpenRouterClient', () => {
       fallbackModels: ['openai/gpt-5-mini'],
     });
     await c.complete({ system: 's', user: 'u' });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    const body = requestBody();
     expect(body.models).toEqual(['anthropic/claude-haiku-4.5', 'openai/gpt-5-mini']);
     expect(body.model).toBeUndefined();
   });
@@ -538,8 +545,7 @@ describe('OpenRouterClient', () => {
       },
     });
     await c.complete({ system: 's', user: 'u' });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    const body = requestBody();
     expect(body.provider).toEqual({
       sort: 'price',
       data_collection: 'deny',
@@ -549,14 +555,27 @@ describe('OpenRouterClient', () => {
     });
   });
 
+  it('sends zdr:false explicitly (not silently dropped by truthiness check)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({
+      model: 'openai/gpt-5-mini',
+      provider: { zdr: false },
+    });
+    await c.complete({ system: 's', user: 'u' });
+    const body = requestBody();
+    expect(body.provider).toBeDefined();
+    expect(body.provider.zdr).toBe(false);
+  });
+
   it('omits provider when no provider config is set', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
     );
     const c = makeClient({ model: 'openai/gpt-5-mini' });
     await c.complete({ system: 's', user: 'u' });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    const body = requestBody();
     expect(body.provider).toBeUndefined();
   });
 

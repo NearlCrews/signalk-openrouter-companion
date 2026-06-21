@@ -311,6 +311,8 @@ function buildSchemaInner(): PluginSchema {
               sort: {
                 type: 'string',
                 title: 'Routing preference',
+                description:
+                  'How OpenRouter selects among eligible providers: price (lowest cost), throughput (highest tokens/sec), or latency (fastest first token).',
                 enum: ['price', 'throughput', 'latency'],
               },
               allowFallbacks: {
