@@ -31,6 +31,11 @@ export interface TriggerCtx {
   batteryEvent?: { subkind: BatteryEventKind; soc?: number; imbalanceV?: number };
 }
 
+export interface PublishRunMeta {
+  model: string;
+  usage: { totalTokens: number; cachedTokens: number; cost: number };
+}
+
 export type AnalysisInput = Record<string, unknown>;
 
 export interface AppForAnalyzer {
@@ -82,5 +87,5 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   // `state: 'nominal'`. Override only when an analyzer needs a different
   // path or state, e.g. `alerts` uses `deps.publisher.publishOnPath` with
   // a per-event canonical path and explicit alert state.
-  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
+  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps, run?: PublishRunMeta): Promise<void>;
 }

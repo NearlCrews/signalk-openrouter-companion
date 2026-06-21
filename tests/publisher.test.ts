@@ -188,6 +188,33 @@ describe('ReportPublisher', () => {
     expect(v.state).toBe('warn');
     expect(v.method).toEqual(['visual', 'sound']);
   });
+
+  it('records model and usage on the JSONL entry when run-meta is supplied', async () => {
+    const ctx = { kind: 'cron', firedAt: new Date() } as never;
+    await publisher.publishReport('health', ctx, 'Headline\nbody', 'nominal', {
+      model: 'anthropic/claude-haiku-4.5',
+      usage: { totalTokens: 123, cachedTokens: 64, cost: 0.0021 },
+    });
+    const lines = (await readFile(logPath, 'utf-8')).trim().split('\n');
+    const lastLine = lines[lines.length - 1];
+    if (!lastLine) throw new Error('expected at least one log line');
+    const entry = JSON.parse(lastLine);
+    expect(entry.model).toBe('anthropic/claude-haiku-4.5');
+    expect(entry.totalTokens).toBe(123);
+    expect(entry.cachedTokens).toBe(64);
+    expect(entry.costUsd).toBeCloseTo(0.0021, 6);
+  });
+
+  it('omits usage fields when no run-meta is supplied', async () => {
+    const ctx = { kind: 'cron', firedAt: new Date() } as never;
+    await publisher.publishReport('health', ctx, 'Headline\nbody');
+    const lines = (await readFile(logPath, 'utf-8')).trim().split('\n');
+    const lastLine = lines[lines.length - 1];
+    if (!lastLine) throw new Error('expected at least one log line');
+    const entry = JSON.parse(lastLine);
+    expect(entry.model).toBeUndefined();
+    expect(entry.totalTokens).toBeUndefined();
+  });
 });
 
 describe('headlineOf', () => {

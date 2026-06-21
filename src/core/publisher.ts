@@ -1,6 +1,6 @@
 import { appendFile } from 'node:fs/promises';
 import { SKVersion } from '@signalk/server-api';
-import type { TriggerCtx } from '../analyzers/Analyzer.js';
+import type { PublishRunMeta, TriggerCtx } from '../analyzers/Analyzer.js';
 import type { NotificationState } from '../types.js';
 import { clampAtWord } from './format.js';
 import { stringify } from './logger.js';
@@ -85,6 +85,7 @@ interface PublisherCfg {
 interface PublishMeta {
   analyzerId: string;
   ctx: TriggerCtx;
+  run?: PublishRunMeta;
 }
 
 // JsonlEntry is the on-disk log row shape; api.ts also reads it to render
@@ -99,6 +100,10 @@ export interface JsonlEntry {
   durationSec?: number;
   report: string;
   failure?: string;
+  model?: string;
+  totalTokens?: number;
+  cachedTokens?: number;
+  costUsd?: number;
 }
 
 // All notification paths this plugin emits are SK v1 (`notifications.*`).
@@ -176,10 +181,11 @@ export class ReportPublisher {
     ctx: TriggerCtx,
     text: string,
     state: NotificationState = 'nominal',
+    run?: PublishRunMeta,
   ): Promise<void> {
     await this.publishOnPath(
       text,
-      { analyzerId, ctx },
+      { analyzerId, ctx, run },
       { path: notificationReportPath(analyzerId), state },
     );
   }
@@ -225,6 +231,12 @@ export class ReportPublisher {
       trigger: meta.ctx.kind,
       report: text,
     };
+    if (meta.run) {
+      base.model = meta.run.model;
+      base.totalTokens = meta.run.usage.totalTokens;
+      base.cachedTokens = meta.run.usage.cachedTokens;
+      base.costUsd = meta.run.usage.cost;
+    }
     const sess = meta.ctx.engineSession;
     if (!sess) return base;
     return {
