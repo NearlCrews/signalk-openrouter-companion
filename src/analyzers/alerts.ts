@@ -14,6 +14,7 @@ import type {
   Analyzer,
   AnalyzerDeps,
   BatteryEventKind,
+  PublishRunMeta,
   TriggerCtx,
   TriggerSpec,
 } from './Analyzer.js';
@@ -122,7 +123,12 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     return { system: this.systemPrompt, user: lines.join('\n') };
   }
 
-  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
+  async publishOutput(
+    text: string,
+    ctx: TriggerCtx,
+    deps: AnalyzerDeps,
+    run?: PublishRunMeta,
+  ): Promise<void> {
     const subkind = ctx.batteryEvent?.subkind;
     const bankId = ctx.bankId;
     // collectContext already guarantees both; this is a type guard. If it ever
@@ -138,7 +144,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     // reasoning behind the alert, not just the headline.
     await deps.publisher.publishOnPath(
       truncateForN2K(text),
-      { analyzerId: this.id, ctx },
+      { analyzerId: this.id, ctx, run },
       { path, state, alertId: alertIdFor(path), logText: text },
     );
   }

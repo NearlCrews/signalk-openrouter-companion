@@ -19,6 +19,7 @@ import {
   makeAnalyzerDeps,
   makeMockApp,
   makeQuestDBStub,
+  makeRouterDeps,
   makeTmpDir,
 } from './_mocks.js';
 
@@ -409,6 +410,26 @@ describe('ForecastAnalyzer', () => {
       const v = firstNotificationValue(app.published[0]?.delta);
       expect(v.state).toBe('nominal');
       expect(v.message).toBe(text);
+    });
+
+    it('forwards run-meta to publishOnPath', async () => {
+      const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
+      const { deps, mocks } = makeRouterDeps();
+      const run = {
+        model: 'anthropic/claude-haiku-4.5',
+        usage: { totalTokens: 50, cachedTokens: 0, cost: 0.0005 },
+      };
+      await a.publishOutput?.(
+        'SEVERITY: severe\nDeepening low approaching.',
+        cronCtx,
+        deps,
+        run,
+      );
+      expect(mocks.publishOnPath).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ run }),
+        expect.any(Object),
+      );
     });
   });
 });

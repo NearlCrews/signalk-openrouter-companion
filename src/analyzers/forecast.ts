@@ -24,7 +24,7 @@ import {
   type NotificationState,
   type SeverityFloor,
 } from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type { AnalysisInput, Analyzer, AnalyzerDeps, PublishRunMeta, TriggerCtx, TriggerSpec } from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
 // Hourly-mean trend buckets span the last 12h of the rolling buffer.
@@ -268,7 +268,12 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     return { system: this.systemPrompt, user: lines.join('\n') };
   }
 
-  async publishOutput(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void> {
+  async publishOutput(
+    text: string,
+    ctx: TriggerCtx,
+    deps: AnalyzerDeps,
+    run?: PublishRunMeta,
+  ): Promise<void> {
     const { grade, body, severityLineParsed } = parseForecast(text);
     if (!severityLineParsed) {
       deps.logger.debug(
@@ -278,7 +283,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     const state = resolveForecastState(grade, this.severityFloor);
     await deps.publisher.publishOnPath(
       body.length > 0 ? body : text.trim(),
-      { analyzerId: this.id, ctx },
+      { analyzerId: this.id, ctx, run },
       { path: notificationReportPath(this.id), state },
     );
   }

@@ -329,4 +329,36 @@ describe('TriggerRouter', () => {
       expect.objectContaining({ totalTokens: 15, cost: 0.001 }),
     );
   });
+
+  it('passes run-meta to publishReport on the default path', async () => {
+    const publishReport = vi.fn().mockResolvedValue(undefined);
+    const { deps, mocks } = makeRouterDeps({
+      completeResult: {
+        text: 'Headline\nbody',
+        model: 'anthropic/claude-haiku-4.5',
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: 4, cost: 0.001 },
+      },
+    });
+    deps.publisher.publishReport = publishReport;
+    // Use an analyzer without publishOutput so the default publishReport path is taken.
+    const a: Analyzer = {
+      id: 'health',
+      title: 'Health',
+      triggers: [],
+      collectContext: vi.fn(async () => ({ ok: true })),
+      buildPrompt: vi.fn(() => ({ system: 's', user: 'u' })),
+    } as Analyzer;
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
+    const router = new TriggerRouter([a], deps);
+    await router.runById('health', ctx);
+    expect(publishReport).toHaveBeenCalledWith(
+      'health',
+      ctx,
+      'Headline\nbody',
+      undefined,
+      { model: 'anthropic/claude-haiku-4.5', usage: { totalTokens: 15, cachedTokens: 4, cost: 0.001 } },
+    );
+    // Unused mocks reference to avoid lint complaint.
+    void mocks;
+  });
 });

@@ -13,6 +13,7 @@ import {
   makeAnalyzerDeps,
   makeBuffer,
   makeMockApp,
+  makeRouterDeps,
   makeTmpDir,
 } from './_mocks.js';
 
@@ -272,6 +273,27 @@ describe('AlertAnalyzer', () => {
     expect(v.path).toBe('notifications.electrical.batteries.starter.cellImbalance');
     expect(v.state).toBe('normal');
     expect(v.method).toEqual(['visual']);
+  });
+
+  it('publishOutput forwards run-meta to publishOnPath', async () => {
+    const a = new AlertAnalyzer(makeCfg());
+    const { deps, mocks } = makeRouterDeps();
+    const ctx: TriggerCtx = {
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+    };
+    const run = {
+      model: 'anthropic/claude-haiku-4.5',
+      usage: { totalTokens: 50, cachedTokens: 0, cost: 0.0005 },
+    };
+    await a.publishOutput('House SoC 25%.', ctx, deps, run);
+    expect(mocks.publishOnPath).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ run }),
+      expect.any(Object),
+    );
   });
 
   it('publishOutput discards the result and logs when subkind or bankId is missing', async () => {

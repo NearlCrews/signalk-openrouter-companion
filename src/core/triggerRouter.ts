@@ -88,10 +88,18 @@ export class TriggerRouter {
       });
       await this.deps.budget.recordUsage(result.usage);
       this.setStatus(this.deps.okStatus ?? 'Running');
+      const run = {
+        model: result.model,
+        usage: {
+          totalTokens: result.usage.totalTokens,
+          cachedTokens: result.usage.cachedTokens,
+          cost: result.usage.cost,
+        },
+      };
       if (a.publishOutput) {
-        await a.publishOutput(result.text, ctx, this.deps);
+        await a.publishOutput(result.text, ctx, this.deps, run);
       } else {
-        await this.deps.publisher.publishReport(a.id, ctx, result.text);
+        await this.deps.publisher.publishReport(a.id, ctx, result.text, undefined, run);
       }
       return 'reported';
     } catch (err) {
