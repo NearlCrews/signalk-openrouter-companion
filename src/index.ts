@@ -238,6 +238,8 @@ export default function createPlugin(app: ServerApiLike): {
           requestTimeoutMs: cfg.openrouter.requestTimeoutMs,
           referer: 'https://github.com/NearlCrews/signalk-openrouter-companion',
           title: PLUGIN_ID,
+          fallbackModels: cfg.openrouter.fallbackModels,
+          provider: cfg.openrouter.provider,
         });
         const questdbCandidate = cfg.questdb.enabled
           ? new QuestDBClient({ url: cfg.questdb.url })
