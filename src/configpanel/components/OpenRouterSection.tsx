@@ -97,6 +97,28 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         />
         <span style={S.hint}>UTC daily hard cap on OpenRouter calls (Test button is exempt)</span>
       </div>
+      <div style={S.fieldRow}>
+        <label htmlFor="orc-data-collection" style={S.fieldLabel}>
+          Provider data
+        </label>
+        <select
+          id="orc-data-collection"
+          style={S.inputSmall}
+          value={o.provider?.dataCollection ?? 'allow'}
+          onChange={(e) =>
+            set({
+              openrouter: {
+                ...o,
+                provider: { ...o.provider, dataCollection: e.target.value as 'allow' | 'deny' },
+              },
+            })
+          }
+        >
+          <option value="allow">Allow (default)</option>
+          <option value="deny">Deny (privacy)</option>
+        </select>
+        <span style={S.hint}>Deny routes only to providers that do not retain request data</span>
+      </div>
     </>
   );
 });

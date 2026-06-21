@@ -19,7 +19,19 @@ export interface AnalyzerConfig {
 // The edit buffer the panel maintains and saves. Every key is optional: a
 // fresh install pushes an empty object and the server fills defaults.
 export interface PanelConfig {
-  openrouter?: { apiKey?: string; model?: string; maxCallsPerDay?: number };
+  openrouter?: {
+    apiKey?: string;
+    model?: string;
+    maxCallsPerDay?: number;
+    fallbackModels?: string[];
+    provider?: {
+      sort?: 'price' | 'throughput' | 'latency';
+      maxPrice?: { prompt?: number; completion?: number; request?: number };
+      allowFallbacks?: boolean;
+      dataCollection?: 'allow' | 'deny';
+      zdr?: boolean;
+    };
+  };
   questdb?: { enabled?: boolean; url?: string };
   analyzers?: Record<string, AnalyzerConfig>;
 }
