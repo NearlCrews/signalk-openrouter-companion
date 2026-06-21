@@ -8,6 +8,14 @@ interface OpenRouterCfg {
   referer: string;
   title: string;
   random?: () => number;
+  fallbackModels?: string[];
+  provider?: {
+    sort?: 'price' | 'throughput' | 'latency';
+    maxPrice?: { prompt?: number; completion?: number; request?: number };
+    allowFallbacks?: boolean;
+    dataCollection?: 'allow' | 'deny';
+    zdr?: boolean;
+  };
 }
 
 interface CompleteArgs {
@@ -57,7 +65,12 @@ interface ApiErrorBody {
 
 // Statuses worth a retry: rate limiting and gateway/server faults. Every other
 // non-200 status is terminal and throws without a retry.
-const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+// 503 is excluded on purpose: OpenRouter returns it for "no provider meets
+// routing requirements" (a config problem from max_price / data_collection /
+// zdr / allow_fallbacks), which retrying cannot fix. It throws terminally so
+// the descriptive routing message reaches the failure report. 502 (chosen
+// provider down) stays retryable.
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 504]);
 
 const MAX_RETRIES = 3;
 
@@ -78,6 +91,28 @@ export class OpenRouterClient {
 
   constructor(private cfg: OpenRouterCfg) {
     this.random = cfg.random ?? Math.random;
+  }
+
+  private buildSystemMessage(system: string): unknown {
+    // Anthropic needs an explicit cache breakpoint; OpenAI/Gemini/etc cache
+    // automatically and take the plain string. Below the model's cache floor
+    // (4,096 tokens on Haiku 4.5) the marker is a silent no-op, not an error.
+    if (this.cfg.model.startsWith('anthropic/')) {
+      return { role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] };
+    }
+    return { role: 'system', content: system };
+  }
+
+  private buildProvider(): Record<string, unknown> | undefined {
+    const p = this.cfg.provider;
+    if (!p) return undefined;
+    const out: Record<string, unknown> = {};
+    if (p.sort) out.sort = p.sort;
+    if (p.maxPrice) out.max_price = p.maxPrice;
+    if (p.allowFallbacks !== undefined) out.allow_fallbacks = p.allowFallbacks;
+    if (p.dataCollection) out.data_collection = p.dataCollection;
+    if (p.zdr) out.zdr = p.zdr;
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   async complete(args: CompleteArgs): Promise<CompleteResult> {
@@ -109,14 +144,21 @@ export class OpenRouterClient {
             'HTTP-Referer': this.cfg.referer,
             'X-OpenRouter-Title': this.cfg.title,
           },
-          body: JSON.stringify({
-            model: this.cfg.model,
-            max_tokens: MAX_COMPLETION_TOKENS,
-            messages: [
-              { role: 'system', content: args.system },
-              { role: 'user', content: args.user },
-            ],
-          }),
+          body: (() => {
+            const payload: Record<string, unknown> = {
+              max_tokens: MAX_COMPLETION_TOKENS,
+              messages: [this.buildSystemMessage(args.system), { role: 'user', content: args.user }],
+            };
+            const fallbacks = this.cfg.fallbackModels;
+            if (fallbacks && fallbacks.length > 0) {
+              payload.models = [this.cfg.model, ...fallbacks];
+            } else {
+              payload.model = this.cfg.model;
+            }
+            const provider = this.buildProvider();
+            if (provider) payload.provider = provider;
+            return JSON.stringify(payload);
+          })(),
         },
         this.cfg.requestTimeoutMs,
         args.abortSignal,

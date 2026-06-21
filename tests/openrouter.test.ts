@@ -74,7 +74,7 @@ describe('OpenRouterClient', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.model).toBe('anthropic/claude-haiku-4.5');
     expect(body.messages).toEqual([
-      { role: 'system', content: 'sys' },
+      { role: 'system', content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }] },
       { role: 'user', content: 'usr' },
     ]);
   });
@@ -157,12 +157,12 @@ describe('OpenRouterClient', () => {
     await expect(p).rejects.toThrow();
   });
 
-  it('gives up after 3 retries on 503', async () => {
+  it('gives up after 3 retries on 502', async () => {
     vi.useFakeTimers();
-    fetchMock.mockResolvedValue(jsonResponse(503, { error: { code: 503, message: 'down' } }));
+    fetchMock.mockResolvedValue(jsonResponse(502, { error: { code: 502, message: 'down' } }));
     const c = makeClient();
     const p = c.complete({ system: 's', user: 'u' });
-    const assertion = expect(p).rejects.toMatchObject({ status: 503 });
+    const assertion = expect(p).rejects.toMatchObject({ status: 502 });
     await vi.advanceTimersByTimeAsync(10_000);
     await assertion;
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -333,7 +333,7 @@ describe('OpenRouterClient', () => {
 
   it('does not wait out the backoff when the caller aborts mid-delay', async () => {
     vi.useFakeTimers();
-    fetchMock.mockResolvedValue(jsonResponse(503, { error: { code: 503, message: 'down' } }));
+    fetchMock.mockResolvedValue(jsonResponse(502, { error: { code: 502, message: 'down' } }));
     // random()=1 pins the first backoff rung at its full 500ms.
     const c = makeClient({ random: () => 1 });
     const ctrl = new AbortController();
@@ -367,7 +367,7 @@ describe('OpenRouterClient', () => {
   it('applies equal jitter to the backoff at the lower bound (random() = 0)', async () => {
     vi.useFakeTimers();
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(503, { error: { code: 503, message: 'down' } }))
+      .mockResolvedValueOnce(jsonResponse(502, { error: { code: 502, message: 'down' } }))
       .mockResolvedValueOnce(
         jsonResponse(200, {
           choices: [{ message: { content: 'ok' } }],
@@ -389,7 +389,7 @@ describe('OpenRouterClient', () => {
   it('applies equal jitter to the backoff at the upper bound (random() = 1)', async () => {
     vi.useFakeTimers();
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(503, { error: { code: 503, message: 'down' } }))
+      .mockResolvedValueOnce(jsonResponse(502, { error: { code: 502, message: 'down' } }))
       .mockResolvedValueOnce(
         jsonResponse(200, {
           choices: [{ message: { content: 'ok' } }],
@@ -478,6 +478,83 @@ describe('OpenRouterClient', () => {
     const r = await c.complete({ system: 's', user: 'u' });
     expect(r.usage.cachedTokens).toBe(0);
     expect(r.usage.cost).toBe(0);
+  });
+
+  it('sends a cache_control breakpoint for an anthropic model', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({ model: 'anthropic/claude-haiku-4.5' });
+    await c.complete({ system: 'SYS', user: 'U' });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    expect(body.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }],
+    });
+  });
+
+  it('sends a plain system string for a non-anthropic model', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({ model: 'openai/gpt-5-mini' });
+    await c.complete({ system: 'SYS', user: 'U' });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    expect(body.messages[0]).toEqual({ role: 'system', content: 'SYS' });
+  });
+
+  it('sends a models array and omits model when fallbacks are configured', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({ model: 'anthropic/claude-haiku-4.5', fallbackModels: ['openai/gpt-5-mini'] });
+    await c.complete({ system: 's', user: 'u' });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    expect(body.models).toEqual(['anthropic/claude-haiku-4.5', 'openai/gpt-5-mini']);
+    expect(body.model).toBeUndefined();
+  });
+
+  it('sends a provider object built from config', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({
+      model: 'openai/gpt-5-mini',
+      provider: { sort: 'price', dataCollection: 'deny', allowFallbacks: false, maxPrice: { prompt: 1, completion: 2 }, zdr: true },
+    });
+    await c.complete({ system: 's', user: 'u' });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    expect(body.provider).toEqual({
+      sort: 'price',
+      data_collection: 'deny',
+      allow_fallbacks: false,
+      max_price: { prompt: 1, completion: 2 },
+      zdr: true,
+    });
+  });
+
+  it('omits provider when no provider config is set', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({ model: 'openai/gpt-5-mini' });
+    await c.complete({ system: 's', user: 'u' });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    expect(body.provider).toBeUndefined();
+  });
+
+  it('does not retry a 503 (no provider meets routing)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(503, { error: { code: 503, message: 'No allowed providers are available for the selected model.' } }),
+    );
+    const c = makeClient();
+    await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('rejects from the backoff when the caller signal is already aborted at delay time', async () => {
