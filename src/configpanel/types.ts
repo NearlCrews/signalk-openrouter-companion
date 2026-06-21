@@ -63,6 +63,9 @@ export interface ReportEntry {
   durationSec?: number;
   report?: string;
   failure?: string;
+  model?: string;
+  totalTokens?: number;
+  costUsd?: number;
 }
 
 export type ModelsState = 'idle' | 'loading' | 'ready' | 'error';

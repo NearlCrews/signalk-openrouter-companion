@@ -246,6 +246,13 @@ export const AnalyzerRow = memo(function AnalyzerRow({
                           {r.engineId ? ` · engine=${r.engineId}` : ''}
                           {r.durationSec ? ` · ${r.durationSec}s` : ''}
                         </div>
+                        {r.model && (
+                          <div style={S.statSub}>
+                            {r.model}
+                            {typeof r.totalTokens === 'number' ? ` · ${r.totalTokens.toLocaleString()} tok` : ''}
+                            {typeof r.costUsd === 'number' ? ` · $${r.costUsd.toFixed(4)}` : ''}
+                          </div>
+                        )}
                         {r.report && <div style={S.reportBody}>{r.report}</div>}
                         {r.failure && <div style={S.reportFailure}>FAILURE: {r.failure}</div>}
                       </div>
