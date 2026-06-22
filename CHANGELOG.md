@@ -2,9 +2,13 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+<a id="unreleased"></a>
+
+## [Unreleased]
+
 <a id="v060"></a>
 
-## [0.6.0] - 2026-06-21
+## [0.6.0] - 2026-06-22
 
 A cost and reliability release for the OpenRouter request layer. No new
 analyzers and no config migration: existing config loads unchanged, and every
@@ -44,6 +48,20 @@ hard spend bound; the new cost figures are observe-only.
   successful call. Failed or aborted runs record no usage.
 - **An explicit `zdr: false`** is sent when zero-data-retention is not
   required, rather than relying on an implicit default.
+- **Dependencies refreshed to current releases.** Biome 2.5, Vitest and its v8
+  coverage reporter 4.1.9, esbuild 0.28.1, esbuild-loader 4.5, the
+  `@signalk/server-api` types 2.28.0, and `@types/node` 26. `npm audit` reports
+  no vulnerabilities in the runtime or dev trees.
+
+### Internal
+
+- **Code cleanup pass, no behavior change.** The aging trend decoder now reuses
+  the shared `asFiniteNumber` coercion that the drift decoder already uses, the
+  config panel's expand toggle and prompt-override check route through the
+  existing `patchUi` and a new shared `isPromptOverride` helper, the two
+  analyzer-row drawer focus effects collapse into one `useDrawerFocus` hook, an
+  unused reading helper and a duplicate monospace font token were removed, and
+  the cron schema builder skips a redundant array copy on the common path.
 
 <a id="v057"></a>
 
