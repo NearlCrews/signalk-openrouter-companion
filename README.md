@@ -18,10 +18,11 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.6.0
+## What's new in 0.6.1
 
-A cost and reliability release for the OpenRouter request layer, all opt-in
-and with no config migration:
+0.6.1 delivers the 0.6.0 OpenRouter cost and reliability work on a corrected
+package, with a schema packaging fix so the SignalK App Store lists it cleanly.
+All settings are opt-in with no config migration:
 
 - **Daily token and estimated-cost visibility**, accumulated per UTC day from
   OpenRouter's reported cost and shown in the panel status block.
@@ -29,13 +30,13 @@ and with no config migration:
   on repeat runs in a burst.
 - **Ordered model fallback** via `openrouter.fallbackModels`, so a single
   provider fault falls through to the next model instead of failing the run.
-- **Provider routing controls** (`sort`, `maxPrice`, `allowFallbacks`, `zdr`)
-  plus a panel data-collection privacy toggle to route only to providers that
-  do not retain request data.
+- **Provider routing controls** (`sort`, `maxPrice`, `allowFallbacks`, and
+  `zdr`) plus a panel data-collection privacy toggle to route only to providers
+  that do not retain request data.
 - **Per-report model and cost metadata** recorded in `reports.jsonl` and shown
   in the panel's reports drawer.
 
-See the [v0.6.0 changelog entry](CHANGELOG.md#v060) and the
+See the [v0.6.1 changelog entry](CHANGELOG.md#v061) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does

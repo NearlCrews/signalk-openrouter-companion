@@ -6,6 +6,19 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v061"></a>
+
+## [0.6.1] - 2026-06-22
+
+### Fixed
+
+- **The config schema rebuilds its cron schedule list per analyzer instead of
+  sharing one array across every analyzer.** The shared array made the same
+  `enum` and `enumNames` object appear in each analyzer's cron node, which the
+  SignalK plugin packaging check reports as a circular reference. A running
+  server was unaffected because the schema still serialized correctly; this
+  restores the App Store compliance check.
+
 <a id="v060"></a>
 
 ## [0.6.0] - 2026-06-22
