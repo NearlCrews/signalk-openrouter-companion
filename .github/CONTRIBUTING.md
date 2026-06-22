@@ -98,7 +98,7 @@ walkthrough. Short version:
 1. Implement the `Analyzer` interface in `src/analyzers/Analyzer.ts`:
    `id` (typed as `AnalyzerId`), `title`, `triggers`, `collectContext`,
    `buildPrompt`, optional `publishOutput`, and optional `watchedPaths`.
-2. Use `buildTriggers(cfg.triggers, eventMapper?)` so the cron, PUT, and
+2. Use `buildTriggers(this.id, cfg.triggers, eventMapper?)` so the cron, PUT, and
    events block stays uniform.
 3. Use `publisher.publishReport(this.id, ctx, text)` for the canonical
    `notifications.openrouter-companion.<id>.report` shape.

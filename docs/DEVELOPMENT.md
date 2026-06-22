@@ -14,6 +14,7 @@ src/
 ├── schema.ts                 rjsf JSON Schema (storage shape; fallback admin UI)
 ├── types.ts                  Plugin options + DEFAULT_OPTIONS + mergeWithDefaults
 ├── cronPresets.ts             CRON_PRESETS: schedule-dropdown presets shared by schema + panel
+├── severityFloors.ts          SEVERITY_FLOOR_PRESETS, SeverityFloor, isSeverityFloor: shared by schema + panel + forecast
 ├── analyzers/
 │   ├── Analyzer.ts           Shared interface, TriggerSpec union, AnalyzerDeps
 │   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
@@ -26,8 +27,8 @@ src/
 │   ├── liveness.ts           State: stale-path and multi-source detection
 │   └── forecast.ts           Trend: short-term weather outlook from buffer + optional QuestDB
 ├── configpanel/
-│   ├── index.js              Module Federation entry stub (Webpack emits remoteEntry around this)
-│   └── PluginConfigurationPanel.jsx  React 19 panel exposed as `./PluginConfigurationPanel`
+│   ├── index.ts              Module Federation entry stub (Webpack emits remoteEntry around this)
+│   └── PluginConfigurationPanel.tsx  React 19 panel exposed as `./PluginConfigurationPanel`
 └── core/
     ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
@@ -39,13 +40,15 @@ src/
     ├── publisher.ts          handleMessage notification + JSONL log writer; exports JsonlEntry
     ├── budget.ts             Per-day OpenRouter call cap
     ├── openrouter.ts         HTTP client with retry and backoff ladder
-    ├── questdb.ts            HTTP client + escapeSqlLiteral + indexColumns
+    ├── questdb.ts            HTTP client + escapeSqlLiteral + indexColumns + decodePathKeyed + isoRange + QUESTDB_SELF_CONTEXT_SQL
+    ├── http.ts               fetchWithTimeout: fetch wrapper with AbortSignal-based timeout
     ├── discovery.ts          Engine and bank id discovery from SK paths
     ├── skNode.ts             readNumberAt + readValueAt + asTreeMap + readBankSnapshot
     ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
     ├── triggers.ts           buildTriggers(analyzerId, cfg, eventMapper?) + manualPutCtx(value?)
+    ├── readings.ts           Per-source rolling map helpers: evictStale, fuseMin, fuseMax, evictStaleSpan
     ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
-    ├── cfg.ts                clampPositiveInt + resolveSystemPrompt
+    ├── cfg.ts                clampPositiveInt + clampMin + clampRange + finiteOr + resolveSystemPrompt
     └── logger.ts             Wraps app.debug / app.error / stringify
 ```
 
@@ -143,7 +146,7 @@ npm run build          # clean + tsc -d + esbuild bundle + webpack panel
 npm run build:types    # tsc --emitDeclarationOnly --declaration --outDir dist
 npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
 npm run build:panel    # webpack --config webpack.config.cjs (admin UI panel)
-npm run clean          # rm -rf dist public
+npm run clean          # delete dist/ and public/ via Node fs.rmSync (cross-platform)
 ```
 
 Outputs:
@@ -162,7 +165,7 @@ npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
 ```
 
-310 tests across 27 files cover:
+352 tests across 28 files cover:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
@@ -185,7 +188,7 @@ npm run format         # biome format --write src/ tests/
 npm run type-check     # tsc --noEmit
 ```
 
-Biome is the source of truth for style. The repo follows strict-mode TypeScript (`strict: true`) with no implicit `any` and no unchecked indexed access (`noUncheckedIndexedAccess`). The `type-check` script runs `tsc` twice: once for `src/` via `tsconfig.json`, then for `tests/` via `tsconfig.tests.json`, so dead fixture keys in tests fail the gate too.
+Biome is the source of truth for style. The repo follows strict-mode TypeScript (`strict: true`) with no implicit `any` and no unchecked indexed access (`noUncheckedIndexedAccess`). The `type-check` script runs `tsc` three times: `src/` via `tsconfig.json`, `tests/` via `tsconfig.tests.json`, and the config panel via `tsconfig.panel.json`, so dead fixture keys in tests and panel type errors both fail the gate.
 
 ## Pre-publish gate
 
