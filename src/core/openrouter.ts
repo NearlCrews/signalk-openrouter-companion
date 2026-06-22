@@ -1,3 +1,4 @@
+import type { ProviderRoutingCfg } from '../types.js';
 import { fetchWithTimeout } from './http.js';
 
 interface OpenRouterCfg {
@@ -9,13 +10,7 @@ interface OpenRouterCfg {
   title: string;
   random?: () => number;
   fallbackModels?: string[];
-  provider?: {
-    sort?: 'price' | 'throughput' | 'latency';
-    maxPrice?: { prompt?: number; completion?: number; request?: number };
-    allowFallbacks?: boolean;
-    dataCollection?: 'allow' | 'deny';
-    zdr?: boolean;
-  };
+  provider?: ProviderRoutingCfg;
 }
 
 interface CompleteArgs {
@@ -48,7 +43,7 @@ export class OpenRouterError extends Error {
 }
 
 interface ApiResponse {
-  choices: { message: { content?: string } }[];
+  choices: { message: { content?: string }; finish_reason?: string }[];
   model?: string;
   usage?: {
     prompt_tokens?: number;
@@ -93,11 +88,19 @@ export class OpenRouterClient {
     this.random = cfg.random ?? Math.random;
   }
 
+  // True when the primary model or any fallback is Anthropic. Drives the
+  // explicit cache breakpoint: a fallback may answer instead of the primary,
+  // so gate caching on the whole resolved model set, not just cfg.model.
+  private usesAnthropicModel(): boolean {
+    if (this.cfg.model.startsWith('anthropic/')) return true;
+    return (this.cfg.fallbackModels ?? []).some((m) => m.startsWith('anthropic/'));
+  }
+
   private buildSystemMessage(system: string): unknown {
     // Anthropic needs an explicit cache breakpoint; OpenAI/Gemini/etc cache
-    // automatically and take the plain string. Below the model's cache floor
+    // automatically and ignore the marker. Below the model's cache floor
     // (4,096 tokens on Haiku 4.5) the marker is a silent no-op, not an error.
-    if (this.cfg.model.startsWith('anthropic/')) {
+    if (this.usesAnthropicModel()) {
       return {
         role: 'system',
         content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
@@ -155,9 +158,11 @@ export class OpenRouterClient {
                 { role: 'user', content: args.user },
               ],
             };
-            const fallbacks = this.cfg.fallbackModels;
-            if (fallbacks && fallbacks.length > 0) {
-              payload.models = [this.cfg.model, ...fallbacks];
+            // Drop blank entries (a cleared admin-UI row) and dedupe against
+            // the primary so a copy-pasted slug does not appear twice.
+            const fallbacks = (this.cfg.fallbackModels ?? []).filter((m) => m.trim() !== '');
+            if (fallbacks.length > 0) {
+              payload.models = [...new Set([this.cfg.model, ...fallbacks])];
             } else {
               payload.model = this.cfg.model;
             }
@@ -182,9 +187,13 @@ export class OpenRouterClient {
         // payload: same transient treatment as a failed fetch.
         return transportRetry(args, err);
       }
-      const text = body.choices?.[0]?.message?.content ?? '';
+      const choice = body.choices?.[0];
+      const text = choice?.message?.content ?? '';
       if (text.trim() === '') {
-        throw new OpenRouterError(200, 'empty completion', body);
+        // Surface finish_reason (e.g. 'error', 'content_filter') so an empty
+        // 200 is diagnosable rather than an opaque "empty completion".
+        const reason = choice?.finish_reason ? ` (finish_reason: ${choice.finish_reason})` : '';
+        throw new OpenRouterError(200, `empty completion${reason}`, body);
       }
       const u = body.usage ?? {};
       return {

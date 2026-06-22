@@ -21,6 +21,14 @@ function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Coerce a malformed numeric (NaN, Infinity, negative, or a value that slipped
+// past JSON.parse) to 0. The token/cost totals are display-only and come
+// straight off persisted state or the API body, so they must never go negative
+// or non-finite.
+function nonNegFinite(n: number): number {
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 type ResolvedBudgetOptions = BudgetOptions & { now: () => Date };
 
 export class BudgetTracker {
@@ -39,7 +47,10 @@ export class BudgetTracker {
         callsToday?: number;
       };
       // callsToday gates the spend cap, so reject a NaN, fractional, or
-      // negative count rather than letting it through to the comparison.
+      // negative count rather than letting it through to the comparison. The
+      // tokensToday/costToday totals are display-only, so they take the gentler
+      // route below: coerce a malformed value to 0 instead of rejecting the
+      // whole file.
       if (
         typeof parsed.day !== 'string' ||
         typeof parsed.callsToday !== 'number' ||
@@ -48,10 +59,8 @@ export class BudgetTracker {
       ) {
         throw new Error('invalid state shape');
       }
-      const t = parsed.tokensToday ?? 0;
-      const c = parsed.costToday ?? 0;
-      const tokensToday = Number.isFinite(t) && t >= 0 ? t : 0;
-      const costToday = Number.isFinite(c) && c >= 0 ? c : 0;
+      const tokensToday = nonNegFinite(parsed.tokensToday ?? 0);
+      const costToday = nonNegFinite(parsed.costToday ?? 0);
       state = { day: parsed.day, callsToday: parsed.callsToday, tokensToday, costToday };
     } catch (err) {
       // ENOENT is the expected first-run case. Anything else means an existing
@@ -113,11 +122,12 @@ export class BudgetTracker {
   // recordCall: a failed write only loses the running total across a restart.
   async recordUsage(usage: { totalTokens: number; cost: number }): Promise<void> {
     this.rolloverIfNeeded();
+    // nonNegFinite defends the daily counter: OpenRouter should never send a
+    // negative cost, but the figure comes straight off the API body.
     this.state = {
       ...this.state,
-      tokensToday:
-        this.state.tokensToday + (Number.isFinite(usage.totalTokens) ? usage.totalTokens : 0),
-      costToday: this.state.costToday + (Number.isFinite(usage.cost) ? usage.cost : 0),
+      tokensToday: this.state.tokensToday + nonNegFinite(usage.totalTokens),
+      costToday: this.state.costToday + nonNegFinite(usage.cost),
     };
     try {
       await writeFile(this.opts.statePath, JSON.stringify(this.state));

@@ -103,7 +103,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         </label>
         <select
           id="orc-data-collection"
-          style={S.inputSmall}
+          style={{ ...S.select, ...S.inputSmall }}
           value={o.provider?.dataCollection ?? 'allow'}
           onChange={(e) =>
             set({

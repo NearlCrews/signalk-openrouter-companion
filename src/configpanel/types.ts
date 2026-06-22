@@ -24,6 +24,9 @@ export interface PanelConfig {
     model?: string;
     maxCallsPerDay?: number;
     fallbackModels?: string[];
+    // Intentional structural mirror of ProviderRoutingCfg in src/types.ts. Kept
+    // local so the panel bundle stays decoupled from backend runtime types; if
+    // you add a provider field there, add it here and in src/schema.ts too.
     provider?: {
       sort?: 'price' | 'throughput' | 'latency';
       maxPrice?: { prompt?: number; completion?: number; request?: number };
@@ -54,8 +57,10 @@ export interface PanelStatus {
     model: string;
     callsToday: number;
     maxCallsPerDay: number;
-    tokensToday?: number;
-    costToday?: number;
+    // Always sent by the server (see StatusResponse in core/api.ts); required
+    // here to match the wire contract, like the sibling call counters.
+    tokensToday: number;
+    costToday: number;
   };
   questdb: { enabled: boolean; reachable: boolean | null };
   analyzers: AnalyzerStatus[];
@@ -77,6 +82,7 @@ export interface ReportEntry {
   failure?: string;
   model?: string;
   totalTokens?: number;
+  cachedTokens?: number;
   costUsd?: number;
 }
 

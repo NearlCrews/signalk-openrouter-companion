@@ -2,6 +2,49 @@
 
 All notable changes will be documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+<a id="v060"></a>
+
+## [0.6.0] - 2026-06-21
+
+A cost and reliability release for the OpenRouter request layer. No new
+analyzers and no config migration: existing config loads unchanged, and every
+new setting is opt-in and absent-safe. The per-day call cap is still the only
+hard spend bound; the new cost figures are observe-only.
+
+### Added
+
+- **Daily token and estimated-cost tracking.** The budget tracker now
+  accumulates total tokens and OpenRouter's reported `usage.cost` per UTC day
+  alongside the call count, surfaced through `/api/status` and shown in the
+  config panel status block. A pre-upgrade budget file loads cleanly with the
+  new totals defaulting to 0.
+- **Prompt caching for Anthropic-family models.** The stable system prompt is
+  sent with a cache breakpoint when the active model slug starts with
+  `anthropic/`, so repeat runs in a burst can reuse cached input tokens.
+  Non-Anthropic models keep automatic caching.
+- **Ordered model fallback.** A new `openrouter.fallbackModels` list sends an
+  ordered routing list (primary first) so a single provider fault can fall
+  through to the next model instead of failing the run.
+- **Provider routing controls.** New `openrouter.provider` config exposes
+  `sort` (price, throughput, or latency), `maxPrice` (a per-request price
+  ceiling), `allowFallbacks`, and `zdr` (require zero-data-retention
+  providers). Absent config sends no provider object, preserving today's
+  behavior.
+- **A provider data-collection privacy control** in the panel's OpenRouter
+  section, writing `provider.dataCollection` (allow or deny) so a run can route
+  only to providers that do not retain request data.
+- **Per-report model, token, and cost metadata.** Each successful run records
+  its model, total and cached tokens, and cost on its `reports.jsonl` row, and
+  the panel's reports drawer shows the model and cost per report.
+
+### Changed
+
+- **The trigger router now captures the full OpenRouter result** (model and
+  usage), not just the report text, and records token and cost usage after a
+  successful call. Failed or aborted runs record no usage.
+- **An explicit `zdr: false`** is sent when zero-data-retention is not
+  required, rather than relying on an implicit default.
+
 <a id="v057"></a>
 
 ## [0.5.7] - 2026-06-11

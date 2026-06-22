@@ -95,22 +95,38 @@ interface OpenRouterCfg {
     maxPrice?: { prompt?: number; completion?: number; request?: number };
     allowFallbacks?: boolean;
     dataCollection?: 'allow' | 'deny';
+    zdr?: boolean;  // require zero-data-retention providers
   };
 }
 ```
 
+> Correction (as shipped): the `provider` object also carries an optional
+> `zdr` boolean (require zero-data-retention providers), omitted from the
+> original interface above.
+
 In `attempt()`, the request body changes:
 
-1. **Usage accounting.** Add `usage: { include: true }` so the response returns
-   `usage.cost` and `usage.prompt_tokens_details.cached_tokens`.
+1. **Usage accounting.** Read `usage.cost` and
+   `usage.prompt_tokens_details.cached_tokens` from the response.
+
+   > Correction (as shipped): no `usage` flag is sent on the request body.
+   > OpenRouter now returns `usage.cost` by default, and the `usage: { include:
+   > true }` opt-in is deprecated, so the shipped code deliberately omits it and
+   > simply parses the usage block from every response.
 2. **Prompt caching.** When the active model slug starts with `anthropic/`, send
    the system message in content-array form with a cache breakpoint:
    ```ts
    { role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] }
    ```
    For non-Anthropic models the system message stays the plain-string form
-   (their caching is automatic). Below Anthropic's ~1024-token minimum the
+   (their caching is automatic). Below Anthropic's minimum-token threshold the
    breakpoint is a silent no-op, not a regression.
+
+   > Correction (as shipped): the threshold is model-tier specific. The
+   > 1,024-token floor applies to Sonnet and Opus; the shipped default model
+   > (`anthropic/claude-haiku-4.5`) has a 4,096-token cache floor. So with the
+   > default Haiku model the system prompt must exceed 4,096 tokens for caching
+   > to engage at all; below that the breakpoint contributes nothing.
 3. **Model fallback.** When `fallbackModels` is non-empty, send
    `models: [model, ...fallbackModels]` (the ordered routing list). When empty,
    the body keeps the single `model` field as today.

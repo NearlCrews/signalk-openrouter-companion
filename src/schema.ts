@@ -333,11 +333,21 @@ function buildSchemaInner(): PluginSchema {
               },
               maxPrice: {
                 type: 'object',
-                title: 'Maximum price (USD per million tokens)',
+                title: 'Maximum price',
+                description:
+                  'Skip providers above these prices. prompt/completion are USD per million tokens; request is USD per request.',
                 properties: {
-                  prompt: { type: 'number', title: 'Max prompt price' },
-                  completion: { type: 'number', title: 'Max completion price' },
-                  request: { type: 'number', title: 'Max per-request price' },
+                  prompt: {
+                    type: 'number',
+                    title: 'Max prompt price (USD / 1M tokens)',
+                    minimum: 0,
+                  },
+                  completion: {
+                    type: 'number',
+                    title: 'Max completion price (USD / 1M tokens)',
+                    minimum: 0,
+                  },
+                  request: { type: 'number', title: 'Max per-request price (USD)', minimum: 0 },
                 },
               },
             },
@@ -633,6 +643,9 @@ function buildUiSchemaInner(): PluginUiSchema {
       },
       model: {
         'ui:placeholder': 'anthropic/claude-haiku-4.5',
+      },
+      provider: {
+        'ui:order': ['sort', 'allowFallbacks', 'dataCollection', 'zdr', 'maxPrice'],
       },
     },
     questdb: {

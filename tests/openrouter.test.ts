@@ -530,6 +530,84 @@ describe('OpenRouterClient', () => {
     expect(body.model).toBeUndefined();
   });
 
+  it('surfaces a fallback model slug from the 200 body in result.model', async () => {
+    // When a fallback answers instead of the primary, OpenRouter sets `model`
+    // in the body to the model that actually served. result.model must reflect
+    // that (body.model ?? cfg.model), so cost/usage is attributed correctly.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        choices: [{ message: { content: 'fell back' } }],
+        model: 'openai/gpt-5-mini',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+    const c = makeClient({
+      model: 'anthropic/claude-haiku-4.5',
+      fallbackModels: ['openai/gpt-5-mini'],
+    });
+    const r = await c.complete({ system: 's', user: 'u' });
+    expect(r.model).toBe('openai/gpt-5-mini');
+  });
+
+  it('sends a cache_control breakpoint when only a fallback model is anthropic', async () => {
+    // The breakpoint fires when the primary OR any fallback is Anthropic, since
+    // a fallback may answer instead of the primary. Here cfg.model is OpenAI but
+    // an Anthropic fallback is configured, so the system message still carries
+    // the ephemeral cache marker.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({
+      model: 'openai/gpt-5-mini',
+      fallbackModels: ['anthropic/claude-haiku-4.5'],
+    });
+    await c.complete({ system: 'SYS', user: 'U' });
+    const body = requestBody();
+    expect(body.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }],
+    });
+  });
+
+  it('drops blank fallback entries and dedupes the models array', async () => {
+    // A cleared admin-UI row leaves a blank string; a copy-pasted slug can
+    // duplicate the primary or another fallback. Both are cleaned: blanks are
+    // dropped, and the Set leaves each slug once in first-seen order.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
+    );
+    const c = makeClient({
+      model: 'anthropic/claude-haiku-4.5',
+      fallbackModels: [
+        '',
+        '   ',
+        'openai/gpt-5-mini',
+        'anthropic/claude-haiku-4.5',
+        'openai/gpt-5-mini',
+      ],
+    });
+    await c.complete({ system: 's', user: 'u' });
+    const body = requestBody();
+    expect(body.models).toEqual(['anthropic/claude-haiku-4.5', 'openai/gpt-5-mini']);
+    expect(body.model).toBeUndefined();
+  });
+
+  it('surfaces the descriptive routing message from a terminal 503 to the caller', async () => {
+    // 503 is terminal (no retry); its descriptive routing message must reach the
+    // caller so the failure report explains the config problem rather than an
+    // opaque "HTTP 503".
+    const routingMessage = 'No allowed providers are available for the selected model.';
+    fetchMock.mockResolvedValue(
+      jsonResponse(503, { error: { code: 503, message: routingMessage } }),
+    );
+    const c = makeClient();
+    await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({
+      status: 503,
+      message: routingMessage,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('sends a provider object built from config', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),

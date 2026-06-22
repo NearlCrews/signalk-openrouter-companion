@@ -189,6 +189,22 @@ describe('ReportPublisher', () => {
     expect(v.method).toEqual(['visual', 'sound']);
   });
 
+  it('omits run-meta fields on a publishFailure JSONL entry', async () => {
+    // A failure run never completed an LLM call, so there is no model or usage
+    // to attribute. The JSONL entry records the failure reason but leaves the
+    // run-meta fields undefined.
+    await publisher.publishFailure(
+      'maintenance',
+      { kind: 'engine-stop', firedAt: new Date() },
+      new Error('upstream 503'),
+    );
+    const entry = JSON.parse((await readFile(logPath, 'utf-8')).trim());
+    expect(entry.failure).toContain('upstream 503');
+    expect(entry.model).toBeUndefined();
+    expect(entry.totalTokens).toBeUndefined();
+    expect(entry.costUsd).toBeUndefined();
+  });
+
   it('records model and usage on the JSONL entry when run-meta is supplied', async () => {
     const ctx = { kind: 'cron', firedAt: new Date() } as never;
     await publisher.publishReport('health', ctx, 'Headline\nbody', 'nominal', {

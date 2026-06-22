@@ -107,6 +107,39 @@ describe('BudgetTracker', () => {
     expect(b.costToday()).toBe(0);
   });
 
+  it('recordUsage after a UTC day rollover starts the new day from 0', async () => {
+    // Record on day A, advance the clock into day B, then record again. The
+    // rollover inside recordUsage discards day A's total first, so the day-B
+    // total reflects only the day-B amount, not the sum across the boundary.
+    const path = join(dir, 'budget.json');
+    let now = new Date('2026-05-10T23:30:00Z');
+    const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => now });
+    await b.recordUsage({ totalTokens: 100, cost: 0.01 });
+    now = new Date('2026-05-11T00:30:00Z');
+    await b.recordUsage({ totalTokens: 30, cost: 0.003 });
+    expect(b.tokensToday()).toBe(30);
+    expect(b.costToday()).toBeCloseTo(0.003, 6);
+  });
+
+  it('leaves totals unchanged for NaN, Infinity, or negative usage', async () => {
+    // The figures come straight off the API body, so a malformed totalTokens or
+    // cost (NaN, Infinity, negative) is floored to 0 before accumulating rather
+    // than corrupting the running total.
+    const path = join(dir, 'budget.json');
+    const t0 = new Date('2026-05-10T01:00:00Z');
+    const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
+    await b.recordUsage({ totalTokens: 100, cost: 0.01 });
+    for (const bad of [
+      { totalTokens: Number.NaN, cost: Number.NaN },
+      { totalTokens: Number.POSITIVE_INFINITY, cost: Number.POSITIVE_INFINITY },
+      { totalTokens: -50, cost: -0.02 },
+    ]) {
+      await b.recordUsage(bad);
+    }
+    expect(b.tokensToday()).toBe(100);
+    expect(b.costToday()).toBeCloseTo(0.01, 6);
+  });
+
   it('loads a pre-upgrade state file without token/cost fields', async () => {
     const path = join(dir, 'budget.json');
     const t0 = new Date('2026-05-10T01:00:00Z');

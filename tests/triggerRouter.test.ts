@@ -103,6 +103,58 @@ describe('TriggerRouter', () => {
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
+  it('does not record usage but does record the call and publishes a failure on a failed LLM call', async () => {
+    // A completion that rejects (e.g. a terminal 401) still counts against the
+    // daily cap: recordCall runs before the LLM await on purpose. recordUsage,
+    // however, runs only after a successful completion, so a failed call must
+    // never touch the token/cost totals. The failure is published.
+    const a = makeAnalyzer({ id: 'health', triggers: [] });
+    const { router, mocks } = makeRouter([a]);
+    mocks.complete.mockRejectedValue(new Error('upstream 401'));
+    const outcome = await router.runById('health', { kind: 'cron', firedAt: new Date() });
+    expect(outcome).toBe('failed');
+    expect(mocks.recordCall).toHaveBeenCalledOnce();
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
+    expect(mocks.publishFailure).toHaveBeenCalledOnce();
+  });
+
+  it('records neither the call nor usage when the budget is exhausted', async () => {
+    // canSpend() gates the whole spend path: a budget-exhausted run returns
+    // before recordCall (the cap counter) and before recordUsage (the token
+    // total), so a day past the cap accrues no further bookkeeping.
+    const a = makeAnalyzer({ id: 'health', triggers: [] });
+    const { router, mocks } = makeRouter([a]);
+    mocks.canSpend.mockReturnValue(false);
+    const outcome = await router.runById('health', { kind: 'cron', firedAt: new Date() });
+    expect(outcome).toBe('budget-exhausted');
+    expect(mocks.recordCall).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not record usage when aborted mid-LLM-call (shutdown path)', async () => {
+    // The documented abort guard: a stop() landing while the completion is in
+    // flight aborts the lifecycle signal and rejects the call. recordUsage must
+    // not fire (the call never succeeded) and no failure is published, so a
+    // shutdown does not raise a spurious report for the interrupted run.
+    const a = makeAnalyzer({
+      id: 'alerts',
+      triggers: [{ kind: 'engine-stop' }],
+      failureAudible: true,
+    });
+    const { deps, mocks } = makeRouterDeps();
+    const controller = new AbortController();
+    deps.signal = controller.signal;
+    mocks.complete.mockImplementation(async () => {
+      controller.abort();
+      throw new Error('request aborted');
+    });
+    const router = new TriggerRouter([a], deps);
+    const outcome = await router.runById('alerts', { kind: 'engine-stop', firedAt: new Date() });
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
+    expect(mocks.publishFailure).not.toHaveBeenCalled();
+    expect(outcome).toBe('no-input');
+  });
+
   it('isolates per-analyzer failures via Promise.allSettled', async () => {
     const bad = makeAnalyzer({
       id: 'bad',

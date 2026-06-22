@@ -18,19 +18,25 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.5.7
+## What's new in 0.6.0
 
-The config panel is rebuilt in TypeScript with light, dark, and a
-red-preserving night theme, larger marine-friendly touch targets, a Discard
-button, an unsaved-changes warning, and screen-reader fixes throughout.
-Stopping the plugin mid-run no longer publishes a failure report or sounds
-the audible alerts alarm, and a PUT fired before startup completes now gets
-a clean 503. The plugin also gains a new chat-bubble icon, an OpenAPI
-document for its REST routes, and consolidated internal helpers with type
-checking extended to the tests and the panel.
+A cost and reliability release for the OpenRouter request layer, all opt-in
+and with no config migration:
 
-See the [v0.5.7 changelog entry](CHANGELOG.md#v057) and the
-[v0.5.7 release](https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.5.7).
+- **Daily token and estimated-cost visibility**, accumulated per UTC day from
+  OpenRouter's reported cost and shown in the panel status block.
+- **Prompt caching** for Anthropic-family models, reusing cached input tokens
+  on repeat runs in a burst.
+- **Ordered model fallback** via `openrouter.fallbackModels`, so a single
+  provider fault falls through to the next model instead of failing the run.
+- **Provider routing controls** (`sort`, `maxPrice`, `allowFallbacks`, `zdr`)
+  plus a panel data-collection privacy toggle to route only to providers that
+  do not retain request data.
+- **Per-report model and cost metadata** recorded in `reports.jsonl` and shown
+  in the panel's reports drawer.
+
+See the [v0.6.0 changelog entry](CHANGELOG.md#v060) and the
+[full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
 
@@ -154,10 +160,10 @@ Advanced OpenRouter settings, edited in the saved JSON config under
 |-----|---------|---------|
 | `fallbackModels` | Ordered list of model slugs to try if the primary is unavailable. | none |
 | `provider.sort` | Routing preference: `price`, `throughput`, or `latency`. | unset |
-| `provider.maxPrice` | Per-call price ceiling in USD per million tokens (`prompt`, `completion`, `request`). | unset |
-| `provider.allowFallbacks` | When `false`, a run fails rather than substituting another provider. | `true` |
-| `provider.dataCollection` | Set to `deny` to route only to providers that do not retain request data. Also available as a panel toggle. | `allow` |
-| `provider.zdr` | Require zero-data-retention providers. | `false` |
+| `provider.maxPrice` | Per-call price ceiling. `prompt` and `completion` are USD per million tokens; `request` is a flat USD per request. | unset |
+| `provider.allowFallbacks` | When `false`, a run fails rather than substituting another provider. | unset; OpenRouter default: `true` |
+| `provider.dataCollection` | Set to `deny` to route only to providers that do not retain request data. Also available as a panel toggle. | unset; OpenRouter default: `allow` |
+| `provider.zdr` | Require zero-data-retention providers. | unset; OpenRouter default: `false` |
 
 Token use and estimated cost per day are shown in the panel status block, and
 per-report model and cost are recorded in `reports.jsonl`. The cost figure is

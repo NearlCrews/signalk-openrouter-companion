@@ -56,6 +56,19 @@ export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = DEFAULT_SEVERITY_F
 const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
 export type NotificationState = (typeof ALARM_STATES)[number];
 
+// OpenRouter provider-routing controls, mirrored 1:1 onto the request body's
+// `provider` object (see core/openrouter.ts::buildProvider). Shared by the
+// plugin config and the OpenRouter client so the two cannot drift; the panel
+// keeps its own structural copy to stay decoupled from backend runtime types,
+// and src/schema.ts is the JSON storage shape.
+export interface ProviderRoutingCfg {
+  sort?: 'price' | 'throughput' | 'latency';
+  maxPrice?: { prompt?: number; completion?: number; request?: number };
+  allowFallbacks?: boolean;
+  dataCollection?: 'allow' | 'deny';
+  zdr?: boolean;
+}
+
 export interface PluginOptions {
   openrouter: {
     apiKey: string;
@@ -64,13 +77,7 @@ export interface PluginOptions {
     maxCallsPerDay: number;
     requestTimeoutMs: number;
     fallbackModels?: string[];
-    provider?: {
-      sort?: 'price' | 'throughput' | 'latency';
-      maxPrice?: { prompt?: number; completion?: number; request?: number };
-      allowFallbacks?: boolean;
-      dataCollection?: 'allow' | 'deny';
-      zdr?: boolean;
-    };
+    provider?: ProviderRoutingCfg;
   };
   questdb: {
     enabled: boolean;
