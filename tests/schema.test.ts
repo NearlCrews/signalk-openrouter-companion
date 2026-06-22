@@ -52,6 +52,26 @@ describe('schema', () => {
     expect(s.properties.output).toBeUndefined();
   });
 
+  it('builds with no shared object references so the SignalK plugin-ci circular-reference check passes', () => {
+    // The plugin packaging check walks the schema with a single seen-set and
+    // reports any object encountered twice as a circular reference, so the cron
+    // preset arrays must be rebuilt per analyzer node, never shared.
+    const s = buildSchema();
+    const seen = new Set<object>();
+    const shared: string[] = [];
+    const walk = (value: unknown, path: string): void => {
+      if (value === null || typeof value !== 'object') return;
+      if (seen.has(value)) {
+        shared.push(path);
+        return;
+      }
+      seen.add(value);
+      for (const [key, child] of Object.entries(value)) walk(child, `${path}.${key}`);
+    };
+    walk(s, 'schema');
+    expect(shared).toEqual([]);
+  });
+
   it('hides analyzer detail fields behind a dependencies.enabled gate', () => {
     const s = buildSchema();
     const analyzers = s.properties.analyzers as {

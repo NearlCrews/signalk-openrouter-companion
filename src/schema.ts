@@ -61,11 +61,15 @@ export function cronPatternSchema(defaultPattern: string): Record<string, unknow
   // the JSON config, or a future analyzer shipping a non-preset default),
   // include it in the enum so rjsf keeps the dropdown selection consistent
   // rather than blanking it.
+  // Build fresh arrays on every call. Returning the shared module arrays makes
+  // the same enum/enumNames object appear in every analyzer's cron node, which
+  // the SignalK plugin-ci schema check flags as a circular reference (it treats
+  // any object seen twice as a cycle), failing the App Store compliance gate.
   const needsCustom = !!defaultPattern && !CRON_PRESET_VALUES.includes(defaultPattern);
-  const presets = needsCustom ? [...CRON_PRESET_VALUES, defaultPattern] : CRON_PRESET_VALUES;
+  const presets = needsCustom ? [...CRON_PRESET_VALUES, defaultPattern] : [...CRON_PRESET_VALUES];
   const titles = needsCustom
     ? [...CRON_PRESET_TITLES, `Custom: ${defaultPattern}`]
-    : CRON_PRESET_TITLES;
+    : [...CRON_PRESET_TITLES];
   return {
     type: 'string',
     title: 'Schedule',
