@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import type { ReactElement, RefObject } from 'react';
 import { memo, useEffect, useRef } from 'react';
 import { SEVERITY_FLOOR_PRESETS } from '../../severityFloors.js';
 import { buildScheduleOptions } from '../scheduleOptions.js';
@@ -29,6 +29,23 @@ interface Props {
   // row.
   severityFloor?: string;
   onSeverityFloorChange?: (id: string, value: string) => void;
+}
+
+// Move focus into a drawer when it opens and back to its toggle when it closes,
+// only on an actual open/close transition (not every re-render). Each drawer
+// gets its own previous-state latch via the hook's ref.
+function useDrawerFocus(
+  open: boolean,
+  bodyRef: RefObject<HTMLElement | null>,
+  btnRef: RefObject<HTMLElement | null>,
+): void {
+  const prevOpen = useRef(open);
+  useEffect(() => {
+    if (open === prevOpen.current) return;
+    prevOpen.current = open;
+    if (open) bodyRef.current?.focus();
+    else btnRef.current?.focus();
+  }, [open, bodyRef, btnRef]);
 }
 
 // Memoized: a keystroke or status poll elsewhere in the panel must not re-render
@@ -65,31 +82,14 @@ export const AnalyzerRow = memo(function AnalyzerRow({
 
   // Focus management: opening a drawer moves focus into it; closing restores
   // focus to the toggle that opened it (which matters when the prompt drawer is
-  // closed from its own Close button). Refs to the toggles and the drawer
-  // containers, plus a previous-state latch so focus only moves on an actual
-  // open/close transition, not on every re-render.
+  // closed from its own Close button). useDrawerFocus owns the open/close
+  // transition latch so focus moves only on an actual transition.
   const reportsBtnRef = useRef<HTMLButtonElement>(null);
   const promptBtnRef = useRef<HTMLButtonElement>(null);
   const reportsBodyRef = useRef<HTMLDivElement>(null);
   const promptBodyRef = useRef<HTMLDivElement>(null);
-  const prevReportsOpen = useRef(!!ui.reportsOpen);
-  const prevPromptOpen = useRef(!!ui.promptOpen);
-
-  useEffect(() => {
-    const open = !!ui.reportsOpen;
-    if (open === prevReportsOpen.current) return;
-    prevReportsOpen.current = open;
-    if (open) reportsBodyRef.current?.focus();
-    else reportsBtnRef.current?.focus();
-  }, [ui.reportsOpen]);
-
-  useEffect(() => {
-    const open = !!ui.promptOpen;
-    if (open === prevPromptOpen.current) return;
-    prevPromptOpen.current = open;
-    if (open) promptBodyRef.current?.focus();
-    else promptBtnRef.current?.focus();
-  }, [ui.promptOpen]);
+  useDrawerFocus(!!ui.reportsOpen, reportsBodyRef, reportsBtnRef);
+  useDrawerFocus(!!ui.promptOpen, promptBodyRef, promptBtnRef);
 
   return (
     <div style={S.analyzerPanel}>

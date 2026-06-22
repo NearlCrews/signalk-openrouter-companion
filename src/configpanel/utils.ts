@@ -49,3 +49,12 @@ export function clamp(n: number, min: number, max: number): number {
   if (n > max) return max;
   return n;
 }
+
+// Whether the prompt text differs from the analyzer's built-in default. A
+// missing default (the prompt fetch failed) counts as an override so the edit
+// buffer is not silently discarded. Single-sources the "is this a custom
+// override" rule shared by the prompt drawer's label and the panel's
+// typed-back-to-default detection.
+export function isPromptOverride(value: string, promptDefault: string | undefined): boolean {
+  return value !== promptDefault;
+}

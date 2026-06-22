@@ -47,8 +47,8 @@ export const AGING_DEFAULT_SYSTEM_PROMPT = [
 ].join(' ');
 
 interface PathSummary {
-  first: number;
-  last: number;
+  first: number | null;
+  last: number | null;
   n: number;
 }
 
@@ -115,10 +115,8 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const questdb = deps.questdb;
 
     const allPaths: string[] = [];
-    const pathsByBank = new Map<string, { cap: string; cyc: string }>();
     for (const id of bankIds) {
       const { capacityActual: cap, cycles: cyc } = bankPaths(id);
-      pathsByBank.set(id, { cap, cyc });
       allPaths.push(cap, cyc);
     }
 
@@ -132,9 +130,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
 
     const banks: BankAging[] = [];
     for (const id of bankIds) {
-      const paths = pathsByBank.get(id);
-      if (!paths) continue;
-      const { cap, cyc } = paths;
+      const { capacityActual: cap, cycles: cyc } = bankPaths(id);
       const windows: WindowEntry[] = [];
       let hasData = false;
       for (const { days, summaries } of summariesByWindow) {
@@ -184,11 +180,11 @@ function computeWindowStats(
   cap: PathSummary | undefined,
   cyc: PathSummary | undefined,
 ): WindowStats {
-  const capStart = asFiniteNumber(cap?.first);
-  const capEnd = asFiniteNumber(cap?.last);
+  const capStart = cap?.first ?? null;
+  const capEnd = cap?.last ?? null;
   const capN = cap?.n ?? 0;
-  const cycStart = asFiniteNumber(cyc?.first);
-  const cycEnd = asFiniteNumber(cyc?.last);
+  const cycStart = cyc?.first ?? null;
+  const cycEnd = cyc?.last ?? null;
   const cycN = cyc?.n ?? 0;
 
   let capacityDeltaPct: number | null = null;
@@ -247,15 +243,10 @@ async function queryWindow(
     const fIdx = cols.get('first_val') ?? -1;
     const lIdx = cols.get('last_val') ?? -1;
     const nIdx = cols.get('n') ?? -1;
-    return (row) => {
-      const firstV = fIdx >= 0 ? row[fIdx] : null;
-      const lastV = lIdx >= 0 ? row[lIdx] : null;
-      const nV = nIdx >= 0 ? row[nIdx] : 0;
-      return {
-        first: typeof firstV === 'number' ? firstV : Number.NaN,
-        last: typeof lastV === 'number' ? lastV : Number.NaN,
-        n: typeof nV === 'number' ? nV : 0,
-      };
-    };
+    return (row) => ({
+      first: asFiniteNumber(fIdx >= 0 ? row[fIdx] : null),
+      last: asFiniteNumber(lIdx >= 0 ? row[lIdx] : null),
+      n: asFiniteNumber(nIdx >= 0 ? row[nIdx] : null) ?? 0,
+    });
   });
 }

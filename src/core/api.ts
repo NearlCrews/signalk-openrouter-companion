@@ -447,6 +447,9 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
       const limitRaw = req.query?.limit;
       const limitStr = Array.isArray(limitRaw) ? limitRaw[0] : limitRaw;
       const parsed = limitStr ? Number.parseInt(limitStr, 10) : REPORTS_DEFAULT_LIMIT;
+      // Saturating clamp into [1, 100]: a degenerate limit (0, negative) pins to
+      // 1 rather than falling back to the default, which clampPositiveInt would
+      // do. A non-numeric limit (NaN) takes the default.
       const limit = Number.isFinite(parsed)
         ? Math.min(REPORTS_MAX_LIMIT, Math.max(1, parsed))
         : REPORTS_DEFAULT_LIMIT;
@@ -470,12 +473,15 @@ function buildOpenApiPaths(): Record<string, Record<string, object>> {
       ...(r.extraParameters ?? []),
     ];
     const docPath = r.path.replace('/:id/', '/{id}/');
-    const ops = paths[docPath] ?? {};
-    paths[docPath] = ops;
-    ops[r.method] = {
-      summary: r.summary,
-      ...(parameters.length > 0 ? { parameters } : {}),
-      responses: OK_RESPONSE,
+    // Each route has a unique path today; the spread still merges cleanly should
+    // two methods ever share one path, without the read-back-and-reassign dance.
+    paths[docPath] = {
+      ...paths[docPath],
+      [r.method]: {
+        summary: r.summary,
+        ...(parameters.length > 0 ? { parameters } : {}),
+        responses: OK_RESPONSE,
+      },
     };
   }
   return paths;

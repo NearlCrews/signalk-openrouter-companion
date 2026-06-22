@@ -16,6 +16,7 @@ import { useSaveLifecycle } from './hooks/useSaveLifecycle.js';
 import { useStatus } from './hooks/useStatus.js';
 import { btn, btnClass, PANEL_CLASS, PANEL_CSS, S } from './styles.js';
 import type { AnalyzerUiState, PanelConfig, QdbTestResult, TestResult } from './types.js';
+import { isPromptOverride } from './utils.js';
 
 interface Props {
   configuration: PanelConfig | undefined;
@@ -88,6 +89,12 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const toggleSection = useCallback((id: string): void => {
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+  // Force a section open (idempotent): the first-run callout uses it to reveal
+  // the OpenRouter section. Returns the same map when already open so it adds no
+  // render. All writes to openSections funnel through these two named setters.
+  const openSection = useCallback((id: string): void => {
+    setOpenSections((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
   }, []);
   // Post-fire report refresh timer, tracked so it is cleared on unmount.
   const reportRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -199,18 +206,16 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
     [patchUi, loadReports],
   );
 
-  // Read live state via the ref to avoid the stale-closure bug a rapid
-  // double-click would hit on `analyzerUi`, and use a functional state updater
-  // for the mutation. Side effects (loadReports, loadPrompt) MUST stay outside
-  // the updater: React 19 may invoke the updater more than once (StrictMode in
-  // dev, concurrent rendering in production), and the inFlightRef guard in load*
-  // is the dedup of last resort.
-  const toggleExpand = useCallback((id: string): void => {
-    setAnalyzerUi((prev) => ({
-      ...prev,
-      [id]: { ...(prev[id] ?? {}), expanded: !prev[id]?.expanded },
-    }));
-  }, []);
+  // A pure expand/collapse toggle with no side effect, so it funnels through
+  // patchUi like every other per-id mutation. Reads the live value off the ref
+  // (kept in sync above) so a rapid double-click toggles from the committed
+  // state, not a stale closure.
+  const toggleExpand = useCallback(
+    (id: string): void => {
+      patchUi(id, { expanded: !analyzerUiRef.current[id]?.expanded });
+    },
+    [patchUi],
+  );
 
   const toggleReports = useCallback(
     (id: string): void => {
@@ -274,7 +279,7 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
   const onPromptChange = useCallback(
     (id: string, value: string): void => {
       const def = analyzerUiRef.current[id]?.promptDefault;
-      if (def !== undefined && value === def) {
+      if (!isPromptOverride(value, def)) {
         // Typed back to the built-in default: drop the override so Save does not
         // persist a redundant customSystemPrompt identical to the default.
         setAnalyzerCfg(id, { customSystemPrompt: undefined });
@@ -300,7 +305,7 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
   // Open the OpenRouter section and move focus to the API key field, so the
   // first-run callout's button lands the user exactly where they need to type.
   const focusApiKey = (): void => {
-    setOpenSections((prev) => ({ ...prev, [SECTION_OPENROUTER]: true }));
+    openSection(SECTION_OPENROUTER);
     requestAnimationFrame(() => {
       document.getElementById('orc-api-key')?.focus();
     });

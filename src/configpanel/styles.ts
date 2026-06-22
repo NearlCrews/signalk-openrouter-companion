@@ -474,7 +474,7 @@ export const S = {
     padding: T.space.padReportEntry,
     borderBottom: `1px solid ${T.color.surfaceSubtle}`,
   },
-  reportTs: { fontSize: T.fontSize.xs, color: T.color.textMuted, fontFamily: T.font.monoBasic },
+  reportTs: { fontSize: T.fontSize.xs, color: T.color.textMuted, fontFamily: T.font.mono },
   reportBody: {
     fontSize: T.fontSize.sm,
     color: T.color.textPrimary,

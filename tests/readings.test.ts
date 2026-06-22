@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evictStale, evictStaleSpan, fuseMax, fuseMin, spanOf } from '../src/core/readings.js';
+import { evictStale, evictStaleSpan, fuseMax, fuseMin } from '../src/core/readings.js';
 
 interface Reading {
   ts: number;
@@ -74,20 +74,5 @@ describe('evictStaleSpan', () => {
     const map = makeMap([['stale', { ts: 1, value: 9 }]]);
     expect(evictStaleSpan(map, 50, readingValue)).toBe(0);
     expect(map.size).toBe(0);
-  });
-});
-
-describe('spanOf', () => {
-  it('reads the span without evicting anything', () => {
-    const map = makeMap([
-      ['a', { ts: 1, value: 1 }],
-      ['b', { ts: 100, value: 4 }],
-    ]);
-    expect(spanOf(map, readingValue)).toBe(3);
-    expect(map.size).toBe(2);
-  });
-
-  it('returns 0 for an empty map', () => {
-    expect(spanOf(new Map<string, Reading>(), readingValue)).toBe(0);
   });
 });

@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { S } from '../styles.js';
 import { T } from '../tokens.js';
 import type { AnalyzerUiState } from '../types.js';
+import { isPromptOverride } from '../utils.js';
 import { SecondaryButton } from './SecondaryButton.js';
 
 interface Props {
@@ -44,7 +45,7 @@ export function PromptDrawer({
       </div>
     );
   const textareaId = `orc-prompt-${analyzerId}`;
-  const isOverride = value !== ui.promptDefault;
+  const isOverride = isPromptOverride(value, ui.promptDefault);
   return (
     <div style={S.drawer}>
       <div style={{ marginBottom: T.space.md }}>

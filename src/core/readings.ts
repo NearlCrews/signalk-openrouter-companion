@@ -76,17 +76,3 @@ export function evictStaleSpan<K, V extends { ts: number }>(
   }
   return Number.isFinite(min) && Number.isFinite(max) ? max - min : 0;
 }
-
-// Pure read of the span (max - min) of `value` over a map's entries, with no
-// eviction; 0 when the map is empty. For call sites that already evicted at
-// the matching cutoff and only want the span back.
-export function spanOf<K, V>(map: Map<K, V>, value: (r: V) => number): number {
-  let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
-  for (const r of map.values()) {
-    const x = value(r);
-    if (x < min) min = x;
-    if (x > max) max = x;
-  }
-  return Number.isFinite(min) && Number.isFinite(max) ? max - min : 0;
-}

@@ -61,12 +61,11 @@ export function cronPatternSchema(defaultPattern: string): Record<string, unknow
   // the JSON config, or a future analyzer shipping a non-preset default),
   // include it in the enum so rjsf keeps the dropdown selection consistent
   // rather than blanking it.
-  const presets = [...CRON_PRESET_VALUES] as string[];
-  const titles = [...CRON_PRESET_TITLES] as string[];
-  if (defaultPattern && !presets.includes(defaultPattern)) {
-    presets.push(defaultPattern);
-    titles.push(`Custom: ${defaultPattern}`);
-  }
+  const needsCustom = !!defaultPattern && !CRON_PRESET_VALUES.includes(defaultPattern);
+  const presets = needsCustom ? [...CRON_PRESET_VALUES, defaultPattern] : CRON_PRESET_VALUES;
+  const titles = needsCustom
+    ? [...CRON_PRESET_TITLES, `Custom: ${defaultPattern}`]
+    : CRON_PRESET_TITLES;
   return {
     type: 'string',
     title: 'Schedule',

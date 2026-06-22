@@ -92,8 +92,5 @@ export const T = {
   font: {
     system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-    // Bare keyword used by the report timestamp; kept distinct from the full
-    // `mono` stack so the tokenization refactor stays pixel-identical.
-    monoBasic: 'monospace',
   },
 } as const;
