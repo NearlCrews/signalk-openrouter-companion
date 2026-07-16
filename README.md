@@ -18,25 +18,27 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.6.1
+## What's new in 0.7.0
 
-0.6.1 delivers the 0.6.0 OpenRouter cost and reliability work on a corrected
-package, with a schema packaging fix so the SignalK App Store lists it cleanly.
-All settings are opt-in with no config migration:
+0.7.0 moves the configuration panel onto the shared NearlCrews UI foundation
+and aligns development with the Binnacle toolchain. Existing saved plugin
+configuration remains compatible. Signal K 2.25.0 and Node 22.18 are the new
+minimum versions.
 
-- **Daily token and estimated-cost visibility**, accumulated per UTC day from
-  OpenRouter's reported cost and shown in the panel status block.
-- **Prompt caching** for Anthropic-family models, reusing cached input tokens
-  on repeat runs in a burst.
-- **Ordered model fallback** via `openrouter.fallbackModels`, so a single
-  provider fault falls through to the next model instead of failing the run.
-- **Provider routing controls** (`sort`, `maxPrice`, `allowFallbacks`, and
-  `zdr`) plus a panel data-collection privacy toggle to route only to providers
-  that do not retain request data.
-- **Per-report model and cost metadata** recorded in `reports.jsonl` and shown
-  in the panel's reports drawer.
+- **Shared panel foundations** from `signalk-nearlcrews-ui` 0.2.0 provide the
+  layout, controls, validation, accessibility behavior, and light, dark, and
+  night themes while replacing the duplicated local component system.
+- **More reliable configuration requests** abort stale status polls, deduplicate
+  model-list loads, retain successful results, and reject invalid QuestDB base
+  URLs before testing or saving.
+- **Binnacle-aligned development** uses Node 22.18, npm 11.16.0, TypeScript 6,
+  current compatible dependencies, modular CSS, and the same lint, boundary,
+  dead-code, browser, package, and audit gate structure.
+- **Hardened release verification** tests the production panel across Chromium,
+  Firefox, WebKit, and mobile Chromium, validates packed media and notices, and
+  starts the packed plugin on both Signal K 2.25 and the latest server.
 
-See the [v0.6.1 changelog entry](CHANGELOG.md#v061) and the
+See the [v0.7.0 changelog entry](CHANGELOG.md#v070) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does

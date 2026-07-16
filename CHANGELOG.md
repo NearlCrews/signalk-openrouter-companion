@@ -6,6 +6,15 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v070"></a>
+
+## [0.7.0] - 2026-07-15
+
+A shared configuration UI and toolchain release. Existing saved plugin
+configuration remains compatible. Signal K 2.25.0 and Node 22.18 are the new
+minimum versions because the panel uses an ESM configurator container and the
+backend targets Node 22.
+
 ### Added
 
 - **Binnacle-style verification gates.** The repository now checks formatting,
