@@ -107,13 +107,23 @@ window.fetch = async (input, init): Promise<Response> => {
     const requestCount = Number(document.body.dataset.statusRequestCount ?? 0) + 1;
     document.body.dataset.statusRequestCount = String(requestCount);
     if (statusRaceMode && requestCount === 2) {
-      init?.signal?.addEventListener(
-        'abort',
-        () => {
-          document.body.dataset.supersededStatusAborted = 'true';
-        },
-        { once: true },
-      );
+      await new Promise<void>((resolveAbort) => {
+        const signal = init?.signal;
+        let settled = false;
+        let timeout: number | undefined;
+        const finish = (aborted: boolean): void => {
+          if (settled) return;
+          settled = true;
+          if (timeout !== undefined) window.clearTimeout(timeout);
+          signal?.removeEventListener('abort', onAbort);
+          if (aborted) document.body.dataset.supersededStatusAborted = 'true';
+          resolveAbort();
+        };
+        const onAbort = (): void => finish(true);
+        timeout = window.setTimeout(() => finish(false), 10_000);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
       return jsonResponse({
         ...statusPayload,

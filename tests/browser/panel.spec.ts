@@ -111,7 +111,14 @@ test('ignores an older status response that resolves after a newer poll', async 
   await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
   await expect(page.locator('body')).toHaveAttribute('data-status-request-count', '2');
 
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(50);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
   await expect(page.locator('body')).toHaveAttribute('data-status-request-count', '3');
   await expect(page.locator('body')).toHaveAttribute('data-superseded-status-aborted', 'true');
   await expect(page.getByText('9 / 50', { exact: true })).toBeVisible();
