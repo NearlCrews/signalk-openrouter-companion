@@ -20,7 +20,7 @@ export interface UseSaveLifecycle {
   saving: boolean;
   savedNotice: SavedNotice | null;
   noticeText: string;
-  savedNoticeRef: RefObject<HTMLSpanElement | null>;
+  savedNoticeRef: RefObject<HTMLDivElement | null>;
   onSave: () => void;
   onDiscard: () => void;
 }
@@ -48,7 +48,7 @@ export function useSaveLifecycle(
   const restartWatchRef = useRef<{ prior: number } | null>(null);
   // Focus target when the Save button self-disables: the always-mounted save
   // notice (a role=status live region), so focus does not drop to <body>.
-  const savedNoticeRef = useRef<HTMLSpanElement>(null);
+  const savedNoticeRef = useRef<HTMLDivElement>(null);
   // The 30s save-latch fallback timer, tracked so it is cleared on unmount.
   const latchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

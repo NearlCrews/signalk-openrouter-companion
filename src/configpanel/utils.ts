@@ -42,7 +42,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return aDefined === bDefined;
 }
 
-// Bound n to [min, max]. Shared by NumberInput's commit step so a clamped,
+// Bound n to [min, max]. Shared by IntegerInput's commit step so a clamped,
 // truncated integer is the only value that reaches the config.
 export function clamp(n: number, min: number, max: number): number {
   if (n < min) return min;
@@ -57,4 +57,21 @@ export function clamp(n: number, min: number, max: number): number {
 // typed-back-to-default detection.
 export function isPromptOverride(value: string, promptDefault: string | undefined): boolean {
   return value !== promptDefault;
+}
+
+// The QuestDB API only supports HTTP and HTTPS base URLs. Query strings and
+// fragments cannot be part of the base because the client owns the /exec query.
+export function isHttpUrl(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) return false;
+  try {
+    const url = new URL(trimmed);
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      url.search === '' &&
+      url.hash === ''
+    );
+  } catch {
+    return false;
+  }
 }

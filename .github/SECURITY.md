@@ -10,8 +10,8 @@ We actively support the following versions with security updates:
 
 | Version | Supported |
 | ------- | --------- |
-| 0.5.x   | Yes       |
-| < 0.5   | No        |
+| 0.6.x   | Yes       |
+| < 0.6   | No        |
 
 ## Reporting a Vulnerability
 
@@ -87,13 +87,14 @@ When using this plugin:
 
 This project uses:
 
-- `npm audit` for vulnerability scanning (run in CI on every push)
+- `npm audit` for full-tree and runtime-only vulnerability scanning in CI
 - Automated dependency updates via Dependabot for security patches
 
 Run a security audit:
 
 ```bash
-npm audit
+npm run audit:release
+npm run audit:runtime
 ```
 
 ## Data Handling

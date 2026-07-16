@@ -14,7 +14,7 @@ import { DEFAULT_OPTIONS } from '../src/types.js';
 
 type Listener<T> = (v: T) => void;
 
-export interface MockBus<T> {
+interface MockBus<T> {
   push(v: T): void;
   onValue(cb: Listener<T>): () => void;
   listenerCount(): number;
@@ -39,12 +39,12 @@ function makeBus<T>(): MockBus<T> {
   };
 }
 
-export interface PublishedDelta {
+interface PublishedDelta {
   pluginId: string;
   delta: unknown;
   skVersion?: unknown;
 }
-export interface RegisteredPut {
+interface RegisteredPut {
   context: string;
   path: string;
   handler: (...args: unknown[]) => unknown;

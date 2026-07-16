@@ -1,6 +1,6 @@
 import type { FetchResult } from './types.js';
 
-export const API_BASE = '/plugins/signalk-openrouter-companion/api';
+const API_BASE = '/plugins/signalk-openrouter-companion/api';
 export const POLL_MS = 5000;
 export const REPORT_LIMIT = 10;
 

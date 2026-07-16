@@ -1316,7 +1316,7 @@ git commit -m "feat(plugin): pass fallbackModels and provider config to the Open
 - Test: `tests/schema.test.ts`
 
 **Interfaces:**
-- Produces: rjsf schema exposes `fallbackModels` (array of strings) and a `provider` object (`sort` enum, `maxPrice` object, `allowFallbacks` boolean, `dataCollection` enum, `zdr` boolean) under `openrouter`.
+- Produces: JSON Schema metadata exposes `fallbackModels` (array of strings) and a `provider` object (`sort` enum, `maxPrice` object, `allowFallbacks` boolean, `dataCollection` enum, `zdr` boolean) under `openrouter`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1528,7 +1528,7 @@ run then fails fast with OpenRouter's routing message rather than retrying.
 
 - [ ] **Step 2: Verify links and dashes**
 
-Run: `grep -n "—" README.md`
+Run: `rg -n "\\x{2014}" README.md`
 Expected: no output (no em dashes).
 
 - [ ] **Step 3: Commit**

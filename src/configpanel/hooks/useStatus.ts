@@ -21,34 +21,40 @@ export interface UseStatus {
 // Polls /status on an interval, deep-equality-guarding setStatus so an unchanged
 // payload does not re-render, and gates the interval on tab visibility: while
 // the tab is hidden the poll is skipped, and it fires immediately when the tab
-// becomes visible again. A cancelled ref suppresses state writes after unmount.
+// becomes visible again. Effect-local cancellation and request sequencing
+// suppress writes after unmount and from an older request that resolves late.
 //
-// The healthy steady state performs ZERO state updates per poll: the success
-// timestamp lives in a ref, and every setState on the success path bails out on
-// an unchanged value. Only while stale (the rare case) does each interval bump a
-// tick state so the "updated Xs ago" text keeps advancing.
+// The healthy steady state produces no re-render for an unchanged payload: the
+// success timestamp lives in a ref, and each state setter receives its existing
+// value. Only while stale does the interval refresh the displayed snapshot age.
 export function useStatus(): UseStatus {
   const [status, setStatus] = useState<PanelStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
-  // Render trigger for the live age text; the value itself is never read.
-  const [, setStaleTick] = useState(0);
+  const [staleAgeMs, setStaleAgeMs] = useState<number | undefined>(undefined);
   const lastSuccessRef = useRef<number | null>(null);
   // Mirror of `stale` readable from the interval without re-arming it.
   const staleRef = useRef(false);
-  const cancelled = useRef(false);
-
   useEffect(() => {
-    cancelled.current = false;
+    let cancelled = false;
+    let latestRequest = 0;
+    let activeController: AbortController | null = null;
 
     const markStale = (value: boolean): void => {
       staleRef.current = value;
       setStale(value);
+      const lastSuccess = lastSuccessRef.current;
+      setStaleAgeMs(value && lastSuccess !== null ? Date.now() - lastSuccess : undefined);
     };
 
     const tick = async (): Promise<void> => {
-      const r = await fetchJson<PanelStatus>('/status');
-      if (cancelled.current) return;
+      const request = ++latestRequest;
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      const r = await fetchJson<PanelStatus>('/status', { signal: controller.signal });
+      if (cancelled || request !== latestRequest) return;
+      activeController = null;
       if (r.ok && r.body) {
         const body = r.body;
         // Only a successful poll advances the freshness clock, so the staleness
@@ -78,9 +84,11 @@ export function useStatus(): UseStatus {
         staleRef.current = true;
         setStale(true);
       }
-      // While stale the age text must advance even when no other state moves;
-      // bumping only in this rare case keeps the healthy path render-free.
-      if (staleRef.current) setStaleTick((n) => n + 1);
+      // While stale the age text must advance even when no other state moves.
+      if (staleRef.current) {
+        const lastSuccess = lastSuccessRef.current;
+        setStaleAgeMs(lastSuccess === null ? undefined : Date.now() - lastSuccess);
+      }
       void tick();
     };
 
@@ -89,13 +97,13 @@ export function useStatus(): UseStatus {
     document.addEventListener('visibilitychange', tickIfVisible);
 
     return () => {
-      cancelled.current = true;
+      cancelled = true;
+      latestRequest += 1;
+      activeController?.abort();
       clearInterval(id);
       document.removeEventListener('visibilitychange', tickIfVisible);
     };
   }, []);
 
-  const staleAgeMs =
-    stale && lastSuccessRef.current !== null ? Date.now() - lastSuccessRef.current : undefined;
   return { status, statusError, stale, staleAgeMs };
 }

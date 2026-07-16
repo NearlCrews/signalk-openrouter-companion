@@ -1,7 +1,7 @@
 // Single source of truth for the scheduled-analyzer "frequency" dropdown.
 //
-// Both UIs consume this list:
-//  - the rjsf fallback schema (src/schema.ts) renders it as enum + enumNames,
+// Both configuration surfaces consume this list:
+//  - the JSON Schema (src/schema.ts) exposes it as enum + enumNames metadata,
 //  - the custom React config panel (src/configpanel) renders it as the
 //    schedule <select> in AnalyzerRow.jsx.
 //

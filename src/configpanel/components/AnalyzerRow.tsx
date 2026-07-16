@@ -1,13 +1,23 @@
 import type { ReactElement, RefObject } from 'react';
 import { memo, useEffect, useRef } from 'react';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Checkbox,
+  Cluster,
+  CollapsibleSection,
+  LabeledField,
+  Select,
+  Stack,
+  StatusIndicator,
+} from 'signalk-nearlcrews-ui';
 import { SEVERITY_FLOOR_PRESETS } from '../../severityFloors.js';
 import { buildScheduleOptions } from '../scheduleOptions.js';
-import { btn, btnClass, S } from '../styles.js';
-import { T } from '../tokens.js';
 import type { AnalyzerStatus, AnalyzerUiState } from '../types.js';
-import { DisclosureCaret } from './DisclosureCaret.js';
+import styles from './AnalyzerRow.module.css';
 import { PromptDrawer } from './PromptDrawer.js';
-import { SecondaryButton } from './SecondaryButton.js';
 
 interface Props {
   analyzer: AnalyzerStatus;
@@ -23,35 +33,24 @@ interface Props {
   onPromptReset: (id: string) => void;
   schedule: string;
   onScheduleChange: (id: string, value: string) => void;
-  // Only forecast carries a severity floor today; severityFloor is undefined for
-  // the rest so the control is omitted. The handler takes (id, value) to match
-  // onScheduleChange's signature and to stay a single stable callback for every
-  // row.
   severityFloor?: string;
   onSeverityFloorChange?: (id: string, value: string) => void;
 }
 
-// Move focus into a drawer when it opens and back to its toggle when it closes,
-// only on an actual open/close transition (not every re-render). Each drawer
-// gets its own previous-state latch via the hook's ref.
 function useDrawerFocus(
   open: boolean,
   bodyRef: RefObject<HTMLElement | null>,
-  btnRef: RefObject<HTMLElement | null>,
+  buttonRef: RefObject<HTMLElement | null>,
 ): void {
-  const prevOpen = useRef(open);
+  const previousOpen = useRef(open);
   useEffect(() => {
-    if (open === prevOpen.current) return;
-    prevOpen.current = open;
+    if (open === previousOpen.current) return;
+    previousOpen.current = open;
     if (open) bodyRef.current?.focus();
-    else btnRef.current?.focus();
-  }, [open, bodyRef, btnRef]);
+    else buttonRef.current?.focus();
+  }, [open, bodyRef, buttonRef]);
 }
 
-// Memoized: a keystroke or status poll elsewhere in the panel must not re-render
-// every analyzer row. The panel passes stable callbacks and value-equal scalars
-// plus a shared empty-ui object, so the shallow prop compare holds for every row
-// except the one whose own state changed.
 export const AnalyzerRow = memo(function AnalyzerRow({
   analyzer,
   enabled,
@@ -69,220 +68,204 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   severityFloor,
   onSeverityFloorChange,
 }: Props): ReactElement {
-  const floorId = `orc-floor-${analyzer.id}`;
-  const scheduleId = `orc-schedule-${analyzer.id}`;
-  const bodyId = `orc-analyzer-body-${analyzer.id}`;
   const reportsId = `orc-reports-${analyzer.id}`;
   const promptId = `orc-prompt-body-${analyzer.id}`;
-  const expanded = !!ui.expanded;
-  // cron.enabled false marks an event-driven analyzer (maintenance, alerts): it
-  // has no schedule, so the frequency dropdown is replaced by a static value.
-  const cronEnabled = !!analyzer.cron?.enabled;
+  const expanded = Boolean(ui.expanded);
+  const cronEnabled = Boolean(analyzer.cron?.enabled);
   const scheduleOptions = buildScheduleOptions(schedule);
 
-  // Focus management: opening a drawer moves focus into it; closing restores
-  // focus to the toggle that opened it (which matters when the prompt drawer is
-  // closed from its own Close button). useDrawerFocus owns the open/close
-  // transition latch so focus moves only on an actual transition.
-  const reportsBtnRef = useRef<HTMLButtonElement>(null);
-  const promptBtnRef = useRef<HTMLButtonElement>(null);
+  const reportsButtonRef = useRef<HTMLButtonElement>(null);
+  const promptButtonRef = useRef<HTMLButtonElement>(null);
   const reportsBodyRef = useRef<HTMLDivElement>(null);
   const promptBodyRef = useRef<HTMLDivElement>(null);
-  useDrawerFocus(!!ui.reportsOpen, reportsBodyRef, reportsBtnRef);
-  useDrawerFocus(!!ui.promptOpen, promptBodyRef, promptBtnRef);
+  useDrawerFocus(Boolean(ui.reportsOpen), reportsBodyRef, reportsButtonRef);
+  useDrawerFocus(Boolean(ui.promptOpen), promptBodyRef, promptButtonRef);
 
   return (
-    <div style={S.analyzerPanel}>
-      <div style={S.analyzerHeader}>
-        {/* aria-label names the checkbox; the visible title lives in the toggle
-            button beside it, so no separate <label> is wired. */}
-        <input
-          type="checkbox"
+    <CollapsibleSection
+      title={
+        <Cluster gap={2}>
+          <span className={styles.title}>{analyzer.title}</span>
+          <Badge tone={enabled ? 'success' : 'neutral'}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
+        </Cluster>
+      }
+      actions={
+        <Checkbox
+          label={
+            <>
+              <span className={styles.visuallyHidden}>{analyzer.title}: </span>
+              Enabled
+            </>
+          }
           checked={enabled}
-          aria-label={`Enable ${analyzer.title}`}
-          onChange={(e) => setEnabled(analyzer.id, e.target.checked)}
+          onChange={(event) => setEnabled(analyzer.id, event.target.checked)}
         />
-        <button
-          type="button"
-          style={S.analyzerHeaderToggle}
-          aria-expanded={expanded}
-          aria-controls={bodyId}
-          onClick={() => onToggleExpand(analyzer.id)}
-        >
-          <DisclosureCaret expanded={expanded} />
-          <span style={S.analyzerTitle}>{analyzer.title}</span>
-          <span style={{ ...S.analyzerPill, ...(enabled ? S.analyzerPillOn : S.analyzerPillOff) }}>
-            {enabled ? 'Enabled' : 'Disabled'}
-          </span>
-        </button>
-      </div>
-      {/* The body stays mounted (hidden when collapsed) so the header's
-          aria-controls target always resolves; its expensive contents mount only
-          while expanded. The inline body style is applied only when expanded so
-          the `hidden` attribute's display:none is not overridden. */}
-      <div id={bodyId} hidden={!expanded} style={expanded ? S.analyzerBody : undefined}>
-        {expanded ? (
-          <>
-            <div style={S.analyzerSettings}>
-              <span style={S.inlineControl}>
-                {cronEnabled ? (
-                  <>
-                    <label htmlFor={scheduleId} style={S.selectLabel}>
-                      Frequency
-                    </label>
-                    <select
-                      id={scheduleId}
-                      style={S.select}
-                      value={schedule}
-                      onChange={(e) => onScheduleChange(analyzer.id, e.target.value)}
-                    >
-                      {scheduleOptions.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                ) : (
-                  <>
-                    <span style={S.selectLabel}>Frequency</span>
-                    <span style={S.staticValue}>Event-driven</span>
-                    <span style={S.hint}>runs from boat events, not a schedule</span>
-                  </>
-                )}
-              </span>
-              {severityFloor != null && (
-                <span style={S.inlineControl}>
-                  <label htmlFor={floorId} style={S.selectLabel}>
-                    Severity floor
-                  </label>
-                  <select
-                    id={floorId}
-                    style={S.select}
-                    value={severityFloor}
-                    onChange={(e) => onSeverityFloorChange?.(analyzer.id, e.target.value)}
-                  >
-                    {SEVERITY_FLOOR_PRESETS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </span>
-              )}
-            </div>
-            <div style={S.analyzerActions}>
-              {ui.fire && (
-                <span
-                  style={{
-                    ...S.fireResult,
-                    color: ui.fire.ok ? T.color.successText : T.color.dangerText,
-                  }}
-                  role="status"
-                  aria-live="polite"
-                >
-                  {ui.fire.text}
-                </span>
-              )}
-              <button
-                type="button"
-                className={btnClass(false)}
-                style={btn((!enabled || ui.fire?.pending) && S.btnDisabled)}
-                disabled={!enabled || ui.fire?.pending}
-                title={enabled ? undefined : 'Enable this analyzer to fire it'}
-                onClick={() => onFire(analyzer.id)}
-              >
-                {ui.fire?.pending ? 'Firing...' : 'Fire now'}
-              </button>
-              <SecondaryButton
-                btnRef={reportsBtnRef}
-                aria-expanded={!!ui.reportsOpen}
-                aria-controls={reportsId}
-                onClick={() => onToggleReports(analyzer.id)}
-              >
-                {ui.reportsOpen ? 'Hide reports' : 'View reports'}
-              </SecondaryButton>
-              <SecondaryButton
-                btnRef={promptBtnRef}
-                aria-expanded={!!ui.promptOpen}
-                aria-controls={promptId}
-                onClick={() => onTogglePrompt(analyzer.id)}
-              >
-                {ui.promptOpen ? 'Hide prompt' : 'Edit prompt'}
-              </SecondaryButton>
-            </div>
-            <div
-              id={reportsId}
-              ref={reportsBodyRef}
-              tabIndex={-1}
-              hidden={!ui.reportsOpen}
-              style={ui.reportsOpen ? { ...S.drawer, outline: 'none' } : undefined}
+      }
+      headingLevel={3}
+      open={expanded}
+      onOpenChange={() => onToggleExpand(analyzer.id)}
+    >
+      <Stack gap={3}>
+        {cronEnabled ? (
+          <LabeledField
+            label="Frequency"
+            description="The analyzer's scheduled run frequency."
+            layout="inline"
+            density="compact"
+          >
+            <Select
+              value={schedule}
+              onChange={(event) => onScheduleChange(analyzer.id, event.target.value)}
             >
-              {ui.reportsOpen ? (
-                <>
-                  {ui.reportsLoading && (
-                    <div style={S.empty} role="status" aria-live="polite">
-                      Loading reports...
-                    </div>
-                  )}
-                  {!ui.reportsLoading && ui.reportsError && (
-                    <div style={S.reportFailure} role="alert">
-                      Failed to load reports: {ui.reportsError}
-                    </div>
-                  )}
-                  {!ui.reportsLoading &&
-                    !ui.reportsError &&
-                    (!ui.reports || ui.reports.length === 0) && (
-                      <div style={S.empty}>No reports yet for this analyzer.</div>
-                    )}
-                  {!ui.reportsLoading &&
-                    ui.reports?.map((r) => (
-                      // ts+trigger alone can collide for a multi-engine analyzer
-                      // (two engine reports at the same trigger); the engine id
-                      // disambiguates without an array-index key.
-                      <div key={`${r.ts}-${r.trigger}-${r.engineId ?? ''}`} style={S.reportEntry}>
-                        <div style={S.reportTs}>
-                          {r.ts} · trigger={r.trigger}
-                          {r.engineId ? ` · engine=${r.engineId}` : ''}
-                          {r.durationSec ? ` · ${r.durationSec}s` : ''}
-                        </div>
-                        {r.model && (
-                          <div style={S.statSub}>
-                            {r.model}
-                            {typeof r.totalTokens === 'number'
-                              ? ` · ${r.totalTokens.toLocaleString()} tok`
-                              : ''}
-                            {typeof r.costUsd === 'number' ? ` · $${r.costUsd.toFixed(4)}` : ''}
-                          </div>
-                        )}
-                        {r.report && <div style={S.reportBody}>{r.report}</div>}
-                        {r.failure && <div style={S.reportFailure}>FAILURE: {r.failure}</div>}
-                      </div>
-                    ))}
-                </>
-              ) : null}
-            </div>
-            <div
-              id={promptId}
-              ref={promptBodyRef}
-              tabIndex={-1}
-              hidden={!ui.promptOpen}
-              style={{ outline: 'none' }}
+              {scheduleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </LabeledField>
+        ) : (
+          <StatusIndicator tone="neutral">
+            Event-driven: runs from boat events instead of a schedule.
+          </StatusIndicator>
+        )}
+
+        {severityFloor !== undefined ? (
+          <LabeledField
+            label="Severity floor"
+            description="The lowest forecast deterioration level that raises an alert."
+            layout="inline"
+            density="compact"
+          >
+            <Select
+              value={severityFloor}
+              onChange={(event) => onSeverityFloorChange?.(analyzer.id, event.target.value)}
             >
-              {ui.promptOpen ? (
-                <PromptDrawer
-                  analyzerId={analyzer.id}
-                  ui={ui}
-                  value={promptValue}
-                  onChange={onPromptChange}
-                  onReset={onPromptReset}
-                  onClose={() => onTogglePrompt(analyzer.id)}
-                />
-              ) : null}
-            </div>
-          </>
+              {SEVERITY_FLOOR_PRESETS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </LabeledField>
         ) : null}
-      </div>
-    </div>
+
+        <Cluster gap={2}>
+          <Button
+            variant="primary"
+            aria-label={`Fire now for ${analyzer.title}`}
+            loading={Boolean(ui.fire?.pending)}
+            loadingLabel="Running"
+            disabled={!enabled}
+            title={enabled ? undefined : 'Enable this analyzer to fire it'}
+            onClick={() => onFire(analyzer.id)}
+          >
+            Fire now
+          </Button>
+          <Button
+            ref={reportsButtonRef}
+            aria-label={`${ui.reportsOpen ? 'Hide' : 'View'} reports for ${analyzer.title}`}
+            aria-expanded={Boolean(ui.reportsOpen)}
+            aria-controls={reportsId}
+            onClick={() => onToggleReports(analyzer.id)}
+          >
+            {ui.reportsOpen ? 'Hide reports' : 'View reports'}
+          </Button>
+          <Button
+            ref={promptButtonRef}
+            aria-label={`${ui.promptOpen ? 'Hide' : 'Edit'} prompt for ${analyzer.title}`}
+            aria-expanded={Boolean(ui.promptOpen)}
+            aria-controls={promptId}
+            onClick={() => onTogglePrompt(analyzer.id)}
+          >
+            {ui.promptOpen ? 'Hide prompt' : 'Edit prompt'}
+          </Button>
+          {ui.fire?.text ? (
+            <StatusIndicator
+              tone={ui.fire.ok ? 'success' : 'danger'}
+              role="status"
+              aria-live="polite"
+            >
+              {ui.fire.text}
+            </StatusIndicator>
+          ) : null}
+        </Cluster>
+
+        <div
+          id={reportsId}
+          ref={reportsBodyRef}
+          className={styles.drawer}
+          tabIndex={-1}
+          hidden={!ui.reportsOpen}
+        >
+          {ui.reportsOpen ? (
+            <Card>
+              {ui.reportsLoading ? (
+                <StatusIndicator tone="info" role="status" aria-live="polite">
+                  Loading reports...
+                </StatusIndicator>
+              ) : ui.reportsError ? (
+                <Banner tone="danger" live="assertive">
+                  Failed to load reports: {ui.reportsError}
+                </Banner>
+              ) : !ui.reports || ui.reports.length === 0 ? (
+                <StatusIndicator tone="neutral">No reports yet for this analyzer.</StatusIndicator>
+              ) : (
+                <div className={styles.reportList}>
+                  {ui.reports.map((report) => (
+                    <article
+                      key={`${report.ts}-${report.trigger}-${report.engineId ?? ''}`}
+                      className={styles.reportEntry}
+                    >
+                      <div className={styles.reportTimestamp}>
+                        {report.ts} · trigger={report.trigger}
+                        {report.engineId ? ` · engine=${report.engineId}` : ''}
+                        {report.durationSec ? ` · ${report.durationSec}s` : ''}
+                      </div>
+                      {report.model ? (
+                        <div className={styles.reportMetadata}>
+                          {report.model}
+                          {typeof report.totalTokens === 'number'
+                            ? ` · ${report.totalTokens.toLocaleString()} tokens`
+                            : ''}
+                          {typeof report.costUsd === 'number'
+                            ? ` · $${report.costUsd.toFixed(4)}`
+                            : ''}
+                        </div>
+                      ) : null}
+                      {report.report ? (
+                        <div className={styles.reportBody}>{report.report}</div>
+                      ) : null}
+                      {report.failure ? (
+                        <div className={styles.reportFailure}>Failure: {report.failure}</div>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </Card>
+          ) : null}
+        </div>
+
+        <div
+          id={promptId}
+          ref={promptBodyRef}
+          className={styles.drawer}
+          tabIndex={-1}
+          hidden={!ui.promptOpen}
+        >
+          {ui.promptOpen ? (
+            <PromptDrawer
+              analyzerId={analyzer.id}
+              ui={ui}
+              value={promptValue}
+              onChange={onPromptChange}
+              onReset={onPromptReset}
+              onClose={() => onTogglePrompt(analyzer.id)}
+            />
+          ) : null}
+        </div>
+      </Stack>
+    </CollapsibleSection>
   );
 });

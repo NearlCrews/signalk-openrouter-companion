@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "react", "react-dom"]
+  },
+  "include": [
+    "fixtures/browser/**/*",
+    "tests/browser/**/*",
+    "playwright.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["coverage", "dist", "node_modules", "public"]
+}

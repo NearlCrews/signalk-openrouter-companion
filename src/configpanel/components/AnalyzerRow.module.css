@@ -1,0 +1,61 @@
+.title {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.drawer {
+  min-width: 0;
+}
+
+.reportList {
+  display: grid;
+  gap: var(--snui-space-3);
+}
+
+.reportEntry {
+  min-width: 0;
+  padding-block-end: var(--snui-space-3);
+  border-block-end: 1px solid var(--snui-color-border);
+}
+
+.reportEntry:last-child {
+  padding-block-end: 0;
+  border-block-end: 0;
+}
+
+.reportTimestamp,
+.reportMetadata {
+  color: var(--snui-color-text-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.reportTimestamp {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.reportBody,
+.reportFailure {
+  margin-block-start: var(--snui-space-2);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.reportFailure {
+  color: var(--snui-color-danger);
+  font-weight: 650;
+}

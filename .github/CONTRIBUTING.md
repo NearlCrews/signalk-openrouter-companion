@@ -32,18 +32,24 @@ those before proposing a structural change.
 ## Pull requests
 
 1. Fork the repository and create a feature branch from `main`.
-2. Install dependencies with `npm install`, then build and verify with
-   `npm run build` and `npm test`.
-3. Make focused commits with clear messages (see below).
-4. Add or update tests under `tests/` and keep the existing suite green.
-5. Run the pre-publish gate locally before pushing:
+2. Install dependencies and the browser test runtimes:
 
    ```bash
-   npm run prepublishOnly
+   npm ci
+   npx playwright install --with-deps chromium firefox webkit
    ```
 
-   This runs the type check, Biome lint, the Vitest suite, and the build.
-   It must be clean.
+   Then run `npm run verify`.
+3. Make focused commits with clear messages (see below).
+4. Add or update tests under `tests/` and keep the existing suite green.
+5. Run the browser gate locally before pushing:
+
+   ```bash
+   npm run verify:browser
+   ```
+
+   This runs formatting, lint, boundary, dead-code, type, coverage, build,
+   size, and production-panel browser checks. It must be clean.
 
 6. Update documentation (`README.md`, `CHANGELOG.md`, `docs/`) as needed.
 7. Open a pull request against `main` with a clear description, and fill
@@ -51,10 +57,15 @@ those before proposing a structural change.
 
 ## Code style
 
-- TypeScript 6, strict mode, ESM. Node 20.18 or newer (CI runs on Node 20
-  and 22).
-- Biome handles lint and format: `npm run lint`, or `npm run lint:fix` to
-  auto-fix. The Biome config in `biome.json` is the source of truth.
+- TypeScript 6, strict mode, ESM. Node 22.18 or newer. The primary CI gate
+  runs on Node 24 with npm 11.16.0, and Signal K plugin CI checks Node 22 and
+  24. The manifest accepts npm 10.9.3 only for the upstream Node 22 bootstrap.
+- Biome handles lint and format, ESLint handles typed and React Hooks rules,
+  Markdownlint checks documentation, and cspell checks prose. Use
+  `npm run lint`, or `npm run lint:fix` for the safe code fixes.
+- Use `signalk-nearlcrews-ui` primitives for shared panel controls, layout,
+  status, theming, and accessibility behavior. Keep only plugin-specific
+  presentation in local CSS Modules.
 - No em dashes anywhere: in code, commits, PR descriptions, or docs. Use
   a colon, a comma, or split into two sentences.
 - Default to no comments. Add a comment only when it explains a

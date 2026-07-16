@@ -1,10 +1,26 @@
 name: plugin-ci
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
-    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@c088ce9c1685c769130da4a65964e8f1ac7a0531
+    with:
+      format-check-command: npm run format:check
+      coverage-command: npm run test:coverage
+      node-versions: '["22", "24"]'
+      enable-armv7: false
+      enable-signalk-integration: true
+      signalk-server-versions: '["2.25.0", "latest"]'

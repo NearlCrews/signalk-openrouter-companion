@@ -401,10 +401,17 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
         return;
       }
+      if (parsed.search || parsed.hash) {
+        res.status(400).json({
+          ok: false,
+          error: 'QuestDB base URL must not include a query string or fragment',
+        });
+        return;
+      }
       // Use the normalized URL the parser produced (with a stripped trailing
       // slash) so probe() builds `${url}/exec?query=...` without a double
       // slash on inputs like 'http://qdb:9000/'.
-      const normalized = parsed.href.replace(/\/$/, '');
+      const normalized = parsed.href.replace(/\/+$/, '');
       try {
         const client = new QuestDBClient({ url: normalized });
         const reachable = await client.probe(rt?.signal);

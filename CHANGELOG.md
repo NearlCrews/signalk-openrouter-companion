@@ -6,6 +6,52 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- **Binnacle-style verification gates.** The repository now checks formatting,
+  typed lint rules, dependency boundaries, dead code, package contents, bundle
+  sizes, full-tree and runtime vulnerabilities, and the production configuration
+  remote in Chromium, Firefox, WebKit, and mobile Chromium. Matching commit and
+  push hooks are included, and Signal K plugin CI starts the packed plugin on
+  both the declared Signal K 2.25 floor and the latest server release.
+
+### Changed
+
+- **The configuration panel now uses `signalk-nearlcrews-ui` 0.2.0.** Shared
+  panel roots, themes, sections, fields, controls, banners, status indicators,
+  metrics, and action bars replace the duplicated local component and token
+  system. The former `orc-theme` preference migrates into the shared theme key.
+  The panel also gains save-blocking field validation, direct invalid-field
+  focus, focus-preserving busy actions, uniquely named analyzer controls,
+  lazy-retained analyzer controls, container-width reflow checks,
+  coarse-pointer coverage, and a clear native CSS scope compatibility message.
+- **Status and model requests are more stable.** Superseded and unmounted status
+  polls are aborted, a late response cannot replace a newer snapshot, concurrent
+  model-list requests are deduplicated, and a successfully loaded list is
+  retained instead of being fetched again on every field focus.
+- **QuestDB base URLs are handled consistently.** Surrounding whitespace and
+  trailing slashes are normalized at runtime, while query strings, fragments,
+  invalid URLs, and non-HTTP schemes are rejected before testing or saving.
+- **Dependencies and build tools are refreshed.** Runtime dependencies are at
+  their current releases, React is 19.2.7, Signal K server types are 2.30.0,
+  Biome is 2.5.4, ESLint is 10.7.0, Vitest is 4.1.10, Webpack is 5.108.4, and
+  esbuild is 0.28.1. TypeScript remains on the shared Binnacle 6.0 toolchain.
+- **The pinned development toolchain is Node 22.18 with npm 11.16.0.** The
+  manifest also accepts npm 10.9.3 as a compatibility floor so the upstream
+  Signal K Node 22 lane can install before running the same project checks.
+  Signal K plugin coverage remains on Node 22 and 24.
+- **The Signal K server floor is 2.25.0.** This panel ships an ESM Module
+  Federation container, whose loader support first appeared in Signal K 2.25.
+- **Release checks now cover the complete dependency tree and packed media.**
+  The full audit complements the runtime-only audit, every declared icon and
+  screenshot must exist in the tarball, bundled dependency notices ship with
+  the package, and the reusable Signal K workflow is commit-pinned and tests
+  both the minimum and latest supported servers.
+- **The shared panel migration has an explicit gzip budget.** The production
+  panel increased from 17.3 kB to 24.6 kB gzip, or 42 percent, in exchange
+  for the shared accessibility, validation, responsive layout, and theme
+  contracts. A 25 kB gzip gate bounds additional growth.
+
 <a id="v061"></a>
 
 ## [0.6.1] - 2026-06-22
@@ -196,7 +242,7 @@ and the shared daily budget is now documented, and 23 tests close coverage holes
 - **Documented that battery threshold alerts are LLM-and-budget contingent.** The
   per-bank alert is written by an OpenRouter call gated by the shared daily
   budget, so a spent budget or an outage can drop a crossing at the helm. The
-  schema description, the README, and `CLAUDE.md` now state this and advise
+  schema description, the README, and development guidance now state this and advise
   pairing with a hardware or BMS alarm. The deliberate low-SoC latch-on-silence
   asymmetry with cell-imbalance is also documented in `src/core/batteryMonitor.ts`.
 
@@ -901,7 +947,7 @@ publish path).
 
 ### Docs
 
-- `CLAUDE.md`, `DEVELOPMENT.md`, and `CONTRIBUTING.md` updated to
+- Developer and contributor documentation updated to
   reflect the registry flow, the new shared helpers, and the actual
   Node 20.18+ engines floor.
 - `.gitignore` explicitly lists `.remember/` (an inner
@@ -942,8 +988,9 @@ publish path).
 Adds a custom React configuration panel that the Signal K admin UI loads
 in place of the rjsf-rendered schema, plus a REST control plane the
 panel uses for live status, manual triggering, last-report viewing, and
-per-analyzer system-prompt overrides. The rjsf schema stays in place as
-the storage shape and as a fallback if the panel ever fails to load.
+per-analyzer system-prompt overrides. The JSON Schema stays in place as
+the storage shape and server metadata. Signal K Admin uses the custom
+configurator exclusively and reports it as unavailable if loading fails.
 
 ### Added (custom config panel)
 
@@ -983,13 +1030,13 @@ The plugin now exposes a small read+action HTTP surface via the SK
 
 | Verb | Path | Purpose |
 | ---- | ---- | ------- |
-| GET  | `/api/status` | Live snapshot for the panel polling loop |
+| GET | `/api/status` | Live snapshot for the panel polling loop |
 | POST | `/api/openrouter/test` | One-token round-trip ping using saved API key |
-| GET  | `/api/openrouter/models` | Proxy to OpenRouter `/api/v1/models` (1 h cache) |
+| GET | `/api/openrouter/models` | Proxy to OpenRouter `/api/v1/models` (1 h cache) |
 | POST | `/api/questdb/test` | Probe an arbitrary or saved QuestDB URL |
 | POST | `/api/analyzers/:id/fire` | Synthesize a put-kind ctx and dispatch via `TriggerRouter` |
-| GET  | `/api/analyzers/:id/reports?limit=N` | Tail JSONL log filtered by analyzer (default 10, max 100) |
-| GET  | `/api/analyzers/:id/prompt` | Returns `{ default, current }` for the panel's prompt editor |
+| GET | `/api/analyzers/:id/reports?limit=N` | Tail JSONL log filtered by analyzer (default 10, max 100) |
+| GET | `/api/analyzers/:id/prompt` | Returns `{ default, current }` for the panel's prompt editor |
 
 All routes are mounted by SK under the standard plugin REST prefix and
 inherit SK admin authentication; no separate auth wiring is needed.
@@ -1005,7 +1052,7 @@ inherit SK admin authentication; no separate auth wiring is needed.
   configured window-day numbers travel through the user prompt's
   data block instead, so a custom override doesn't lose meaning.
 - New `core/cfg.ts::resolveSystemPrompt(custom, fallback)` helper
-  centralises the trim/fallback dance. Each analyzer constructor
+  centralizes the trim/fallback dance. Each analyzer constructor
   shrinks from a three-line `if (custom?.trim()) ... else ...`
   pattern to one call.
 - The default ALERTS prompt now interpolates `MAX_ALERT_MESSAGE_CHARS`
@@ -1070,6 +1117,7 @@ The changes were derived from a study of
 `signalk-nmea2000-emitter-cannon`'s actual mapping conventions.
 
 ### Breaking changes
+
 - **Alert notification paths moved**. Battery alerts now publish on
   canonical per-bank Signal K paths (`notifications.electrical.batteries.<bankId>.lowSoc`
   and `.cellImbalance`) instead of the producer-namespaced shared paths
@@ -1099,6 +1147,7 @@ The changes were derived from a study of
   inherit the default).
 
 ### Changed (notification PGN alignment)
+
 - Reports now use `state: 'nominal'` (was `'normal'`). Per Signal K 1.8.2,
   `nominal` is the informational/no-action state; `normal` means
   "recovered after an alarm". `signalk-nmea2000-emitter-cannon`'s
@@ -1128,6 +1177,7 @@ The changes were derived from a study of
   notices when the LLM call failed.
 
 ### Added (notification PGN helpers)
+
 - `core/paths.ts::batteryAlertPath(bankId, kind)`: canonical per-bank
   battery alert path builder. Replaces `alertNotificationPath(subkind)`.
 - `core/paths.ts::alertIdFor(path)`: deterministic 16-bit nonzero alert
@@ -1137,6 +1187,7 @@ The changes were derived from a study of
   `signalk-nmea2000-emitter-cannon` for PGN 126983.
 
 ### Removed
+
 - `core/paths.ts::alertNotificationPath` and `ALERT_NOTIFICATION_PREFIX`
   (replaced by `batteryAlertPath` + canonical paths).
 - `ReportPublisher.publish()` (no consumer left after the router fallback
@@ -1147,6 +1198,7 @@ The changes were derived from a study of
   no per-subkind enter set needed.
 
 ### Internal
+
 - `core/publisher.ts::methodFor(state)` and `AUDIBLE_STATES` set picks the
   notification method based on state (one O(1) Set.has).
 - `core/publisher.ts::makeDelta` signature simplified: dropped the unused
@@ -1157,12 +1209,14 @@ The changes were derived from a study of
 ## [0.2.0] - 2026-05-12
 
 ### Added (trend analyzers and configurable history)
+
 - Battery aging tracker: `AgingAnalyzer` produces a monthly trend report per battery bank, computing capacity-loss-per-100-cycles over two rolling windows (default 30 and 90 days) from QuestDB and ranking banks by degradation rate. Default trigger: cron `0 8 1 * *` (1st of month, 8am) plus on-demand PUT to `plugins.openrouter-companion.aging.run`. Publishes on `notifications.openrouter-companion.aging.report`.
 - Engine performance drift: `DriftAnalyzer` produces a weekly trend report comparing the past week's per-RPM-bin fuel rate and SOG against a configurable trailing baseline (default 30 days, from QuestDB), to surface gradual changes (fouled prop, dirty hull, fuel-quality drift, alternator load creep). Default trigger: cron `0 8 * * 0` (Sunday, 8am) plus on-demand PUT to `plugins.openrouter-companion.drift.run`. Publishes on `notifications.openrouter-companion.drift.report`.
 - Configurable history lookback for trend analyzers. Aging exposes `shortWindowDays` (default 30) and `longWindowDays` (default 90); drift exposes `baselineDays` (default 30). Adjustable in the admin UI within sensible bounds (aging short: 7-365 days, aging long: 7-1095 days, drift: 14-365 days).
 - `plugin.whenReady()`: returns a promise that resolves once the deferred `Promise.all([probe, budget]).then()` block in `start()` has wired the router. Replaces the brittle 'router ready' debug-log polling the integration tests were using; resets on every `start()` so a restart hands out a fresh promise.
 
 ### Changed (prompt and query architecture)
+
 - `MaintenanceAnalyzer` no longer fetches 30-day baselines from QuestDB or includes them in its prompt. Per-session reports now describe just that session, with battery aging and engine drift moved to dedicated trend analyzers.
 - `HealthAnalyzer` no longer fetches 30-day SoC baselines from QuestDB or includes them in its prompt. Daily reports now describe today's battery snapshot only.
 - All analyzer prompts now require plain prose (no markdown headers, bullets, dividers) so the Signal K data browser's single-string notification renderer displays them legibly.
@@ -1170,6 +1224,7 @@ The changes were derived from a study of
 - Aging queries are batched per window across all banks: one SQL per window regardless of how many banks were discovered.
 
 ### Internal (shared infrastructure and efficiency)
+
 - Shared infrastructure in `src/core/`:
   - `paths.ts`: notification and PUT path prefixes, `notificationReportPath(id)`, `pluginPutPath(id, verb)`, `bankPathPrefix(id)`, `enginePathPrefix(id)`, `engineNotificationsPath(id)`, `alertNotificationPath(subkind)`, `bankPaths(id)`, `enginePaths(id)`, `SOG_PATH`. `types.ts::DEFAULT_OPTIONS` derives the four PUT paths and the maintenance notification path from these helpers.
   - `triggers.ts::buildTriggers(cfg, eventMapper?)`: collapses the five copies of the cron + put + events block every analyzer was hand-rolling.
@@ -1205,6 +1260,7 @@ The changes were derived from a study of
 ### Initial 0.2.0 (consolidation + battery analyzers)
 
 ### Added
+
 - Battery health monitoring: `HealthAnalyzer` produces a daily summary covering every discovered battery bank (SoC, voltage, current, cycles, cell balance, 30-day baselines if QuestDB is co-installed). Triggers: cron (default `0 8 * * *`) plus on-demand PUT to `plugins.openrouter-companion.health.run`. Publishes on `notifications.openrouter-companion.health.report`.
 - Battery alerts: `AlertAnalyzer` emits short notifications when a bank crosses configurable thresholds (low SoC, cell imbalance). Triggers on `battery-event` subkinds from the new `BatteryMonitor` state machine. Publishes per subkind on `notifications.openrouter-companion.alert.<subkind>`.
 - `BatteryMonitor`: per-bank state machine watching SoC and per-cell voltage; emits enter/exit events with configurable thresholds and hysteresis.
@@ -1217,6 +1273,7 @@ The changes were derived from a study of
 - `AlertAnalyzer` truncates outgoing alert messages to 200 chars (word-boundary cut, ellipsis suffix) so chartplotters that read NMEA 2000 PGN 126985 (Alert Text) via `signalk-nmea2000-emitter-cannon` get clean, in-budget text. Short messages pass through unchanged.
 
 ### Changed
+
 - Admin form ergonomics: per-section titles + descriptions, checkbox UI for event subscriptions, cron pattern as a clean `enum + enumNames` preset dropdown. Custom (non-preset) cron patterns can be set by editing the plugin's saved JSON config file directly. Advanced fields (base URL, request timeout, notification path, log filename, per-analyzer PUT path and cron timezone) are no longer surfaced in the admin form: defaults are sensible and `mergeWithDefaults` fills any missing values at runtime. They remain editable in the plugin's saved JSON config file. (Earlier attempts to hide them via `ui:widget: 'hidden'` left empty inputs visible because the SK admin UI's custom `FieldTemplate` ignores rjsf's `hidden` prop and still renders the label and wrapper. The final fix dropped the hidden fields from the schema entirely and switched the cron preset selector from `anyOf` with a freeform branch to `enum + enumNames`, which rjsf 5 renders as a single clean select.)
 - Analyzer and QuestDB detail fields collapse from the admin form when their `enabled` checkbox is unchecked. Note: rjsf clears dependent field values when toggling enabled off; re-enabling restores defaults, not your previously-entered values. Save before toggling if you have non-default tunables.
 - Default `analyzers.alerts.triggers.put.path` is now `plugins.openrouter-companion.alerts.run` (was empty). The PUT toggle itself is still off by default.
@@ -1234,12 +1291,15 @@ The changes were derived from a study of
 - `MAINTENANCE_SUPPORTED_EVENTS` export from `src/types.ts` (currently `['engine-stop']`).
 
 ### Fixed
+
 - Plugin now schedules a one-shot rescan even when the initial startup discovery finds no engine or battery data, so analyzers come up cleanly when the gateway publishes data after the plugin starts.
 
 ### Removed
+
 - The sibling `signalk-openrouter-batteries-companion` repo is archived. Its analyzers (`health`, `alerts`) and supporting infra (`BatteryMonitor`, bank discovery) now live in this plugin.
 
 ### Internal
+
 - Post-consolidation cleanup pass: prompt overhauls (SI-units contract, "cause not determinable" hint, unit-suffixed numeric lines, JSON-dump rewritten as labeled lines for alerts), tighter type narrowing across analyzers (generic `Analyzer<I>`, discriminated `BatteryEvent` union, type-guard for `BatteryEventKind`), shared `readNumberAt` helper extracted to `src/core/skNode.ts`, magic numbers hoisted to module-level named constants in `src/index.ts`, widened notification-state enum to the full Signal K `ALARM_STATE`, new tests (start/stop cycle, PUT-handler invocation, 500/502 retries, stall+restart debounce, source eviction, cron timezone, QuestDB validation), README rewritten to cover all three analyzers.
 - Schema refactor: `triggerSchema` / `triggerUiSchema` take options bags instead of positional args, and two named helper types (`EnabledGatedNode`, `TriggerSchemaNode`) are exported from `PluginSchema` so test inline casts shrink and changes to the public type surface fail at the builder rather than at test time.
 - CI: GitHub Actions workflows for `plugin-ci` (type-check + lint + build) and `test`.
@@ -1249,6 +1309,7 @@ The changes were derived from a study of
 ## [0.1.0] - 2026-05-10
 
 ### Added
+
 - Initial release.
 - Plugin core: rolling buffer, engine-session detector, trigger router, OpenRouter HTTP client, optional QuestDB enrichment, default publisher (SK notification + JSONL log), per-day budget cap.
 - Maintenance analyzer: engine-stop trigger and PUT-on-demand trigger, plain-English session reports with engine alarm snapshot and battery state.

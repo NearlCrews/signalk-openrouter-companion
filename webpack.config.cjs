@@ -9,8 +9,9 @@ const pkg = require('./package.json');
 const containerName = pkg.name.replace(/[-@/]/g, '_');
 
 module.exports = {
-  entry: './src/configpanel/index.ts',
+  entry: {},
   mode: 'production',
+  devtool: false,
   // Output an ES module so the SK admin's `<script type="module">` tag
   // (auto-applied because this package's `package.json` has
   // `"type": "module"`) can `import()` our container and read its
@@ -21,8 +22,11 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, 'public'),
     clean: true,
+    filename: '[name].js',
+    chunkFilename: '[name].[contenthash].mjs',
     module: true,
     chunkFormat: 'module',
+    uniqueName: containerName,
   },
   module: {
     rules: [
@@ -46,6 +50,21 @@ module.exports = {
         exclude: /node_modules/,
         loader: 'esbuild-loader',
         options: { target: 'es2022', jsx: 'automatic' },
+      },
+      {
+        test: /\.module\.css$/,
+        use: [
+          'style-loader',
+          {
+            loader: 'css-loader',
+            options: {
+              modules: {
+                localIdentName: 'orc_[name]__[local]--[hash:base64:5]',
+                namedExport: false,
+              },
+            },
+          },
+        ],
       },
     ],
   },
@@ -72,7 +91,11 @@ module.exports = {
       // fine. Sharing more than necessary just bloats the federation
       // negotiation without payoff.
       shared: {
-        react: { singleton: true, requiredVersion: pkg.devDependencies.react },
+        react: {
+          singleton: true,
+          requiredVersion: '>=19.2.0 <20.0.0',
+          import: false,
+        },
       },
     }),
   ],

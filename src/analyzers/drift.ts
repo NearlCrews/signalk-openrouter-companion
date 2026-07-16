@@ -94,7 +94,7 @@ const BIN_CASE_SQL = ((): string => {
   return `CASE ${whens.join(' ')} ELSE '${elseBin}' END`;
 })();
 
-export interface BinStats {
+interface BinStats {
   // Count of RPM samples in this bin that had a fresh fuel.rate / SOG pair
   // within RPM_JOIN_WINDOW_US. Tracked per metric: fuel.rate and SOG join
   // independently, so one can be well-covered while the other is sparse.
@@ -104,12 +104,12 @@ export interface BinStats {
   meanSog: number | null;
 }
 
-export interface BinDelta {
+interface BinDelta {
   fuelRateDeltaPct: number | null;
   sogDeltaPct: number | null;
 }
 
-export interface EngineDrift {
+interface EngineDrift {
   engineId: string;
   thisWeek: Record<BinKey, BinStats>;
   baseline: Record<BinKey, BinStats>;

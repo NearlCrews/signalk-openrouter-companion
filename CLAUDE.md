@@ -23,7 +23,7 @@ Project memory for Claude Code. Read at the start of every session.
 
 ## Conventions
 
-- TypeScript 6, ESM, Node 20.18+ (engines floor; CI tests on Node 20 and 22). esbuild bundles backend to `dist/index.js` (target `node20`, matching the engines floor); webpack + esbuild-loader bundles the React panel to `public/remoteEntry.js`. vitest for tests. biome for lint and format. `npm run type-check` runs three chained `tsc --noEmit` passes: `src/` (`tsconfig.json`), `tests/` (`tsconfig.tests.json`), and the config panel (`tsconfig.panel.json`), so dead test fixtures and panel type errors both fail the gate.
+- TypeScript 6, ESM, and Node 22.18+ are the development baseline. The primary CI gate uses Node 24, and Signal K plugin CI tests Node 22 and 24. esbuild bundles the backend to `dist/index.js` with target `node22`; webpack and esbuild-loader bundle the React panel to `public/remoteEntry.js`. Vitest covers unit tests. Biome owns formatting and baseline lint rules, ESLint adds typed and React Hooks rules, Markdownlint checks documentation, and cspell checks prose. `npm run type-check` runs four chained TypeScript passes: backend (`tsconfig.json`), tests (`tsconfig.tests.json`), panel (`tsconfig.panel.json`), and browser tooling (`tsconfig.tools.json`).
 - No em dashes anywhere in code, commits, or docs. Use colons, commas, or split sentences.
 - Tests live in `tests/`. Share the `_mocks.ts` harness; don't re-mock fundamentals. Use `makePluginRuntime(opts)` for any new test that builds a `PluginRuntime` literal; don't hand-roll the cfg/llm/budget/etc. boilerplate.
 - Notification paths: `notifications.openrouter-companion.<analyzer>.<...>`, except `alerts`, which publishes per-bank events to the SK source data path `notifications.electrical.batteries.<bank>.<kind>` (see `src/core/paths.ts::batteryAlertPath`) so third-party bridges already watching that subtree pick them up. Analyzer-run failures always land on the canonical `notifications.openrouter-companion.<analyzer>.report` channel.
@@ -38,9 +38,9 @@ Project memory for Claude Code. Read at the start of every session.
 - Panel state contract from the admin: `{ configuration, save }`. The panel maintains a local `cfg` edit buffer initialized from `configuration` (resync via useEffect), and `save(fullCfg)` persists. No partial PATCH endpoint; the panel always sends the full object.
 - All panel `fetch` calls go through `apiFetch(path, opts)` (sets `credentials: 'same-origin'` to match the SK admin convention) and the `fetchJson(path, opts)` envelope on top of it, which returns `{ ok, status, body, error }`. Don't bypass either.
 - `setStatus` is guarded by a deep-equality check via `jsonEqual(a, b)`: identical poll responses don't re-render. New per-id state lives on the consolidated `analyzerUi: {[id]: {...}}` map; never add another parallel `{[id]: ...}` map.
-- The panel is themed through `--orc-*` CSS variables defined in `src/configpanel/tokens.ts` and consumed in `styles.ts`. `ThemeToggle` pins one of Auto (follow the host admin), Light, Dark, or a red-preserving Night theme by setting `data-orc-theme` on the `.orc-config-panel` root, and persists the choice in `localStorage` under `orc-theme`. Don't hardcode colors in component styles; add a token.
-- Panel code is split: data and effects live in `src/configpanel/hooks/` (`useConfig`, `useStatus`, `useOpenRouterModels`, `useSaveLifecycle`), presentational pieces in `src/configpanel/components/` (`AnalyzerRow`, `StatusBlock`, `OpenRouterSection`, `QuestDBSection`, `PromptDrawer`, `NumberInput`, `SegmentedControl`, `ThemeToggle`, `CollapsibleSection`, `SecondaryButton`, `TestButton`, `TestStatus`, `DisclosureCaret`), and shared pure helpers in `utils.ts`, `recency.ts`, `fireOutcome.ts`, and `scheduleOptions.ts`. `PluginConfigurationPanel.tsx` composes them.
-- The rjsf schema (`src/schema.ts`) stays as the storage shape and is loaded as a fallback. Don't remove it.
+- The panel uses `signalk-nearlcrews-ui` for its root, theme contract, layout, fields, controls, feedback, and action bar. `PanelRoot` migrates the old `orc-theme` preference to the shared theme key. Keep plugin-specific presentation in CSS Modules, use the shared tokens, and do not hardcode colors.
+- Panel code is split: data and effects live in `src/configpanel/hooks/` (`useConfig`, `useStatus`, `useOpenRouterModels`, `useSaveLifecycle`), presentational pieces live in `src/configpanel/components/` (`AnalyzerRow`, `StatusBlock`, `OpenRouterSection`, `QuestDBSection`, `PromptDrawer`, and `IntegerInput`), and shared pure helpers live in `utils.ts`, `recency.ts`, `fireOutcome.ts`, and `scheduleOptions.ts`. `PluginConfigurationPanel.tsx` composes them.
+- The JSON Schema (`src/schema.ts`) stays as the storage shape and server metadata. Signal K Admin uses the custom configurator exclusively, so do not describe the schema as a panel fallback or remove it.
 
 ## Standardized triggers contract
 
@@ -51,7 +51,8 @@ Project memory for Claude Code. Read at the start of every session.
 
 ## Pre-push gate
 
-- Run `npm run prepublishOnly` (type-check + lint + test + build) before any push or publish. Never push without it being clean.
+- Run `npm run verify:browser` before any push. It covers formatting, linting, dependency boundaries, dead code, every type-check target, coverage, production builds, bundle budgets, and the Chromium panel suite.
+- Run `npm run verify:release` before release approval or publishing. It adds the full cross-browser matrix, package validation, and dependency audits.
 - Linked into `~/.signalk/node_modules/signalk-openrouter-companion` for live dev against the local Signal K server at port 3000.
 
 ## Documentation layout
@@ -66,12 +67,13 @@ Docs are organized by audience; keep the repo root clean (it is the first impres
 
 ## Release process
 
-Every version push updates four things together, then ships:
+Every version update and release follows this sequence:
 
 1. Bump `package.json` version.
 2. Add the dated `CHANGELOG.md` entry as `## [X.Y.Z] - YYYY-MM-DD`, preceded by an `<a id="vXYZ"></a>` anchor (every release header carries one so the README can deep-link).
 3. Refresh the `README.md` `## What's new in <version>` section (right after the intro blockquote, before What it does). It is **replaced, not appended**: only the most recent release, never an accumulating list. Content is a one-line intro plus 3 to 5 bolded bullets sourced from that release's CHANGELOG entry, ending with links to the CHANGELOG version anchor (`CHANGELOG.md#vXYZ`) and the full release history. No AI-process talk anywhere in it.
-4. Run the pre-push gate, push, tag `vX.Y.Z`, and create the GitHub release; the `publish.yml` workflow publishes to npm on the release event.
+4. Run the pre-push gate, and push the reviewed version change.
+5. After explicit final approval, run `npm run verify:release`, tag `vX.Y.Z`, and create the GitHub release. The `publish.yml` workflow publishes to npm on the release event.
 
 ## Quick-start commands
 

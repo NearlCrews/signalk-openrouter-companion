@@ -22,6 +22,16 @@ describe('QuestDBClient', () => {
     expect(await q.probe()).toBe(true);
   });
 
+  it('normalizes whitespace, trailing slashes, queries, and fragments before requests', async () => {
+    fetchMock.mockResolvedValueOnce(ok({ dataset: [[1]], columns: [] }));
+    const q = new QuestDBClient({ url: '  http://localhost:9000///?token=old#fragment  ' });
+    await expect(q.probe()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:9000/exec?query=SELECT%201',
+      expect.any(Object),
+    );
+  });
+
   it('probe rejects on a transport failure so the caller can report the reason', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'));
     const q = new QuestDBClient({ url: 'http://localhost:9000' });

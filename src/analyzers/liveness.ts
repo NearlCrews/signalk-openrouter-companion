@@ -28,7 +28,7 @@ export const LIVENESS_DEFAULT_SYSTEM_PROMPT = [
   REPORT_BODY_INSTRUCTION,
 ].join(' ');
 
-export interface PathLiveness {
+interface PathLiveness {
   path: string;
   lastSeenAgeSec: number | null;
   stale: boolean;

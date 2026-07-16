@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fireOutcomeText, isFireSuccess } from '../src/configpanel/fireOutcome.js';
 import { humanizeAgo } from '../src/configpanel/recency.js';
 import { buildScheduleOptions } from '../src/configpanel/scheduleOptions.js';
-import { clamp, jsonEqual } from '../src/configpanel/utils.js';
+import { clamp, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
 import { CRON_PRESETS } from '../src/cronPresets.js';
 
 describe('jsonEqual', () => {
@@ -69,6 +69,24 @@ describe('clamp', () => {
   });
   it('returns the shared bound when min equals max', () => {
     expect(clamp(7, 3, 3)).toBe(3);
+  });
+});
+
+describe('isHttpUrl', () => {
+  it.each(['http://localhost:9000', 'https://questdb.example.test/exec'])('accepts %s', (value) => {
+    expect(isHttpUrl(value)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    '',
+    'questdb.local:9000',
+    'ftp://questdb.local',
+    'not a url',
+    'http://questdb.local:9000?token=secret',
+    'http://questdb.local:9000#fragment',
+  ])('rejects %s', (value) => {
+    expect(isHttpUrl(value)).toBe(false);
   });
 });
 

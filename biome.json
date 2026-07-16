@@ -1,25 +1,60 @@
 {
-  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "files": { "ignoreUnknown": false },
-  "linter": {
+  "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
+  "vcs": {
     "enabled": true,
-    "rules": {
-      "recommended": true,
-      "suspicious": { "noExplicitAny": "warn" }
-    }
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "main"
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!**/*.svg",
+      "!!.claude",
+      "!!.remember",
+      "!!coverage",
+      "!!dist",
+      "!!node_modules",
+      "!!playwright-report",
+      "!!public",
+      "!!test-results",
+      "!!package-lock.json"
+    ]
   },
   "formatter": {
     "enabled": true,
+    "useEditorconfig": true,
     "indentStyle": "space",
     "indentWidth": 2,
     "lineWidth": 100
   },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
   "javascript": {
     "formatter": {
       "quoteStyle": "single",
-      "trailingCommas": "all",
+      "jsxQuoteStyle": "double",
       "semicolons": "always",
-      "arrowParentheses": "always"
+      "trailingCommas": "all"
     }
+  },
+  "html": {
+    "formatter": {
+      "enabled": true
+    },
+    "experimentalFullSupportEnabled": true
   }
 }

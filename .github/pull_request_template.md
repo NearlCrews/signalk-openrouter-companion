@@ -35,7 +35,9 @@
 
 ## Checklist
 
-- [ ] `npm run prepublishOnly` passes locally (type-check + lint + tests + build)
+- [ ] `npm run verify:browser` passes locally
+- [ ] `npm run verify:release` passes before release approval
+- [ ] `npm run test:host-asset` passes against Signal K Admin when the panel changes
 - [ ] Tests cover the change. New `collectContext` paths have a happy-path test and at least one null-path test.
 - [ ] No em dashes anywhere (code, commits, PR description, docs).
 - [ ] Shared helpers used where applicable: `buildTriggers`, `bankPaths`/`enginePaths`, `notificationReportPath`/`pluginPutPath`, `publishReport`, `escapeSqlLiteral` + `indexColumns`, `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio`, `clampPositiveInt`.
@@ -60,8 +62,8 @@
 
 <!-- What did you run? Were tests run against a live Signal K server? -->
 
-```
-npm run prepublishOnly
+```text
+npm run verify:browser
 # paste relevant output
 ```
 

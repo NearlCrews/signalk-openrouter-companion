@@ -4,14 +4,17 @@ Technical documentation for working on `signalk-openrouter-companion`. For user-
 
 ## Architecture
 
-This repo is **one npm package**. New monitoring domains land as `Analyzer` modules under `src/analyzers/`, not as sibling repos or sub-packages. A previous session mistakenly created a sibling repo and had to consolidate; that mistake is documented in [CLAUDE.md](../CLAUDE.md) and [CHANGELOG.md](../CHANGELOG.md) under 0.2.0.
+This repo is **one npm package**. New monitoring domains land as `Analyzer`
+modules under `src/analyzers/`, not as sibling repos or sub-packages. The
+shared registry keeps every analyzer inside the same plugin lifecycle,
+configuration, and release unit.
 
 ### Layered structure
 
-```
+```text
 src/
 ├── index.ts                  Plugin entry: lifecycle, subscriptions, PUT + REST registration
-├── schema.ts                 rjsf JSON Schema (storage shape; fallback admin UI)
+├── schema.ts                 JSON Schema storage shape and server metadata
 ├── types.ts                  Plugin options + DEFAULT_OPTIONS + mergeWithDefaults
 ├── cronPresets.ts             CRON_PRESETS: schedule-dropdown presets shared by schema + panel
 ├── severityFloors.ts          SEVERITY_FLOOR_PRESETS, SeverityFloor, isSeverityFloor: shared by schema + panel + forecast
@@ -27,8 +30,9 @@ src/
 │   ├── liveness.ts           State: stale-path and multi-source detection
 │   └── forecast.ts           Trend: short-term weather outlook from buffer + optional QuestDB
 ├── configpanel/
-│   ├── index.ts              Module Federation entry stub (Webpack emits remoteEntry around this)
-│   └── PluginConfigurationPanel.tsx  React 19 panel exposed as `./PluginConfigurationPanel`
+│   ├── PluginConfigurationPanel.tsx  Module Federation panel exposed as `./PluginConfigurationPanel`
+│   ├── components/           Shared UI composition plus plugin-specific CSS Modules
+│   └── hooks/                Config, save, model-list, and live-status state
 └── core/
     ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
@@ -86,7 +90,8 @@ interface AnalyzerTriggerCfg {
 
 Each analyzer constructor calls `buildTriggers(this.id, cfg.triggers, eventMapper?)` which returns the `TriggerSpec[]` consumed by the lifecycle in `index.ts`. The PUT path is derived from the analyzer id inside `buildTriggers`, not stored on the cfg, so it cannot drift from the convention. The lifecycle reads `analyzer.triggers` and wires cron via `CronScheduler`, PUT via `app.registerPutHandler`, and events from `EngineDetector` / `BatteryMonitor`. Adding a new trigger kind means adding a `TriggerSpec` variant in `Analyzer.ts` and a dispatch arm in `TriggerRouter`. The analyzers themselves are decoupled.
 
-Full rules for adding a new analyzer live in [CLAUDE.md](../CLAUDE.md) and the project's memory at `~/.claude/projects/-home-dietpi-src-signalk-openrouter-companion/memory/triggers_contract.md`.
+The complete analyzer workflow is in [Adding a new analyzer](#adding-a-new-analyzer)
+below and in [CONTRIBUTING.md](../.github/CONTRIBUTING.md).
 
 ### State vs transition vs trend
 
@@ -129,13 +134,13 @@ Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's `registerWi
 
 | Verb | Path | Purpose |
 | ---- | ---- | ------- |
-| GET  | `/api/status` | Live status snapshot for the panel |
+| GET | `/api/status` | Live status snapshot for the panel |
 | POST | `/api/openrouter/test` | One-token ping with the saved key |
-| GET  | `/api/openrouter/models` | Proxy to the OpenRouter models list, cached 1 h |
+| GET | `/api/openrouter/models` | Proxy to the OpenRouter models list, cached 1 h |
 | POST | `/api/questdb/test` | Probe a QuestDB URL |
 | POST | `/api/analyzers/:id/fire` | Manually trigger an analyzer |
-| GET  | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100) |
-| GET  | `/api/analyzers/:id/prompt` | `{ default, current }` for the prompt editor |
+| GET | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100) |
+| GET | `/api/analyzers/:id/prompt` | `{ default, current }` for the prompt editor |
 
 Manual fire is also available via the standardized SK PUT trigger paths (`plugins.openrouter-companion.<analyzer>.run`); the REST `fire` endpoint is a panel convenience.
 
@@ -145,17 +150,30 @@ Manual fire is also available via the standardized SK PUT trigger paths (`plugin
 npm run build          # clean + tsc -d + esbuild bundle + webpack panel
 npm run build:types    # tsc --emitDeclarationOnly --declaration --outDir dist
 npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
-npm run build:panel    # webpack --config webpack.config.cjs (admin UI panel)
+npm run build:panel    # node scripts/build-panel.mjs (admin UI panel + build stats)
+npm run check:panel    # verify the remote, shared UI, and host-shared React
 npm run clean          # delete dist/ and public/ via Node fs.rmSync (cross-platform)
 ```
 
 Outputs:
 
-- `dist/index.js` (single ESM backend bundle, ~173 KB)
+- `dist/index.js` (single ESM backend bundle)
 - `dist/*.d.ts` (TypeScript declarations)
-- `public/remoteEntry.js` + lazy chunks (Webpack Module Federation panel, ~48 KB total)
+- `public/remoteEntry.js` plus lazy Module Federation chunks
 
-esbuild externalizes only `@signalk/server-api`; everything else in the backend, including `croner`, is bundled. The panel bundle shares `react` 19 as a Module Federation `singleton: true` so it reuses the SK admin UI's React runtime. The panel is built with `experiments.outputModule: true` and `library: { type: 'module' }` because this package's `"type": "module"` makes SK admin inject `<script type="module">`; legacy `library: 'var'` doesn't work under that loader.
+esbuild externalizes only `@signalk/server-api`; everything else in the
+backend, including `croner`, is bundled. The panel bundles the exact-pinned
+`signalk-nearlcrews-ui` 0.2.0 component library and shares React 19 as a Module
+Federation singleton supplied by the Signal K admin host. `PanelRoot` owns the
+theme tokens and migrates the former `orc-theme` preference into the shared
+theme key. The panel checks native CSS scope support before mounting, and its
+responsive rules follow the panel container rather than the browser viewport.
+Plugin-specific drawer and report styles stay in CSS Modules.
+
+The panel is built with `experiments.outputModule: true` and
+`library: { type: 'module' }` because this package's `"type": "module"` makes
+Signal K admin load the container as an ES module. The bundle check rejects a
+remote that embeds its own React implementation or omits the shared UI package.
 
 ## Tests
 
@@ -163,9 +181,15 @@ esbuild externalizes only `@signalk/server-api`; everything else in the backend,
 npm run test           # vitest run, one-shot
 npm run test:watch     # vitest, watch mode
 npm run test:coverage  # vitest run --coverage
+npm run test:browser   # current production remote build in Chromium
+npm run test:browser:cross # desktop and mobile Chromium, Firefox, and WebKit
+npm run test:browser:with-build # build, then run Chromium
+npm run test:browser:cross:with-build # build, then run every browser project
+npm run test:host-asset # running Signal K Admin requests the installed remote
+npm run test:integration # running server registers and serves the installed remote
 ```
 
-352 tests across 28 files cover:
+The unit and integration suite covers:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
@@ -182,21 +206,41 @@ The shared test mocks live in `tests/_mocks.ts`:
 ## Lint and type-check
 
 ```bash
-npm run lint           # biome check src/ tests/
-npm run lint:fix       # biome check --write src/ tests/
-npm run format         # biome format --write src/ tests/
-npm run type-check     # tsc --noEmit
+npm run lint           # code, documentation, and spelling checks
+npm run lint:fix       # safe Biome and ESLint code fixes
+npm run format         # format supported repository files with Biome
+npm run format:check   # verify formatting without writes
+npm run cruise         # dependency boundaries and circular imports
+npm run deadcode       # unused files, exports, and dependencies
+npm run type-check     # backend, tests, panel, and tooling configs
 ```
 
-Biome is the source of truth for style. The repo follows strict-mode TypeScript (`strict: true`) with no implicit `any` and no unchecked indexed access (`noUncheckedIndexedAccess`). The `type-check` script runs `tsc` three times: `src/` via `tsconfig.json`, `tests/` via `tsconfig.tests.json`, and the config panel via `tsconfig.panel.json`, so dead fixture keys in tests and panel type errors both fail the gate.
+Biome owns formatting and its recommended lint rules. ESLint adds typed promise
+checks and React Hooks rules. Markdownlint and cspell cover documentation. The
+repo follows strict-mode TypeScript with no implicit `any` and no unchecked
+indexed access. The `type-check` script covers `src/`, tests, the config panel,
+Playwright, Vite, and browser fixtures through four TypeScript configurations.
 
-## Pre-publish gate
+## Verification gates
 
 ```bash
-npm run prepublishOnly # type-check + lint + test + build
+npm run verify:commit  # formatting, lint, boundaries, and dead code
+npm run verify:fast    # commit gate plus all type checks
+npm run verify         # fast gate, coverage, production build, and size budgets
+npm run verify:browser # full local gate plus Chromium
+npm run verify:release # cross-browser, package, and dependency audit checks
 ```
 
-This is the gate before any push or publish. It must be clean. If lint emits warnings (e.g., the few existing non-null assertions in tests), that's fine; only errors fail the gate.
+Run `npm run hooks` once to activate the Binnacle-style repository hooks. The
+commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
+`prepublishOnly` and the release workflow both run `verify:release` before npm
+can publish an artifact.
+
+The `signalk-nearlcrews-ui` 0.2 migration increased the panel JavaScript from
+17.3 kB gzip to 24.6 kB gzip, a 42 percent increase. This documented
+exception trades duplicated local controls for the shared accessibility,
+validation, responsive layout, and theme contracts. The 25 kB gzip gate keeps
+future growth within less than 2 percent of the migrated bundle.
 
 ## Local development against a real Signal K server
 
@@ -211,6 +255,13 @@ sudo systemctl restart signalk.service
 After each code change, `npm run build && sudo systemctl restart signalk.service` rebuilds and reloads. `tsx watch` (`npm run dev`) works for tighter iteration but doesn't produce the `dist/` bundle the SK server actually loads, so save it for unit-level testing. Note: `dist/index.js` MUST finish writing before SK restarts, otherwise SK loads the old code and any new `registerWithRouter` routes return 404.
 
 For panel-only iteration: `npm run build:panel && sudo systemctl restart signalk.service` (panel changes do not require the backend to rebuild). After the restart, hard-refresh the admin tab so the browser drops the cached `remoteEntry.js`.
+
+Run `npm run test:host-asset` after the restart to verify that Signal K Admin
+discovers and requests this plugin's production Module Federation asset. This
+is an asset-registration smoke test, not an authenticated configuration-page
+test. The production browser fixture separately initializes and mounts the
+container. Set `SIGNALK_URL` when the test server is not on
+`http://127.0.0.1:3000`.
 
 To inspect the served plugin schema:
 
@@ -227,7 +278,7 @@ Credentials must come from environment variables; do not hardcode.
 
 ## Conventions
 
-- **No em dashes** in code, commits, PR descriptions, or docs. Use a colon, a comma, or split sentences. This applies to text written by both humans and AI assistants on the project.
+- **No em dashes** in code, commits, PR descriptions, or docs. Use a colon, a comma, or split sentences. This applies to all committed project text.
 - **Default to no comments.** Add a comment only when it captures non-obvious WHY: a hidden constraint, a subtle invariant, a workaround. Skip WHAT-comments (the code says what) and change-narrative comments (the PR description says why).
 - **Trust internal callers.** Only validate at system boundaries (user input, external APIs). Don't add `Number.isFinite` checks against your own helpers; let the type system carry that.
 - **Notification paths**: `notifications.openrouter-companion.<analyzer>.<...>`. Use `notificationReportPath(id)` from `core/paths.ts`.
@@ -270,7 +321,7 @@ Step by step:
 
 6. Add the config block (including `customSystemPrompt?: string`) to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS`. Use `pluginPutPath('myname')` for the default PUT path.
 
-7. Add the schema section in `src/schema.ts` (a per-analyzer `type: 'object'` with `enabled` and a nested `triggers` block). The schema is the storage shape and drives the rjsf fallback admin UI.
+7. Add the schema section in `src/schema.ts` (a per-analyzer `type: 'object'` with `enabled` and a nested `triggers` block). The schema remains the storage shape and server-facing configuration metadata. Signal K Admin uses the custom configurator exclusively when the plugin declares one.
 
 8. Add tests under `tests/myname.test.ts` using `makeAnalyzerDeps` (and `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`. If your test needs a `PluginRuntime` literal, use `makePluginRuntime`.
 
@@ -280,24 +331,36 @@ Step by step:
 
 GitHub Actions workflows under `.github/workflows/`:
 
-- `plugin-ci.yml`: reuses the upstream SK plugin CI workflow (type-check + lint + build).
-- `ci.yml`: lint, type-check, vitest with coverage, and build on Node 20.x and 22.x.
+- `plugin-ci.yml`: reuses the upstream Signal K plugin workflow on Node 22 and
+  24 across Linux x64, Linux arm64, macOS, and Windows. The Node 20 armv7 lane
+  is disabled because the package now requires Node 22.18 or newer. Its real
+  Signal K server integration lane installs and starts the packed plugin on
+  both Signal K 2.25.0 and the latest server release.
+- `ci.yml`: runs the full release gate on Node 24 with npm 11.16.0, including
+  Chromium, Firefox, WebKit, package validation, and full and runtime audits.
 - `codeql.yml`: CodeQL static analysis.
-- `publish.yml`: npm publish, triggered when a GitHub release is published.
+- `publish.yml`: verifies, packs, and publishes the exact artifact when a
+  non-prerelease GitHub release is published.
 
-All run on push and pull_request to `main`.
+The validation workflows run on pushes and pull requests to `main`, and CodeQL
+also runs weekly. Publishing runs only for a published, non-prerelease GitHub
+release.
 
 ## Tech stack
 
 - TypeScript 6 strict, ESM, ES2022 target
-- Node 20.18+ (specified in `package.json#engines`; CI tests on Node 20 and 22)
-- `@signalk/server-api` 2.24+ (peer dep)
+- Node 22.18+ and npm 11.16.0 for development. The manifest accepts npm 10.9.3
+  only so the upstream Node 22 plugin workflow can bootstrap the project.
+- `@signalk/server-api` 2.30 types with a `>=2.24.0 <3` runtime peer range. The
+  separate Signal K server floor is 2.25.0 because that release added the ESM
+  configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5 + esbuild-loader + React 19 (admin panel bundle, Module Federation)
-- Biome 2.4 (lint + format)
-- Vitest 4 (tests)
+- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.2
+- Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
+- Vitest 4 with v8 coverage and Playwright cross-browser checks
 
 ## License
 
-Apache-2.0. Copyright 2026 Nearl Crews. See [LICENSE](../LICENSE).
+Apache-2.0. Copyright 2026 Nearl Crews. See [LICENSE](../LICENSE) and
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

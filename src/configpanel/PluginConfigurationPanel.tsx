@@ -1,22 +1,31 @@
 import type { ReactElement } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActionBar,
+  Banner,
+  Button,
+  Cluster,
+  CollapsibleSection,
+  PanelRoot,
+  Section,
+  Stack,
+  StatusIndicator,
+  type StatusTone,
+  supportsNativeCssScope,
+  ThemeToggle,
+} from 'signalk-nearlcrews-ui';
 import { DEFAULT_SEVERITY_FLOOR_VALUE } from '../severityFloors.js';
 import { errText, fetchJson, REPORT_LIMIT } from './api.js';
 import { AnalyzerRow } from './components/AnalyzerRow.js';
-import { CollapsibleSection } from './components/CollapsibleSection.js';
 import { OpenRouterSection } from './components/OpenRouterSection.js';
 import { QuestDBSection } from './components/QuestDBSection.js';
-import { SecondaryButton } from './components/SecondaryButton.js';
 import { StatusBlock } from './components/StatusBlock.js';
-import { TestStatus } from './components/TestStatus.js';
-import { ThemeToggle } from './components/ThemeToggle.js';
 import { fireOutcomeText, isFireSuccess } from './fireOutcome.js';
 import { useOpenRouterModels } from './hooks/useOpenRouterModels.js';
 import { useSaveLifecycle } from './hooks/useSaveLifecycle.js';
 import { useStatus } from './hooks/useStatus.js';
-import { btn, btnClass, PANEL_CLASS, PANEL_CSS, S } from './styles.js';
 import type { AnalyzerUiState, PanelConfig, QdbTestResult, TestResult } from './types.js';
-import { isPromptOverride } from './utils.js';
+import { isHttpUrl, isPromptOverride } from './utils.js';
 
 interface Props {
   configuration: PanelConfig | undefined;
@@ -32,21 +41,23 @@ const SECTION_ANALYZERS = 'orc-section-analyzers';
 // reference to its (memoized) row instead of a fresh `{}` every render.
 const EMPTY_UI: AnalyzerUiState = Object.freeze({});
 
-// Inject the scoped theme + focus/hover stylesheet once. It carries the
-// `--orc-*` token blocks per theme and the interactive states (focus rings,
-// button hover) that inline styles cannot express.
-function useScopedStyles(): void {
-  useEffect(() => {
-    const id = 'orc-config-panel-styles';
-    if (document.getElementById(id)) return;
-    const el = document.createElement('style');
-    el.id = id;
-    el.textContent = PANEL_CSS;
-    document.head.appendChild(el);
-  }, []);
+export default function PluginConfigurationPanel(props: Props): ReactElement {
+  if (!supportsNativeCssScope(window)) {
+    return (
+      <div data-browser-compatibility-message="" role="alert">
+        <h2>Browser update required</h2>
+        <p>
+          This panel requires native CSS @scope. Update the browser or embedded WebView before
+          reopening Signal K Admin.
+        </p>
+      </div>
+    );
+  }
+
+  return <SupportedPluginConfigurationPanel {...props} />;
 }
 
-export default function PluginConfigurationPanel({ configuration, save }: Props): ReactElement {
+function SupportedPluginConfigurationPanel({ configuration, save }: Props): ReactElement {
   const { status, statusError, stale, staleAgeMs } = useStatus();
   const {
     cfg,
@@ -58,8 +69,8 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
     savedNotice,
     noticeText,
     savedNoticeRef,
-    onSave,
-    onDiscard,
+    onSave: saveConfiguration,
+    onDiscard: discardConfiguration,
   } = useSaveLifecycle(configuration, save, status);
   const { models, modelsState, loadModels } = useOpenRouterModels();
 
@@ -68,6 +79,9 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
   const [qdbTest, setQdbTest] = useState<QdbTestResult | null>(null);
   const [qdbTesting, setQdbTesting] = useState(false);
   const [analyzerUi, setAnalyzerUi] = useState<Record<string, AnalyzerUiState>>({});
+  const [validationTarget, setValidationTarget] = useState<'api-key' | 'questdb-url' | null>(null);
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  const questdbUrlRef = useRef<HTMLInputElement>(null);
   // Mirror of analyzerUi for reads from event handlers without going through the
   // state updater. The updater functions must be pure (StrictMode and concurrent
   // rendering may call them more than once), so any side effect (loadReports,
@@ -87,8 +101,8 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
   // live status and the section headers. One map keyed by section id; the
   // single toggle stays stable so adding a section costs no new callback.
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
-  const toggleSection = useCallback((id: string): void => {
-    setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
+  const setSectionOpen = useCallback((id: string, open: boolean): void => {
+    setOpenSections((prev) => (Boolean(prev[id]) === open ? prev : { ...prev, [id]: open }));
   }, []);
   // Force a section open (idempotent): the first-run callout uses it to reveal
   // the OpenRouter section. Returns the same map when already open so it adds no
@@ -98,8 +112,6 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
   }, []);
   // Post-fire report refresh timer, tracked so it is cleared on unmount.
   const reportRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useScopedStyles();
 
   useEffect(() => {
     return () => {
@@ -221,7 +233,7 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
     (id: string): void => {
       const next = !analyzerUiRef.current[id]?.reportsOpen;
       patchUi(id, { reportsOpen: next });
-      if (next && !analyzerUiRef.current[id]?.reports) loadReports(id);
+      if (next && !analyzerUiRef.current[id]?.reports) void loadReports(id);
     },
     [patchUi, loadReports],
   );
@@ -253,7 +265,7 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
       const next = !current?.promptOpen;
       patchUi(id, { promptOpen: next });
       // Load on first open, and retry on reopen if the previous load failed.
-      if (next && (!current?.promptLoaded || current?.promptError)) loadPrompt(id);
+      if (next && (!current?.promptLoaded || current?.promptError)) void loadPrompt(id);
     },
     [patchUi, loadPrompt],
   );
@@ -302,155 +314,210 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
     return ui?.promptCurrent ?? ui?.promptDefault ?? '';
   };
 
+  const noApiKey = !(cfg.openrouter?.apiKey ?? '').trim();
+  const invalidQuestDbUrl = Boolean(cfg.questdb?.enabled) && !isHttpUrl(cfg.questdb?.url);
+
   // Open the OpenRouter section and move focus to the API key field, so the
   // first-run callout's button lands the user exactly where they need to type.
   const focusApiKey = (): void => {
     openSection(SECTION_OPENROUTER);
     requestAnimationFrame(() => {
-      document.getElementById('orc-api-key')?.focus();
+      apiKeyRef.current?.focus();
     });
+  };
+
+  const focusQuestDbUrl = (): void => {
+    openSection(SECTION_QUESTDB);
+    requestAnimationFrame(() => {
+      questdbUrlRef.current?.focus();
+    });
+  };
+
+  const handleSave = (): void => {
+    if (noApiKey) {
+      setValidationTarget('api-key');
+      focusApiKey();
+      return;
+    }
+    if (invalidQuestDbUrl) {
+      setValidationTarget('questdb-url');
+      focusQuestDbUrl();
+      return;
+    }
+    setValidationTarget(null);
+    saveConfiguration();
+  };
+
+  const handleDiscard = (): void => {
+    setValidationTarget(null);
+    discardConfiguration();
   };
 
   const analyzersList = status?.analyzers ?? [];
   // The first-run callout keys off the edit buffer so it disappears the moment
   // the operator starts typing a key, before any save round-trip.
-  const noApiKey = !(cfg.openrouter?.apiKey ?? '').trim();
-  const saveDisabled = !dirty || saving;
+  const validationText =
+    validationTarget === 'api-key' && noApiKey
+      ? 'Enter an OpenRouter API key before saving.'
+      : validationTarget === 'questdb-url' && invalidQuestDbUrl
+        ? 'Enter a valid QuestDB HTTP or HTTPS base URL without a query or fragment before saving.'
+        : '';
+  const saveStatusTone: StatusTone = validationText
+    ? 'danger'
+    : savedNotice?.error
+      ? 'danger'
+      : savedNotice?.phase === 'done'
+        ? 'success'
+        : savedNotice
+          ? 'info'
+          : dirty
+            ? 'warning'
+            : 'neutral';
+  const saveStatusText =
+    validationText || noticeText || (dirty ? 'Unsaved changes' : 'No unsaved changes');
 
   return (
-    <div className={PANEL_CLASS} style={S.root}>
-      <div style={S.controlBar}>
-        <ThemeToggle />
-      </div>
+    <PanelRoot legacyThemeStorageKeys={['orc-theme']}>
+      <Stack gap={4}>
+        <Cluster justify="end">
+          <ThemeToggle />
+        </Cluster>
 
-      {noApiKey && (
-        <div style={S.calloutFirstRun}>
-          <span style={S.calloutText}>
-            No OpenRouter API key set yet. Add one in the OpenRouter section to start the plugin.
-          </span>
-          <button type="button" className={btnClass(false)} style={btn()} onClick={focusApiKey}>
-            Add API key
-          </button>
-        </div>
-      )}
-
-      <h2 style={{ ...S.sectionTitle, ...S.sectionTitleFirst }}>Live status</h2>
-      <StatusBlock
-        status={status}
-        statusError={statusError}
-        onTest={runTest}
-        testing={testing}
-        testResult={testResult}
-        stale={stale}
-        staleAgeMs={staleAgeMs}
-      />
-
-      <CollapsibleSection
-        id={SECTION_OPENROUTER}
-        title="OpenRouter"
-        open={!!openSections[SECTION_OPENROUTER]}
-        onToggle={toggleSection}
-      >
-        <OpenRouterSection
-          cfg={cfg}
-          set={setSection}
-          models={models}
-          modelsState={modelsState}
-          loadModels={loadModels}
-        />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        id={SECTION_QUESTDB}
-        title="QuestDB enrichment"
-        open={!!openSections[SECTION_QUESTDB]}
-        onToggle={toggleSection}
-      >
-        <QuestDBSection
-          cfg={cfg}
-          set={setSection}
-          testResult={qdbTest}
-          onTest={runQdbTest}
-          testing={qdbTesting}
-        />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        id={SECTION_ANALYZERS}
-        title="Analyzers"
-        open={!!openSections[SECTION_ANALYZERS]}
-        onToggle={toggleSection}
-      >
-        {analyzersList.length === 0 && (
-          <div style={S.empty}>
-            {status
-              ? 'No analyzers reported by the plugin yet.'
-              : 'Analyzer list loads once the plugin is running.'}
-          </div>
-        )}
-        {analyzersList.map((a) => (
-          <AnalyzerRow
-            key={a.id}
-            analyzer={a}
-            // Fall back to the live /api/status value when the edit buffer has no
-            // explicit setting: on a fresh install `configuration` has no
-            // analyzers key, but the server defaults them all enabled, so keying
-            // the checkbox off cfg alone would show them as disabled.
-            enabled={cfg.analyzers?.[a.id]?.enabled ?? a.enabled}
-            setEnabled={handleSetEnabled}
-            ui={analyzerUi[a.id] ?? EMPTY_UI}
-            onToggleExpand={toggleExpand}
-            onFire={fireAnalyzer}
-            onToggleReports={toggleReports}
-            onTogglePrompt={togglePrompt}
-            promptValue={promptValueFor(a.id)}
-            onPromptChange={onPromptChange}
-            onPromptReset={onPromptReset}
-            schedule={cfg.analyzers?.[a.id]?.triggers?.cron?.pattern ?? a.cron?.pattern ?? ''}
-            onScheduleChange={setSchedule}
-            // The status payload declares which analyzers carry a severity
-            // floor; pass a value only for those so the row renders the control
-            // when given a value, without the panel hardcoding analyzer ids. The
-            // handler is a single stable callback shared by every row (the row
-            // calls it with its own id).
-            severityFloor={
-              a.hasSeverityFloor
-                ? (cfg.analyzers?.[a.id]?.severityFloor ?? DEFAULT_SEVERITY_FLOOR_VALUE)
-                : undefined
+        {noApiKey ? (
+          <Banner
+            tone="info"
+            title="OpenRouter setup required"
+            actions={
+              <Button variant="primary" size="compact" onClick={focusApiKey}>
+                Add API key
+              </Button>
             }
-            onSeverityFloorChange={handleSeverityFloorChange}
-          />
-        ))}
-      </CollapsibleSection>
+          >
+            No OpenRouter API key set yet. Add one in the OpenRouter section to start the plugin.
+          </Banner>
+        ) : null}
 
-      <div style={S.saveBar}>
-        <button
-          type="button"
-          className={btnClass(false)}
-          style={btn(S.btnSave, saveDisabled && S.btnSaveIdle, saveDisabled && S.btnDisabled)}
-          onClick={onSave}
-          disabled={saveDisabled}
+        <Section title="Live status">
+          <StatusBlock
+            status={status}
+            statusError={statusError}
+            onTest={runTest}
+            testing={testing}
+            testResult={testResult}
+            stale={stale}
+            staleAgeMs={staleAgeMs}
+          />
+        </Section>
+
+        <CollapsibleSection
+          id={SECTION_OPENROUTER}
+          title="OpenRouter"
+          open={Boolean(openSections[SECTION_OPENROUTER])}
+          onOpenChange={(open) => setSectionOpen(SECTION_OPENROUTER, open)}
         >
-          {saving ? 'Saving...' : dirty ? 'Save configuration' : 'Saved'}
-        </button>
-        <SecondaryButton
-          extraStyle={!dirty ? S.btnDisabled : undefined}
-          disabled={!dirty}
-          onClick={onDiscard}
-          title={dirty ? 'Revert all unsaved edits' : undefined}
+          <OpenRouterSection
+            cfg={cfg}
+            set={setSection}
+            models={models}
+            modelsState={modelsState}
+            loadModels={loadModels}
+            apiKeyRef={apiKeyRef}
+          />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          id={SECTION_QUESTDB}
+          title="QuestDB enrichment"
+          open={Boolean(openSections[SECTION_QUESTDB])}
+          onOpenChange={(open) => setSectionOpen(SECTION_QUESTDB, open)}
         >
-          Discard
-        </SecondaryButton>
-        {dirty && <span style={S.saveHint}>Unsaved changes</span>}
-        <TestStatus
-          spanRef={savedNoticeRef}
-          tabIndex={-1}
-          ok={!savedNotice?.error}
-          style={S.saveSpacer}
+          <QuestDBSection
+            cfg={cfg}
+            set={setSection}
+            testResult={qdbTest}
+            onTest={runQdbTest}
+            testing={qdbTesting}
+            urlRef={questdbUrlRef}
+          />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          id={SECTION_ANALYZERS}
+          title="Analyzers"
+          mountStrategy="lazy-retain"
+          open={Boolean(openSections[SECTION_ANALYZERS])}
+          onOpenChange={(open) => setSectionOpen(SECTION_ANALYZERS, open)}
         >
-          {noticeText}
-        </TestStatus>
-      </div>
-    </div>
+          <Stack gap={2}>
+            {analyzersList.length === 0 ? (
+              <StatusIndicator tone="neutral">
+                {status
+                  ? 'No analyzers reported by the plugin yet.'
+                  : 'Analyzer list loads once the plugin is running.'}
+              </StatusIndicator>
+            ) : null}
+            {analyzersList.map((analyzer) => (
+              <AnalyzerRow
+                key={analyzer.id}
+                analyzer={analyzer}
+                enabled={cfg.analyzers?.[analyzer.id]?.enabled ?? analyzer.enabled}
+                setEnabled={handleSetEnabled}
+                ui={analyzerUi[analyzer.id] ?? EMPTY_UI}
+                onToggleExpand={toggleExpand}
+                onFire={fireAnalyzer}
+                onToggleReports={toggleReports}
+                onTogglePrompt={togglePrompt}
+                promptValue={promptValueFor(analyzer.id)}
+                onPromptChange={onPromptChange}
+                onPromptReset={onPromptReset}
+                schedule={
+                  cfg.analyzers?.[analyzer.id]?.triggers?.cron?.pattern ??
+                  analyzer.cron?.pattern ??
+                  ''
+                }
+                onScheduleChange={setSchedule}
+                severityFloor={
+                  analyzer.hasSeverityFloor
+                    ? (cfg.analyzers?.[analyzer.id]?.severityFloor ?? DEFAULT_SEVERITY_FLOOR_VALUE)
+                    : undefined
+                }
+                onSeverityFloorChange={handleSeverityFloorChange}
+              />
+            ))}
+          </Stack>
+        </CollapsibleSection>
+
+        <ActionBar
+          sticky
+          data-panel-action-bar=""
+          statusRef={savedNoticeRef}
+          status={
+            <StatusIndicator tone={saveStatusTone} role="status" aria-live="polite">
+              {saveStatusText}
+            </StatusIndicator>
+          }
+          actions={
+            <>
+              <Button
+                disabled={!dirty || saving}
+                title={dirty ? 'Revert all unsaved edits' : undefined}
+                onClick={handleDiscard}
+              >
+                Discard
+              </Button>
+              <Button
+                variant="primary"
+                loading={saving}
+                loadingLabel="Saving"
+                disabled={!dirty}
+                onClick={handleSave}
+              >
+                Save configuration
+              </Button>
+            </>
+          }
+        />
+      </Stack>
+    </PanelRoot>
   );
 }

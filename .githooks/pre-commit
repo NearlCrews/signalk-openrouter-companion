@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fast gate on every commit: format, lint, module-boundary, and dead-code checks.
+# Heavier gates run before push.
+set -e
+
+echo "[pre-commit] commit verification"
+npm run --silent verify:commit
+
+echo "[pre-commit] ok"

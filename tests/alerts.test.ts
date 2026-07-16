@@ -100,9 +100,10 @@ describe('AlertAnalyzer', () => {
     };
     const r = await a.collectContext(ctx, makeDeps(app, buf, publisher));
     expect(r).not.toBeNull();
-    expect(r?.subkind).toBe('low-soc-enter');
-    expect(r?.bankId).toBe('house');
-    expect((r?.snapshot as Record<string, unknown>).stateOfCharge).toBe(0.25);
+    if (!r) throw new Error('Expected low state-of-charge context.');
+    expect(r.subkind).toBe('low-soc-enter');
+    expect(r.bankId).toBe('house');
+    expect((r.snapshot as Record<string, unknown>).stateOfCharge).toBe(0.25);
   });
 
   it('publishOutput sends an alert-state notification on enter events', async () => {

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/configpanel/PluginConfigurationPanel.tsx",
+    "scripts/*.mjs",
+    "fixtures/browser/main.tsx",
+    "fixtures/browser/vite.config.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "tests/**/*.{ts,tsx}",
+    "tests/browser/**/*.{ts,tsx}",
+    "fixtures/**/*.{ts,tsx}",
+    "scripts/**/*.mjs",
+    "*.{ts,js,cjs,mjs}"
+  ]
+}

@@ -3,6 +3,8 @@ node_modules/
 dist/
 public/
 coverage/
+playwright-report/
+test-results/
 *.tsbuildinfo
 .cache/
 .tmp/

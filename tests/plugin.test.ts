@@ -240,12 +240,13 @@ describe('plugin lifecycle', () => {
     const nyJob = dailyJobs.find((c) => c[2] === 'America/New_York');
     expect(utcJob).toBeDefined();
     expect(nyJob).toBeDefined();
+    if (!utcJob || !nyJob) throw new Error('Expected both timezone-specific cron jobs.');
 
-    (utcJob?.[1] as () => void)();
+    (utcJob[1] as () => void)();
     expect(runByIdSpy.mock.calls.map((c) => c[0])).toEqual(['health']);
 
     runByIdSpy.mockClear();
-    (nyJob?.[1] as () => void)();
+    (nyJob[1] as () => void)();
     expect(runByIdSpy.mock.calls.map((c) => c[0])).toEqual(['liveness']);
 
     registerSpy.mockRestore();
@@ -290,9 +291,10 @@ describe('plugin lifecycle', () => {
       (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
     );
     expect(put).toBeDefined();
+    if (!put) throw new Error('Expected the maintenance PUT handler.');
 
     const cb = vi.fn();
-    const sync = (put?.handler as (...args: unknown[]) => unknown)(
+    const sync = (put.handler as (...args: unknown[]) => unknown)(
       'vessels.self',
       'plugins.openrouter-companion.maintenance.run',
       { reason: 'manual' },
@@ -323,9 +325,10 @@ describe('plugin lifecycle', () => {
       (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
     );
     expect(put).toBeDefined();
+    if (!put) throw new Error('Expected the maintenance PUT handler.');
 
     const cb = vi.fn();
-    const sync = (put?.handler as (...args: unknown[]) => unknown)(
+    const sync = (put.handler as (...args: unknown[]) => unknown)(
       'vessels.self',
       'plugins.openrouter-companion.maintenance.run',
       { reason: 'manual' },
@@ -362,9 +365,10 @@ describe('plugin lifecycle', () => {
       (r) => r.path === 'plugins.openrouter-companion.maintenance.run',
     );
     expect(put).toBeDefined();
+    if (!put) throw new Error('Expected the maintenance PUT handler.');
 
     const cb = vi.fn();
-    const sync = (put?.handler as (...args: unknown[]) => unknown)(
+    const sync = (put.handler as (...args: unknown[]) => unknown)(
       'vessels.self',
       'plugins.openrouter-companion.maintenance.run',
       { reason: 'manual' },

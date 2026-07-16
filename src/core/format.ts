@@ -74,7 +74,7 @@ export function clampAtWord(text: string, max: number, opts: { ellipsis?: boolea
 // the maintenance and health analyzers, so the template cannot drift between
 // them. Structural parameter shape: BufferSummary satisfies it without this
 // module importing buffer.ts.
-export function fmtStats(s: { min: number; max: number; mean: number; count: number }): string {
+function fmtStats(s: { min: number; max: number; mean: number; count: number }): string {
   return `min=${fmtNumber(s.min)} max=${fmtNumber(s.max)} mean=${fmtNumber(s.mean)} count=${fmtNumber(s.count)}`;
 }
 

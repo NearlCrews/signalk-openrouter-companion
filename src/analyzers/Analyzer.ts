@@ -14,7 +14,7 @@ export type BatteryEventKind =
 
 export type TriggerKind = TriggerSpec['kind'];
 
-export interface EngineSessionCtx {
+interface EngineSessionCtx {
   engineId: string;
   start: Date;
   end: Date;
@@ -38,7 +38,7 @@ export interface PublishRunMeta {
 
 export type AnalysisInput = Record<string, unknown>;
 
-export interface AppForAnalyzer {
+interface AppForAnalyzer {
   getSelfPath(path: string): unknown;
   selfContext?: string;
 }

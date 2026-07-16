@@ -5,7 +5,7 @@
 [![CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml)
 [![plugin-ci](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D20.18-brightgreen.svg)](https://nodejs.org)
+[![node](https://img.shields.io/badge/node-%3E%3D22.18-brightgreen.svg)](https://nodejs.org)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/nearlcrews)
 
 A [Signal K](https://signalk.org) plugin that runs LLM analyzers over your
@@ -68,8 +68,11 @@ in the Signal K admin UI.
   bound spend.
 - **A JSONL report log**: every run is appended to `reports.jsonl` in the
   plugin's data directory, with the full report text.
-- **A custom React configuration panel** in the admin UI, with the
-  standard JSON-schema form as a fallback.
+- **A custom React configuration panel** in the admin UI, built from the
+  accessible, theme-aware
+  [`signalk-nearlcrews-ui`](https://github.com/NearlCrews/signalk-nearlcrews-ui)
+  primitives. Signal K Admin reports the panel as unavailable if its remote
+  cannot load; it does not fall back to the JSON Schema form.
 - **Optional QuestDB history** for the trend analyzers, via a co-installed
   [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb).
 - **NMEA 2000 bridging**: battery alerts carry stable alert ids that a
@@ -79,9 +82,12 @@ in the Signal K admin UI.
 
 ## Screenshots
 
-| Live status and OpenRouter settings | Analyzer cards |
+| View | Preview |
 | --- | --- |
-| [![The configuration panel's live status grid, showing the API key state, the daily call budget, QuestDB reachability, and the enabled analyzer count](assets/screenshots/panel-overview.png)](assets/screenshots/panel-overview.png) | [![The Analyzers section of the configuration panel, with one collapsible card per analyzer and Fire now, View reports, and Edit prompt controls](assets/screenshots/panel-analyzers.png)](assets/screenshots/panel-analyzers.png) |
+| Light theme | [![The configuration panel's live status grid and OpenRouter settings in the Light theme](assets/screenshots/panel-overview.png)](assets/screenshots/panel-overview.png) |
+| Dark theme | [![The configuration panel's live status grid and OpenRouter settings in the Dark theme](assets/screenshots/panel-overview-dark.png)](assets/screenshots/panel-overview-dark.png) |
+| Night theme | [![The configuration panel's live status grid and OpenRouter settings in the Night theme](assets/screenshots/panel-overview-night.png)](assets/screenshots/panel-overview-night.png) |
+| Analyzer cards | [![The Analyzers section of the configuration panel, with one collapsible card per analyzer and Fire now, View reports, and Edit prompt controls](assets/screenshots/panel-analyzers.png)](assets/screenshots/panel-analyzers.png) |
 
 ## Architecture
 
@@ -95,16 +101,26 @@ OpenRouter Companion is one plugin built from focused modules:
   webpack with esbuild-loader bundles the React panel to
   `public/remoteEntry.js` as a Module Federation remote the Signal K
   admin UI loads.
-- **Tested with Vitest**, linted and formatted with Biome.
+- **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
+  fields, status components, action bar, and light, dark, and night themes.
+  React is supplied by the Signal K admin host. Version 0.2 adds responsive
+  container behavior, focus-preserving busy actions, and field validation.
+- **Binnacle-aligned verification.** TypeScript, Biome, ESLint, dependency
+  boundaries, dead-code checks, Vitest, Playwright, package validation, size
+  budgets, and dependency audits share the same gate structure. Signal K
+  integration checks cover both the declared 2.25 floor and the latest server.
 
 See the [development guide](docs/DEVELOPMENT.md) for the full module map
 and the analyzer extension point.
 
 ## Requirements
 
-- [Signal K server](https://github.com/SignalK/signalk-server) 2.x. The
-  plugin develops against `@signalk/server-api` 2.24 or newer.
-- Node.js 20.18 or newer.
+- [Signal K server](https://github.com/SignalK/signalk-server) 2.25.0 or newer,
+  before 3.0.0. Version 2.25 added the ESM configurator-container loading this
+  panel requires.
+- Node.js 22.18 or newer.
+- A browser with native CSS `@scope`: Chromium or Edge 118+, Firefox 146+, or
+  Safari 17.4+.
 - An [OpenRouter](https://openrouter.ai) API key, set in the plugin's
   admin panel. Calls are billed per token.
 - Optional: a co-installed
@@ -142,11 +158,11 @@ The plugin ships a custom admin panel that replaces the default Signal K
 plugin form. The main settings:
 
 | Setting | Description | Default |
-|---------|-------------|---------|
+| --------- | ------------- | --------- |
 | OpenRouter API key | Required. Key from openrouter.ai. | n/a |
 | Model | OpenRouter model slug. | anthropic/claude-haiku-4.5 |
 | Max calls per day | Hard cap on OpenRouter calls per UTC day, to bound spend. | 20 |
-| QuestDB | Optional history source for the trend analyzers. | enabled, localhost:9000 |
+| QuestDB | Optional history source for the trend analyzers. | enabled; `http://localhost:9000` |
 | Analyzers | Each of the seven can be enabled or disabled independently. | six on by default; the weather outlook is opt-in |
 
 Advanced settings (engine RPM thresholds, cell-imbalance settle times,
@@ -158,7 +174,7 @@ Advanced OpenRouter settings, edited in the saved JSON config under
 `openrouter`:
 
 | Key | Meaning | Default |
-|-----|---------|---------|
+| ----- | --------- | --------- |
 | `fallbackModels` | Ordered list of model slugs to try if the primary is unavailable. | none |
 | `provider.sort` | Routing preference: `price`, `throughput`, or `latency`. | unset |
 | `provider.maxPrice` | Per-call price ceiling. `prompt` and `completion` are USD per million tokens; `request` is a flat USD per request. | unset |
@@ -233,31 +249,39 @@ predicted severity meets the configured floor.
 
 ## Development
 
-This project targets Node 20.18 or newer, with TypeScript 6 (development
-only). CI runs the suite on Node 20 and 22.
+This project targets Node 22.18 or newer, with TypeScript 6 for development.
+The primary CI gate runs on Node 24 with npm 11.16.0, and Signal K plugin CI
+checks Node 22 and 24 across its desktop platforms.
 
 ```bash
 git clone https://github.com/NearlCrews/signalk-openrouter-companion.git
 cd signalk-openrouter-companion
 npm install          # install dependencies
+npx playwright install --with-deps chromium firefox webkit # one-time browser setup
 npm run build        # bundle the backend and the panel
 npm test             # Vitest suite
 npm run type-check   # type-check without emitting
-npm run lint         # Biome lint
+npm run lint         # code, documentation, and spelling checks
 npm run lint:fix     # lint and auto-fix
-npm run validate     # type-check, lint, and tests in one go
+npm run verify       # static checks, coverage, build, and size budgets
+npm run test:browser # current production panel build in Chromium
+npm run test:browser:with-build # build, then run the Chromium panel test
+npm run verify:release # cross-browser, package, and dependency audit gate
+npm run hooks        # enable the repository's commit and push hooks
 npm run clean        # remove dist/ and public/
 ```
 
-Run `npm run validate` and `npm run build` before pushing. See the
-[development guide](docs/DEVELOPMENT.md) for the full workflow.
+Run `npm run verify:browser` before pushing and `npm run verify:release` before
+release approval. See the [development guide](docs/DEVELOPMENT.md) for the full
+workflow.
 
 ## License
 
 Apache-2.0: see [LICENSE](LICENSE) for the full text. The software is
 provided "AS IS", without warranty of any kind. Treat the generated
 reports and alerts as advisory, and keep independent engine and battery
-monitoring in place.
+monitoring in place. Bundled dependency attributions are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgments
 

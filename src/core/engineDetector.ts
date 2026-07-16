@@ -5,7 +5,7 @@ import { fuseMax } from './readings.js';
 
 type EngineEventKind = 'engine-start' | 'engine-stop' | 'possible-stop';
 
-export interface EngineSession {
+interface EngineSession {
   sessionStart: number;
   sessionEnd: number;
   durationSec: number;

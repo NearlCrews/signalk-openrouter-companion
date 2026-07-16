@@ -1,10 +1,17 @@
-import type { CSSProperties, ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { memo } from 'react';
+import {
+  Banner,
+  Button,
+  Cluster,
+  Metric,
+  MetricGrid,
+  Stack,
+  StatusIndicator,
+  type StatusTone,
+} from 'signalk-nearlcrews-ui';
 import { humanizeAgo } from '../recency.js';
-import { S } from '../styles.js';
 import type { PanelStatus, TestResult } from '../types.js';
-import { TestButton } from './TestButton.js';
-import { TestStatus } from './TestStatus.js';
 
 interface Props {
   status: PanelStatus | null;
@@ -12,25 +19,17 @@ interface Props {
   onTest: () => void;
   testing: boolean;
   testResult: TestResult | null;
-  // Staleness cue from useStatus: stale flips when polling stalls, and
-  // staleAgeMs carries the live age of the last good snapshot while it does.
   stale: boolean;
   staleAgeMs: number | undefined;
 }
 
-// Maps the QuestDB probe state to its label and the matching pre-built status
-// dot, so the render picks a static style object rather than allocating one.
-function questdbLabel(qdb: PanelStatus['questdb']): { text: string; dot: CSSProperties } {
-  if (!qdb.enabled) return { text: 'Disabled', dot: S.dotOff };
-  if (qdb.reachable === null) return { text: 'Probing...', dot: S.dotWait };
-  if (qdb.reachable) return { text: 'Reachable', dot: S.dotOk };
-  return { text: 'Unreachable', dot: S.dotDanger };
+function questdbLabel(qdb: PanelStatus['questdb']): { text: string; tone: StatusTone } {
+  if (!qdb.enabled) return { text: 'Disabled', tone: 'neutral' };
+  if (qdb.reachable === null) return { text: 'Probing...', tone: 'warning' };
+  if (qdb.reachable) return { text: 'Reachable', tone: 'success' };
+  return { text: 'Unreachable', tone: 'danger' };
 }
 
-// Memoized: a keystroke elsewhere in the panel leaves status, testResult, and
-// the staleness props identity-equal, so the block skips. While polling is
-// stalled the panel re-renders each interval and staleAgeMs changes, keeping
-// the age text live.
 export const StatusBlock = memo(function StatusBlock({
   status,
   statusError,
@@ -40,84 +39,93 @@ export const StatusBlock = memo(function StatusBlock({
   stale,
   staleAgeMs,
 }: Props): ReactElement {
-  if (statusError && !status)
+  if (statusError && !status) {
     return (
-      <div style={{ ...S.empty, ...S.testErr }} role="alert">
+      <Banner tone="danger" live="assertive">
         {statusError}
-      </div>
+      </Banner>
     );
-  if (!status)
+  }
+  if (!status) {
     return (
-      <div style={S.empty} role="status" aria-live="polite">
+      <StatusIndicator tone="info" role="status" aria-live="polite">
         Loading status...
-      </div>
+      </StatusIndicator>
     );
-  // Default each branch: a malformed /status payload must degrade gracefully
-  // rather than throw and blank the whole panel.
-  const o: Partial<PanelStatus['openrouter']> = status.openrouter ?? {};
-  const qdb: PanelStatus['questdb'] = status.questdb ?? { enabled: false, reachable: null };
-  const qdbState = questdbLabel(qdb);
+  }
+
+  const openrouter: Partial<PanelStatus['openrouter']> = status.openrouter ?? {};
+  const questdb: PanelStatus['questdb'] = status.questdb ?? {
+    enabled: false,
+    reachable: null,
+  };
+  const questdbState = questdbLabel(questdb);
   const analyzers = status.analyzers ?? [];
-  const enabledCount = analyzers.filter((a) => a.enabled).length;
+  const enabledCount = analyzers.filter((analyzer) => analyzer.enabled).length;
+
   return (
-    <>
-      <div style={S.statsGrid}>
-        <div style={S.statCard}>
-          <div style={S.statLabel}>OpenRouter API key</div>
-          <div style={S.statValue}>
-            <span style={o.apiKeySet ? S.dotOk : S.dotDanger} aria-hidden="true" />
-            {o.apiKeySet ? 'Configured' : 'Missing'}
-          </div>
-          <div style={S.statSub}>{o.apiKeySet ? `Model: ${o.model}` : 'Set a key below'}</div>
-        </div>
-        <div style={S.statCard}>
-          <div style={S.statLabel}>Calls today</div>
-          <div style={S.statValue}>
-            {o.callsToday} / {o.maxCallsPerDay}
-          </div>
-          <div style={S.statSub}>UTC daily cap</div>
-        </div>
-        <div style={S.statCard}>
-          <div style={S.statLabel}>Tokens today</div>
-          <div style={S.statValue}>{(o.tokensToday ?? 0).toLocaleString()}</div>
-          <div style={S.statSub}>prompt + completion</div>
-        </div>
-        <div style={S.statCard}>
-          <div style={S.statLabel}>Est. cost today</div>
-          <div style={S.statValue}>${(o.costToday ?? 0).toFixed(4)}</div>
-          <div style={S.statSub}>OpenRouter usage.cost</div>
-        </div>
-        <div style={S.statCard}>
-          <div style={S.statLabel}>QuestDB</div>
-          <div style={S.statValue}>
-            <span style={qdbState.dot} aria-hidden="true" />
-            {qdbState.text}
-          </div>
-          <div style={S.statSub}>
-            {qdb.enabled ? 'Trend analyzers depend on this' : 'Trend analyzers will skip'}
-          </div>
-        </div>
-        <div style={S.statCard}>
-          <div style={S.statLabel}>Analyzers</div>
-          <div style={S.statValue}>
-            {enabledCount} / {analyzers.length}
-          </div>
-          <div style={S.statSub}>enabled</div>
-        </div>
-      </div>
-      <div style={S.inlineRow}>
-        <TestButton
-          label="Test API key"
-          busyLabel="Testing..."
-          busy={testing}
-          disabled={testing || !o.apiKeySet}
-          title={o.apiKeySet ? undefined : 'Set and save an API key first'}
-          onClick={onTest}
+    <Stack gap={3}>
+      <MetricGrid>
+        <Metric
+          label="OpenRouter API key"
+          value={openrouter.apiKeySet ? 'Configured' : 'Missing'}
+          detail={openrouter.apiKeySet ? `Model: ${openrouter.model}` : 'Set a key below'}
+          tone={openrouter.apiKeySet ? 'success' : 'danger'}
         />
-        {!o.apiKeySet && <span style={S.hint}>Save an API key to enable this test.</span>}
-        <TestStatus ok={testResult?.ok}>{testResult?.text ?? ''}</TestStatus>
-        {stale && <span style={S.staleMarker}>updated {humanizeAgo(staleAgeMs)}</span>}
-      </div>
-    </>
+        <Metric
+          label="Calls today"
+          value={`${openrouter.callsToday ?? 0} / ${openrouter.maxCallsPerDay ?? 0}`}
+          detail="UTC daily cap"
+        />
+        <Metric
+          label="Tokens today"
+          value={(openrouter.tokensToday ?? 0).toLocaleString()}
+          detail="Prompt and completion"
+        />
+        <Metric
+          label="Estimated cost today"
+          value={`$${(openrouter.costToday ?? 0).toFixed(4)}`}
+          detail="OpenRouter usage cost"
+        />
+        <Metric
+          label="QuestDB"
+          value={questdbState.text}
+          detail={questdb.enabled ? 'Trend analyzers depend on this' : 'Trend analyzers will skip'}
+          tone={questdbState.tone}
+        />
+        <Metric
+          label="Analyzers"
+          value={`${enabledCount} / ${analyzers.length}`}
+          detail="Enabled"
+        />
+      </MetricGrid>
+      <Cluster gap={3}>
+        <Button
+          variant="primary"
+          loading={testing}
+          loadingLabel="Testing"
+          disabled={!openrouter.apiKeySet}
+          title={openrouter.apiKeySet ? undefined : 'Set and save an API key first'}
+          onClick={onTest}
+        >
+          Test API key
+        </Button>
+        {!openrouter.apiKeySet ? (
+          <StatusIndicator tone="neutral">Save an API key to enable this test.</StatusIndicator>
+        ) : null}
+        {testResult ? (
+          <StatusIndicator
+            tone={testResult.ok ? 'success' : 'danger'}
+            role="status"
+            aria-live="polite"
+          >
+            {testResult.text}
+          </StatusIndicator>
+        ) : null}
+        {stale ? (
+          <StatusIndicator tone="warning">Status updated {humanizeAgo(staleAgeMs)}</StatusIndicator>
+        ) : null}
+      </Cluster>
+    </Stack>
   );
 });

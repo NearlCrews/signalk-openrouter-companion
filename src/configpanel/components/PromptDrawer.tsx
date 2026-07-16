@@ -1,9 +1,17 @@
 import type { ReactElement } from 'react';
-import { S } from '../styles.js';
-import { T } from '../tokens.js';
+import {
+  Banner,
+  Button,
+  Card,
+  Cluster,
+  LabeledField,
+  Stack,
+  StatusIndicator,
+  Textarea,
+} from 'signalk-nearlcrews-ui';
 import type { AnalyzerUiState } from '../types.js';
 import { isPromptOverride } from '../utils.js';
-import { SecondaryButton } from './SecondaryButton.js';
+import styles from './PromptDrawer.module.css';
 
 interface Props {
   analyzerId: string;
@@ -22,67 +30,59 @@ export function PromptDrawer({
   onReset,
   onClose,
 }: Props): ReactElement {
-  if (!ui.promptLoaded)
+  if (!ui.promptLoaded) {
     return (
-      <div style={S.drawer}>
-        <div style={S.empty} role="status" aria-live="polite">
+      <Card>
+        <StatusIndicator tone="info" role="status" aria-live="polite">
           Loading prompt...
-        </div>
-      </div>
+        </StatusIndicator>
+      </Card>
     );
-  // A failed fetch leaves promptDefault undefined. Show the error and suppress
-  // the textarea: editing an empty one would write a bogus customSystemPrompt
-  // over the real saved prompt.
-  if (ui.promptError)
+  }
+
+  if (ui.promptError) {
     return (
-      <div style={S.drawer}>
-        <div style={{ ...S.testStatus, ...S.testErr }} role="alert">
-          Failed to load prompt: {ui.promptError}
-        </div>
-        <div style={S.inlineRow}>
-          <SecondaryButton onClick={onClose}>Close</SecondaryButton>
-        </div>
-      </div>
+      <Card>
+        <Stack gap={3}>
+          <Banner tone="danger" live="assertive">
+            Failed to load prompt: {ui.promptError}
+          </Banner>
+          <Cluster justify="end">
+            <Button onClick={onClose}>Close</Button>
+          </Cluster>
+        </Stack>
+      </Card>
     );
-  const textareaId = `orc-prompt-${analyzerId}`;
+  }
+
   const isOverride = isPromptOverride(value, ui.promptDefault);
   return (
-    <div style={S.drawer}>
-      <div style={{ marginBottom: T.space.md }}>
-        <label
-          htmlFor={textareaId}
-          style={{
-            display: 'block',
-            fontSize: T.fontSize.sm,
-            fontWeight: T.fontWeight.semibold,
-            marginBottom: T.space.xs,
-          }}
+    <Card>
+      <Stack gap={3}>
+        <LabeledField
+          label="System prompt"
+          description={`The prompt the LLM receives. Save the panel to apply changes. ${
+            isOverride ? 'A custom override is active.' : 'The built-in default is active.'
+          }`}
         >
-          System prompt
-        </label>
-        <div style={S.hint}>
-          The prompt the LLM receives. Save the panel to apply changes.
-          {isOverride ? ' (custom override active)' : ' (using built-in default)'}
-        </div>
-      </div>
-      <textarea
-        id={textareaId}
-        style={S.textarea}
-        spellCheck={false}
-        value={value}
-        onChange={(e) => onChange(analyzerId, e.target.value)}
-      />
-      <div style={S.inlineRow}>
-        <SecondaryButton
-          extraStyle={!isOverride ? S.btnDisabled : undefined}
-          disabled={!isOverride}
-          title={isOverride ? undefined : 'Already using the built-in default'}
-          onClick={() => onReset(analyzerId)}
-        >
-          Reset to default
-        </SecondaryButton>
-        <SecondaryButton onClick={onClose}>Close</SecondaryButton>
-      </div>
-    </div>
+          <Textarea
+            className={styles.textarea}
+            spellCheck={false}
+            value={value}
+            onChange={(event) => onChange(analyzerId, event.target.value)}
+          />
+        </LabeledField>
+        <Cluster gap={2} justify="end">
+          <Button
+            disabled={!isOverride}
+            title={isOverride ? undefined : 'Already using the built-in default'}
+            onClick={() => onReset(analyzerId)}
+          >
+            Reset to default
+          </Button>
+          <Button onClick={onClose}>Close</Button>
+        </Cluster>
+      </Stack>
+    </Card>
   );
 }

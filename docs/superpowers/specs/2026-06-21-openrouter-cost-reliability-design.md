@@ -279,9 +279,9 @@ openrouter: {
   `provider.allowFallbacks` all live under it). Defaults preserve today's
   behavior exactly: no fallback, no provider object, `data_collection` unset
   (OpenRouter default).
-- `schema.ts` rjsf fallback gains the same fields so the JSON-schema form can
-  edit them when the custom panel is unavailable. The privacy field also appears
-  in the custom panel (E); the rest are JSON-only.
+- `schema.ts` gains the same fields so the storage shape and server-facing
+  metadata remain complete. The privacy field also appears in the custom panel
+  (E); the rest are JSON-only.
 
 ### H. Docs
 

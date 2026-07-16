@@ -318,8 +318,9 @@ describe('plugin REST API', () => {
       expect(r.body).toEqual({ ok: true, analyzer: 'health', outcome: 'reported' });
       expect(calls).toHaveLength(1);
       const first = calls[0];
-      expect(first?.id).toBe('health');
-      expect((first?.ctx as { kind: string }).kind).toBe('put');
+      if (!first) throw new Error('Expected one analyzer call.');
+      expect(first.id).toBe('health');
+      expect((first.ctx as { kind: string }).kind).toBe('put');
     });
 
     it('returns 500 when the router run throws', async () => {
@@ -584,6 +585,25 @@ describe('plugin REST API', () => {
       registerApiRoutes(router, () => null);
       const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
       expect(r.status).toBe(400);
+    });
+
+    it.each([
+      ['not a URL', 'invalid URL'],
+      ['ftp://questdb.local', 'unsupported URL scheme'],
+      [
+        'http://questdb.local:9000?token=secret',
+        'QuestDB base URL must not include a query string or fragment',
+      ],
+      [
+        'http://questdb.local:9000#fragment',
+        'QuestDB base URL must not include a query string or fragment',
+      ],
+    ])('rejects unsupported QuestDB base URL %s', async (url, error) => {
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => null);
+      const r = await call(routes, 'post', '/api/questdb/test', { body: { url } });
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({ ok: false, error });
     });
 
     it('returns ok:true when QuestDB probe succeeds against the saved url', async () => {

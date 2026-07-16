@@ -4,7 +4,7 @@
 // src/schema.ts remains the authoritative storage shape.
 
 // The analyzer's standardized trigger block, as the panel edits it.
-export interface AnalyzerTriggerConfig {
+interface AnalyzerTriggerConfig {
   cron?: { pattern?: string; enabled?: boolean; timezone?: string };
 }
 
@@ -73,7 +73,7 @@ export interface ModelOption {
 }
 
 // A single rendered report row (a slice of the on-disk JsonlEntry).
-export interface ReportEntry {
+interface ReportEntry {
   ts: string;
   trigger: string;
   engineId?: string;

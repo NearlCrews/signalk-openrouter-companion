@@ -27,7 +27,7 @@ export function quotedPathList(paths: readonly string[]): string {
 // signalk-questdb writes the self vessel's rows with the literal context
 // 'self', not the full `vessels.urn:mrn:...` value that app.selfContext
 // returns. Analyzer queries must filter on this or they match no rows.
-export const QUESTDB_SELF_CONTEXT = 'self';
+const QUESTDB_SELF_CONTEXT = 'self';
 
 // Pre-escaped form for embedding directly in a SQL `context = '...'` clause.
 // Escaped once here so the trend analyzers single-source it instead of each
@@ -89,7 +89,22 @@ export function isoRange(fromMs: number, toMs: number): [fromIso: string, toIso:
 }
 
 export class QuestDBClient {
-  constructor(private cfg: QuestDBCfg) {}
+  private readonly baseUrl: string;
+
+  constructor(cfg: QuestDBCfg) {
+    const rawUrl = cfg.url.trim();
+    try {
+      const parsed = new URL(rawUrl);
+      parsed.search = '';
+      parsed.hash = '';
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+      this.baseUrl = parsed.href.replace(/\/$/, '');
+    } catch {
+      // Preserve the old fail-soft behavior for a hand-edited invalid config:
+      // fetch rejects during probe, and the optional provider degrades cleanly.
+      this.baseUrl = rawUrl.replace(/\/+$/, '');
+    }
+  }
 
   // Resolves false for a reachable server that answers wrongly (non-2xx, or a
   // payload without a dataset). Throws for a transport failure (refused
@@ -97,7 +112,7 @@ export class QuestDBClient {
   // QuestDB test endpoint, can report it instead of a bare "unreachable".
   async probe(abortSignal?: AbortSignal): Promise<boolean> {
     const r = await fetchWithTimeout(
-      `${this.cfg.url}/exec?query=SELECT%201`,
+      `${this.baseUrl}/exec?query=SELECT%201`,
       {},
       QUESTDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
@@ -109,7 +124,7 @@ export class QuestDBClient {
 
   async query(sql: string, abortSignal?: AbortSignal): Promise<QueryResult> {
     const r = await fetchWithTimeout(
-      `${this.cfg.url}/exec?query=${encodeURIComponent(sql)}`,
+      `${this.baseUrl}/exec?query=${encodeURIComponent(sql)}`,
       {},
       QUESTDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
