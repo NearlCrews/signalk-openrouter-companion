@@ -12,15 +12,26 @@ if (!serverResponse.ok) {
   throw new Error(`Signal K discovery failed with HTTP ${serverResponse.status}.`);
 }
 
-const adminResponse = await fetch(new URL('/admin/', baseUrl), {
+const pluginsResponse = await fetch(new URL('/skServer/plugins', baseUrl), {
   signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 });
-if (!adminResponse.ok) {
-  throw new Error(`Signal K Admin failed with HTTP ${adminResponse.status}.`);
+if (!pluginsResponse.ok) {
+  throw new Error(`Signal K plugin discovery failed with HTTP ${pluginsResponse.status}.`);
 }
-const adminHtml = await adminResponse.text();
-if (!adminHtml.includes(`src="${remotePath}"`)) {
-  throw new Error(`Signal K Admin did not register ${remotePath}.`);
+const plugins = await pluginsResponse.json();
+const installedPlugin = Array.isArray(plugins)
+  ? plugins.find((plugin) => plugin.packageName === packageJson.name)
+  : undefined;
+if (!installedPlugin) {
+  throw new Error(`Signal K did not load ${packageJson.name}.`);
+}
+if (installedPlugin.data?.enabled !== true) {
+  throw new Error(`Signal K did not enable ${packageJson.name}.`);
+}
+for (const keyword of ['signalk-node-server-plugin', 'signalk-plugin-configurator']) {
+  if (!installedPlugin.keywords?.includes(keyword)) {
+    throw new Error(`Signal K did not recognize the ${keyword} keyword.`);
+  }
 }
 
 const remoteResponse = await fetch(new URL(remotePath, baseUrl), {

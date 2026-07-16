@@ -186,8 +186,12 @@ npm run test:browser:cross # desktop and mobile Chromium, Firefox, and WebKit
 npm run test:browser:with-build # build, then run Chromium
 npm run test:browser:cross:with-build # build, then run every browser project
 npm run test:host-asset # running Signal K Admin requests the installed remote
-npm run test:integration # running server registers and serves the installed remote
+npm run test:integration # unsecured CI server loads the plugin and configurator remote
 ```
+
+`test:integration` targets the unsecured temporary server used by plugin-ci. On
+a secured, installed server, use `test:host-asset` to verify the public Admin UI
+and configurator asset without requesting authenticated plugin metadata.
 
 The unit and integration suite covers:
 
