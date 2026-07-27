@@ -9,7 +9,7 @@ import { stringify } from './logger.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
 import type { JsonlEntry } from './publisher.js';
-import { QuestDBClient } from './questdb.js';
+import { QuestDBClient, stripTrailingSlashes } from './questdb.js';
 import type { TriggerRouter } from './triggerRouter.js';
 import { manualPutCtx } from './triggers.js';
 
@@ -411,7 +411,7 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
       // Use the normalized URL the parser produced (with a stripped trailing
       // slash) so probe() builds `${url}/exec?query=...` without a double
       // slash on inputs like 'http://qdb:9000/'.
-      const normalized = parsed.href.replace(/\/+$/, '');
+      const normalized = stripTrailingSlashes(parsed.href);
       try {
         const client = new QuestDBClient({ url: normalized });
         const reachable = await client.probe(rt?.signal);

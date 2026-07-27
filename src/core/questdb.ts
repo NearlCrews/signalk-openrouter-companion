@@ -18,6 +18,12 @@ export function escapeSqlLiteral(s: string): string {
   return s.replace(/'/g, "''");
 }
 
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
 // Quote and escape a set of SignalK paths into a comma-separated list for a
 // SQL `path IN (...)` clause.
 export function quotedPathList(paths: readonly string[]): string {
@@ -97,12 +103,12 @@ export class QuestDBClient {
       const parsed = new URL(rawUrl);
       parsed.search = '';
       parsed.hash = '';
-      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
-      this.baseUrl = parsed.href.replace(/\/$/, '');
+      parsed.pathname = stripTrailingSlashes(parsed.pathname);
+      this.baseUrl = stripTrailingSlashes(parsed.href);
     } catch {
       // Preserve the old fail-soft behavior for a hand-edited invalid config:
       // fetch rejects during probe, and the optional provider degrades cleanly.
-      this.baseUrl = rawUrl.replace(/\/+$/, '');
+      this.baseUrl = stripTrailingSlashes(rawUrl);
     }
   }
 
