@@ -163,7 +163,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.2.0 component library and shares React 19 as a Module
+`signalk-nearlcrews-ui` 0.3.0 component library and shares React 19 as a Module
 Federation singleton supplied by the Signal K admin host. `PanelRoot` owns the
 theme tokens and migrates the former `orc-theme` preference into the shared
 theme key. The panel checks native CSS scope support before mounting, and its
@@ -360,7 +360,7 @@ release.
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.2
+- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.3
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 

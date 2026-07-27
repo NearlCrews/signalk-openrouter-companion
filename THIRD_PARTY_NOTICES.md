@@ -4,11 +4,11 @@ The published backend and configuration panel bundles contain code from the
 following packages:
 
 - `croner` 10.0.1, MIT License, Copyright (c) 2015-2021 Hexagon
-- `react` 19.2.7, MIT License, Copyright (c) Meta Platforms, Inc. and affiliates
+- `react` 19.2.8, MIT License, Copyright (c) Meta Platforms, Inc. and affiliates
 - `css-loader` 7.1.4, MIT License, Copyright JS Foundation and other contributors
 - `style-loader` 4.0.0, MIT License, Copyright JS Foundation and other contributors
-- `webpack` 5.108.4, MIT License, Copyright JS Foundation and other contributors
-- `signalk-nearlcrews-ui` 0.2.0, Apache License 2.0, Nearl Crews
+- `webpack` 5.109.0, MIT License, Copyright JS Foundation and other contributors
+- `signalk-nearlcrews-ui` 0.3.0, Apache License 2.0, Nearl Crews
 
 The Apache License 2.0 text applicable to `signalk-nearlcrews-ui` is included
 in [LICENSE](LICENSE).
