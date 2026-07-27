@@ -11,7 +11,7 @@ import {
 } from 'signalk-nearlcrews-ui';
 import type { AnalyzerUiState } from '../types.js';
 import { isPromptOverride } from '../utils.js';
-import styles from './PromptDrawer.module.css';
+import styles from './AnalyzerRow.module.css';
 
 interface Props {
   analyzerId: string;

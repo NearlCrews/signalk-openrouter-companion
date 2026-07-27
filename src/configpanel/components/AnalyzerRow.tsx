@@ -71,6 +71,8 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   const reportsId = `orc-reports-${analyzer.id}`;
   const promptId = `orc-prompt-body-${analyzer.id}`;
   const expanded = Boolean(ui.expanded);
+  const reportsOpen = Boolean(ui.reportsOpen);
+  const promptOpen = Boolean(ui.promptOpen);
   const cronEnabled = Boolean(analyzer.cron?.enabled);
   const scheduleOptions = buildScheduleOptions(schedule);
 
@@ -78,8 +80,8 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   const promptButtonRef = useRef<HTMLButtonElement>(null);
   const reportsBodyRef = useRef<HTMLDivElement>(null);
   const promptBodyRef = useRef<HTMLDivElement>(null);
-  useDrawerFocus(Boolean(ui.reportsOpen), reportsBodyRef, reportsButtonRef);
-  useDrawerFocus(Boolean(ui.promptOpen), promptBodyRef, promptButtonRef);
+  useDrawerFocus(reportsOpen, reportsBodyRef, reportsButtonRef);
+  useDrawerFocus(promptOpen, promptBodyRef, promptButtonRef);
 
   return (
     <CollapsibleSection
@@ -93,7 +95,7 @@ export const AnalyzerRow = memo(function AnalyzerRow({
         <Checkbox
           label={
             <>
-              <span className={styles.visuallyHidden}>{analyzer.title}: </span>
+              <span className="snui-visually-hidden">{analyzer.title}: </span>
               Enabled
             </>
           }
@@ -109,7 +111,7 @@ export const AnalyzerRow = memo(function AnalyzerRow({
         {cronEnabled ? (
           <LabeledField
             label="Frequency"
-            description="The analyzer's scheduled run frequency."
+            description="Scheduled run frequency."
             layout="inline"
             density="compact"
           >
@@ -164,21 +166,21 @@ export const AnalyzerRow = memo(function AnalyzerRow({
           </Button>
           <Button
             ref={reportsButtonRef}
-            aria-label={`${ui.reportsOpen ? 'Hide' : 'View'} reports for ${analyzer.title}`}
-            aria-expanded={Boolean(ui.reportsOpen)}
+            aria-label={`${reportsOpen ? 'Hide' : 'View'} reports for ${analyzer.title}`}
+            aria-expanded={reportsOpen}
             aria-controls={reportsId}
             onClick={() => onToggleReports(analyzer.id)}
           >
-            {ui.reportsOpen ? 'Hide reports' : 'View reports'}
+            {reportsOpen ? 'Hide reports' : 'View reports'}
           </Button>
           <Button
             ref={promptButtonRef}
-            aria-label={`${ui.promptOpen ? 'Hide' : 'Edit'} prompt for ${analyzer.title}`}
-            aria-expanded={Boolean(ui.promptOpen)}
+            aria-label={`${promptOpen ? 'Hide' : 'Edit'} prompt for ${analyzer.title}`}
+            aria-expanded={promptOpen}
             aria-controls={promptId}
             onClick={() => onTogglePrompt(analyzer.id)}
           >
-            {ui.promptOpen ? 'Hide prompt' : 'Edit prompt'}
+            {promptOpen ? 'Hide prompt' : 'Edit prompt'}
           </Button>
           {ui.fire?.text ? (
             <StatusIndicator
@@ -196,9 +198,9 @@ export const AnalyzerRow = memo(function AnalyzerRow({
           ref={reportsBodyRef}
           className={styles.drawer}
           tabIndex={-1}
-          hidden={!ui.reportsOpen}
+          hidden={!reportsOpen}
         >
-          {ui.reportsOpen ? (
+          {reportsOpen ? (
             <Card>
               {ui.reportsLoading ? (
                 <StatusIndicator tone="info" role="status" aria-live="polite">
@@ -252,9 +254,9 @@ export const AnalyzerRow = memo(function AnalyzerRow({
           ref={promptBodyRef}
           className={styles.drawer}
           tabIndex={-1}
-          hidden={!ui.promptOpen}
+          hidden={!promptOpen}
         >
-          {ui.promptOpen ? (
+          {promptOpen ? (
             <PromptDrawer
               analyzerId={analyzer.id}
               ui={ui}

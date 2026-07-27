@@ -18,27 +18,27 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.0
+## What's new in 0.7.1
 
-0.7.0 moves the configuration panel onto the shared NearlCrews UI foundation
-and aligns development with the Binnacle toolchain. Existing saved plugin
-configuration remains compatible. Signal K 2.25.0 and Node 22.18 are the new
-minimum versions.
+0.7.1 updates the shared configuration UI, development dependencies, and
+runtime verification matrix. Existing plugin configuration and saved theme
+preferences remain compatible.
 
-- **Shared panel foundations** from `signalk-nearlcrews-ui` 0.2.0 provide the
-  layout, controls, validation, accessibility behavior, and light, dark, and
-  night themes while replacing the duplicated local component system.
-- **More reliable configuration requests** abort stale status polls, deduplicate
-  model-list loads, retain successful results, and reject invalid QuestDB base
-  URLs before testing or saving.
-- **Binnacle-aligned development** uses Node 22.18, npm 11.16.0, TypeScript 6,
-  current compatible dependencies, modular CSS, and the same lint, boundary,
-  dead-code, browser, package, and audit gate structure.
-- **Hardened release verification** tests the production panel across Chromium,
-  Firefox, WebKit, and mobile Chromium, validates packed media and notices, and
-  starts the packed plugin on both Signal K 2.25 and the latest server.
+- **Shared UI 0.4.1** makes Light the default for fresh profiles without
+  replacing explicit or migrated preferences. It also improves Night-theme
+  feedback, loading-action contrast, focus behavior, and narrow-layout
+  overflow handling.
+- **Current compatible dependencies** update React, Playwright, Biome, ESLint,
+  Size Limit, Webpack, Vite, Knip, Markdownlint, Publint, typescript-eslint,
+  and Node types. TypeScript remains on 6.0 until typescript-eslint supports
+  TypeScript 7.
+- **Node 26 verification** moves the primary and release-build workflows to
+  Node 26 while retaining Node 22 and 24 in the Signal K plugin matrix.
+- **Clean release gates** cover the fresh Light default, legacy-theme
+  migration, all four browser projects, packed metadata and screenshots,
+  bundle limits, and full and runtime dependency audits.
 
-See the [v0.7.0 changelog entry](CHANGELOG.md#v070) and the
+See the [v0.7.1 changelog entry](CHANGELOG.md#v071) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
@@ -105,8 +105,9 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React is supplied by the Signal K admin host. Version 0.2 adds responsive
-  container behavior, focus-preserving busy actions, and field validation.
+  React is supplied by the Signal K admin host. Version 0.4.1 adds a
+  fresh-profile Light default, stronger Night-theme feedback, and interaction
+  fixes while preserving saved theme preferences.
 - **Binnacle-aligned verification.** TypeScript, Biome, ESLint, dependency
   boundaries, dead-code checks, Vitest, Playwright, package validation, size
   budgets, and dependency audits share the same gate structure. Signal K
@@ -121,7 +122,7 @@ and the analyzer extension point.
   before 3.0.0. Version 2.25 added the ESM configurator-container loading this
   panel requires.
 - Node.js 22.18 or newer.
-- A browser with native CSS `@scope`: Chromium or Edge 118+, Firefox 146+, or
+- A browser with native CSS `@scope`: Chromium or Edge 120+, Firefox 146+, or
   Safari 17.4+.
 - An [OpenRouter](https://openrouter.ai) API key, set in the plugin's
   admin panel. Calls are billed per token.
@@ -252,8 +253,8 @@ predicted severity meets the configured floor.
 ## Development
 
 This project targets Node 22.18 or newer, with TypeScript 6 for development.
-The primary CI gate runs on Node 24 with npm 11.16.0, and Signal K plugin CI
-checks Node 22 and 24 across its desktop platforms.
+The primary CI gate runs on Node 26 with npm 11.18.0, and Signal K plugin CI
+checks Node 22, 24, and 26 across its desktop platforms.
 
 ```bash
 git clone https://github.com/NearlCrews/signalk-openrouter-companion.git

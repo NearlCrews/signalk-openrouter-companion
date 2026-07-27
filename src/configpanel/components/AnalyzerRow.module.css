@@ -4,18 +4,6 @@
   overflow-wrap: anywhere;
 }
 
-.visuallyHidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 .drawer {
   min-width: 0;
 }
@@ -43,7 +31,8 @@
   overflow-wrap: anywhere;
 }
 
-.reportTimestamp {
+.reportTimestamp,
+.textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
@@ -58,4 +47,8 @@
 .reportFailure {
   color: var(--snui-color-danger);
   font-weight: 650;
+}
+
+.textarea {
+  min-height: 11.25rem;
 }

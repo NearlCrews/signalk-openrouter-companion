@@ -6,16 +6,44 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v071"></a>
+
+## [0.7.1] - 2026-07-27
+
+A shared UI, dependency, and compatibility update. Existing plugin
+configuration and saved theme preferences remain compatible. Fresh profiles
+now start in Light unless the operator selects another theme.
+
+### Added
+
+- **Node 26 verification.** The primary and release-build workflows now run on
+  Node 26, while Signal K plugin CI covers Node 22, 24, and 26 across its
+  desktop platforms.
+- **Fresh-profile theme coverage.** The production-panel browser suite verifies
+  the Light default, non-persistence of an implicit choice, explicit Auto
+  selection, and existing legacy-theme migration.
+
 ### Changed
 
-- Refreshed compatible development dependencies, including
-  `signalk-nearlcrews-ui` 0.3.0. Fresh configuration panels now start in the
-  Light theme while preserving stored theme preferences.
+- **The configuration panel now uses `signalk-nearlcrews-ui` 0.4.1.** Existing
+  shared and `orc-theme` preferences remain compatible. Profiles without a
+  valid preference now start in Light, and the panel receives the shared
+  library's Night-theme contrast, loading-action, overflow, and focus fixes.
+- **Development dependencies are current for the supported toolchain.** React,
+  Playwright, Biome, ESLint, Size Limit, Webpack, Vite, Knip, Markdownlint,
+  Publint, typescript-eslint, Node types, and related tools are updated.
+  TypeScript remains on 6.0 because typescript-eslint does not yet support
+  TypeScript 7.
+- **The pinned package manager is npm 11.18.0.** npm 12 remains outside the
+  supported Node 22.18 runtime window.
 
 ### Fixed
 
-- QuestDB URL normalization now removes trailing slashes with a bounded linear
-  scan instead of a backtracking regular expression.
+- **QuestDB URL normalization is bounded.** Trailing slashes are removed with a
+  linear scan instead of a backtracking regular expression.
+- **Development dependency audits are clean.** Supported upgrades remove the
+  vulnerable `brace-expansion`, `fast-uri`, and `js-yaml` versions previously
+  reported through the lint, bundle, and documentation toolchains.
 
 <a id="v070"></a>
 

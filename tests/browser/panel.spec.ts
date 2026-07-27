@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 
 test('loads the production remote and completes the save flow', async ({ page }) => {
   const panelRoot = page.locator('[data-snui-root]');
-  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.3.0');
+  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.4.1');
   await expect(panelRoot).toHaveAttribute('data-snui-theme', 'light');
   await expect(page.getByText('12,480')).toBeVisible();
   const maintenanceSection = page.getByRole('button', { name: /Maintenance Advisor/ });
@@ -126,6 +126,32 @@ test('ignores an older status response that resolves after a newer poll', async 
   await expect(page.getByText('9 / 50', { exact: true })).toBeVisible();
   await page.waitForTimeout(350);
   await expect(page.getByText('9 / 50', { exact: true })).toBeVisible();
+});
+
+test('defaults a fresh profile to Light without persisting an implicit choice', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    localStorage.removeItem('signalk-nearlcrews-ui.theme.v1');
+    localStorage.removeItem('orc-theme');
+  });
+  await page.reload();
+  await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
+
+  const root = page.locator('[data-snui-root]');
+  const themeGroup = page.getByRole('radiogroup', { name: 'Panel theme' });
+  await expect(root).toHaveAttribute('data-snui-theme', 'light');
+  await expect(themeGroup.getByRole('radio', { name: 'Light' })).toBeChecked();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
+    .toBeNull();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('orc-theme'))).toBeNull();
+
+  await themeGroup.getByRole('radio', { name: 'Auto' }).click();
+  await expect(root).not.toHaveAttribute('data-snui-theme');
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
+    .toBe('auto');
 });
 
 test('migrates the legacy preference and supports every theme', async ({ page }) => {

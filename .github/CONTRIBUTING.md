@@ -58,8 +58,9 @@ those before proposing a structural change.
 ## Code style
 
 - TypeScript 6, strict mode, ESM. Node 22.18 or newer. The primary CI gate
-  runs on Node 24 with npm 11.16.0, and Signal K plugin CI checks Node 22 and
-  24. The manifest accepts npm 10.9.3 only for the upstream Node 22 bootstrap.
+  runs on Node 26 with npm 11.18.0, and Signal K plugin CI checks Node 22, 24,
+  and 26. The manifest accepts npm 10.9.3 only for the upstream Node 22
+  bootstrap.
 - Biome handles lint and format, ESLint handles typed and React Hooks rules,
   Markdownlint checks documentation, and cspell checks prose. Use
   `npm run lint`, or `npm run lint:fix` for the safe code fixes.

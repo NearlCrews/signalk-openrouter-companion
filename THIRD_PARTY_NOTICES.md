@@ -8,7 +8,7 @@ following packages:
 - `css-loader` 7.1.4, MIT License, Copyright JS Foundation and other contributors
 - `style-loader` 4.0.0, MIT License, Copyright JS Foundation and other contributors
 - `webpack` 5.109.0, MIT License, Copyright JS Foundation and other contributors
-- `signalk-nearlcrews-ui` 0.3.0, Apache License 2.0, Nearl Crews
+- `signalk-nearlcrews-ui` 0.4.1, Apache License 2.0, Nearl Crews
 
 The Apache License 2.0 text applicable to `signalk-nearlcrews-ui` is included
 in [LICENSE](LICENSE).

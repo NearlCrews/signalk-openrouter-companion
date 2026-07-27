@@ -163,12 +163,16 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.3.0 component library and shares React 19 as a Module
+`signalk-nearlcrews-ui` 0.4.1 component library and shares React 19 as a Module
 Federation singleton supplied by the Signal K admin host. `PanelRoot` owns the
 theme tokens and migrates the former `orc-theme` preference into the shared
-theme key. The panel checks native CSS scope support before mounting, and its
-responsive rules follow the panel container rather than the browser viewport.
-Plugin-specific drawer and report styles stay in CSS Modules.
+theme key. A profile without a valid shared or legacy preference starts in
+Light without persisting an implicit choice. The panel checks native CSS scope
+support before mounting, and its responsive rules follow the panel container
+rather than the browser viewport. Chromium and Edge 120 are the minimum
+Chromium-family versions because the shared UI mirrors direction-sensitive
+controls with `:dir()`. Plugin-specific drawer and report styles stay in CSS
+Modules.
 
 The panel is built with `experiments.outputModule: true` and
 `library: { type: 'module' }` because this package's `"type": "module"` makes
@@ -240,7 +244,8 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` 0.2 migration increased the panel JavaScript from
+The original `signalk-nearlcrews-ui` 0.2 migration increased the panel
+JavaScript from
 17.3 kB gzip to 24.6 kB gzip, a 42 percent increase. This documented
 exception trades duplicated local controls for the shared accessibility,
 validation, responsive layout, and theme contracts. The 25 kB gzip gate keeps
@@ -335,12 +340,12 @@ Step by step:
 
 GitHub Actions workflows under `.github/workflows/`:
 
-- `plugin-ci.yml`: reuses the upstream Signal K plugin workflow on Node 22 and
-  24 across Linux x64, Linux arm64, macOS, and Windows. The Node 20 armv7 lane
-  is disabled because the package now requires Node 22.18 or newer. Its real
-  Signal K server integration lane installs and starts the packed plugin on
-  both Signal K 2.25.0 and the latest server release.
-- `ci.yml`: runs the full release gate on Node 24 with npm 11.16.0, including
+- `plugin-ci.yml`: reuses the upstream Signal K plugin workflow on Node 22, 24,
+  and 26 across Linux x64, Linux arm64, macOS, and Windows. The Node 20 armv7
+  lane is disabled because the package now requires Node 22.18 or newer. Its
+  real Signal K server integration lane installs and starts the packed plugin
+  on both Signal K 2.25.0 and the latest server release.
+- `ci.yml`: runs the full release gate on Node 26 with npm 11.18.0, including
   Chromium, Firefox, WebKit, package validation, and full and runtime audits.
 - `codeql.yml`: CodeQL static analysis.
 - `publish.yml`: verifies, packs, and publishes the exact artifact when a
@@ -353,14 +358,14 @@ release.
 ## Tech stack
 
 - TypeScript 6 strict, ESM, ES2022 target
-- Node 22.18+ and npm 11.16.0 for development. The manifest accepts npm 10.9.3
+- Node 22.18+ and npm 11.18.0 for development. The manifest accepts npm 10.9.3
   only so the upstream Node 22 plugin workflow can bootstrap the project.
 - `@signalk/server-api` 2.30 types with a `>=2.24.0 <3` runtime peer range. The
   separate Signal K server floor is 2.25.0 because that release added the ESM
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.3
+- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.4.1
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 
