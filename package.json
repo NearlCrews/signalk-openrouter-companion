@@ -82,6 +82,11 @@
   "dependencies": {
     "croner": "^10.0.1"
   },
+  "overrides": {
+    "markdownlint-cli2": {
+      "js-yaml": "5.2.2"
+    }
+  },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
     "@biomejs/biome": "2.5.4",
