@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { escapeSqlLiteral, indexColumns, QuestDBClient } from '../src/core/questdb.js';
+import {
+  escapeSqlLiteral,
+  indexColumns,
+  QuestDBClient,
+  stripTrailingSlashes,
+} from '../src/core/questdb.js';
 
 function ok(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -112,6 +117,20 @@ describe('QuestDBClient', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('stripTrailingSlashes', () => {
+  it('removes a long trailing run without changing embedded slashes', () => {
+    expect(stripTrailingSlashes(`http://questdb.local:9000/path${'/'.repeat(100_000)}`)).toBe(
+      'http://questdb.local:9000/path',
+    );
+  });
+
+  it('returns the original value when it has no trailing slash', () => {
+    expect(stripTrailingSlashes('http://questdb.local:9000/path')).toBe(
+      'http://questdb.local:9000/path',
+    );
   });
 });
 

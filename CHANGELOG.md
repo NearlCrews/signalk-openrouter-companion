@@ -6,6 +6,17 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed compatible development dependencies, including
+  `signalk-nearlcrews-ui` 0.3.0. Fresh configuration panels now start in the
+  Light theme while preserving stored theme preferences.
+
+### Fixed
+
+- QuestDB URL normalization now removes trailing slashes with a bounded linear
+  scan instead of a backtracking regular expression.
+
 <a id="v070"></a>
 
 ## [0.7.0] - 2026-07-15
