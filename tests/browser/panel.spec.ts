@@ -9,8 +9,8 @@ test.beforeEach(async ({ page }) => {
 
 test('loads the production remote and completes the save flow', async ({ page }) => {
   const panelRoot = page.locator('[data-snui-root]');
-  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.4.1');
-  await expect(panelRoot).toHaveAttribute('data-snui-theme', 'light');
+  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.6.1');
+  await expect(panelRoot).not.toHaveAttribute('data-snui-theme');
   await expect(page.getByText('12,480')).toBeVisible();
   const maintenanceSection = page.getByRole('button', { name: /Maintenance Advisor/ });
   await expect(maintenanceSection).toHaveCount(0);
@@ -24,6 +24,8 @@ test('loads the production remote and completes the save flow', async ({ page })
   const apiKey = page.getByRole('textbox', { name: 'API key', exact: true });
   await expect(apiKey).toBeFocused();
   await expect(apiKey).toHaveAttribute('aria-invalid', 'true');
+  await expect(apiKey).not.toHaveAttribute('descriptionid');
+  await expect(apiKey).not.toHaveAttribute('errorid');
   await expect(page.getByText('Enter an OpenRouter API key.')).toBeVisible();
   await apiKey.fill('   ');
 
@@ -75,7 +77,8 @@ test('loads the production remote and completes the save flow', async ({ page })
   expect(await saveButton.evaluate((element) => element.hasAttribute('disabled'))).toBe(false);
   await expect(saveButton).toHaveAttribute('aria-disabled', 'true');
   await expect(saveButton).toHaveAttribute('aria-busy', 'true');
-  await expect(saveButton).toHaveAccessibleName('Saving: Save configuration');
+  await expect(saveButton).toHaveAccessibleName('Save configuration');
+  await expect(saveButton).toHaveAccessibleDescription('Saving');
   const saveStatus = page.locator('[data-panel-action-bar] [tabindex="-1"]');
   await expect(saveStatus).toBeFocused();
   await expect(saveStatus).toContainText('Plugin restarting');
@@ -128,9 +131,7 @@ test('ignores an older status response that resolves after a newer poll', async 
   await expect(page.getByText('9 / 50', { exact: true })).toBeVisible();
 });
 
-test('defaults a fresh profile to Light without persisting an implicit choice', async ({
-  page,
-}) => {
+test('defaults a fresh profile to Auto without persisting an implicit choice', async ({ page }) => {
   await page.evaluate(() => {
     localStorage.removeItem('signalk-nearlcrews-ui.theme.v1');
     localStorage.removeItem('orc-theme');
@@ -140,31 +141,32 @@ test('defaults a fresh profile to Light without persisting an implicit choice', 
 
   const root = page.locator('[data-snui-root]');
   const themeGroup = page.getByRole('radiogroup', { name: 'Panel theme' });
-  await expect(root).toHaveAttribute('data-snui-theme', 'light');
-  await expect(themeGroup.getByRole('radio', { name: 'Light' })).toBeChecked();
+  await expect(root).not.toHaveAttribute('data-snui-theme');
+  await expect(themeGroup.getByRole('radio', { name: 'Auto' })).toBeChecked();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
     .toBeNull();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('orc-theme'))).toBeNull();
 
-  await themeGroup.getByRole('radio', { name: 'Auto' }).click();
-  await expect(root).not.toHaveAttribute('data-snui-theme');
+  await themeGroup.getByRole('radio', { name: 'Dark' }).click();
+  await expect(root).toHaveAttribute('data-snui-theme', 'dark');
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
-    .toBe('auto');
+    .toBe('dark');
 });
 
-test('migrates the legacy preference and supports every theme', async ({ page }) => {
+test('ignores the retired legacy preference and supports every theme', async ({ page }) => {
   await page.evaluate(() => {
     localStorage.removeItem('signalk-nearlcrews-ui.theme.v1');
     localStorage.setItem('orc-theme', 'night');
   });
   await page.reload();
   await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
-  await expect(page.locator('[data-snui-root]')).toHaveAttribute('data-snui-theme', 'night');
+  await expect(page.locator('[data-snui-root]')).not.toHaveAttribute('data-snui-theme');
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
-    .toBe('night');
+    .toBeNull();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('orc-theme'))).toBe('night');
 
   const themeGroup = page.getByRole('radiogroup', { name: 'Panel theme' });
   for (const [label, value] of [

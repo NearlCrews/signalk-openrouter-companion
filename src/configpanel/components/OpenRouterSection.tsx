@@ -53,7 +53,13 @@ export const OpenRouterSection = memo(function OpenRouterSection({
           <InputGroup>
             <InputGroupControl width="grow">
               <TextInput
-                {...controlProps}
+                id={controlProps.id}
+                aria-describedby={controlProps['aria-describedby']}
+                aria-errormessage={controlProps['aria-errormessage']}
+                aria-invalid={controlProps['aria-invalid']}
+                disabled={controlProps.disabled}
+                name={controlProps.name}
+                required={controlProps.required}
                 ref={apiKeyRef}
                 type={showKey ? 'text' : 'password'}
                 autoComplete="new-password"

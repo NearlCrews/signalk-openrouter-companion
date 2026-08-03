@@ -17,14 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 26
-          cache: npm
-      - run: npm install --global npm@11.18.0
+          package-manager-cache: false
       - name: Verify the release tag matches the package.json version
         env:
           TAG_NAME: ${{ github.event.release.tag_name }}
@@ -39,13 +39,15 @@ jobs:
         run: |
           git fetch origin main --no-tags
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - run: npm ci
+      - run: npx --yes npm@11.18.0 ci
       - run: npx playwright install --with-deps chromium firefox webkit
-      - run: npm run verify:release
+      - run: npx --yes npm@11.18.0 run verify:release
       - name: Pack the verified plugin
         run: |
           mkdir artifacts
-          npm pack --ignore-scripts --pack-destination artifacts
+          npx --yes npm@11.18.0 pack \
+            --ignore-scripts \
+            --pack-destination artifacts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-package
@@ -68,8 +70,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 26
+          package-manager-cache: false
           registry-url: https://registry.npmjs.org/
-      - run: npm install --global npm@11.18.0
-      - run: npm publish ./artifacts/*.tgz --provenance --access public
+      - run: >-
+          npx --yes npm@11.18.0 publish ./artifacts/*.tgz
+          --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

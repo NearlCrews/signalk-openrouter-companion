@@ -18,27 +18,26 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.1
+## What's new in 0.7.2
 
-0.7.1 updates the shared configuration UI, development dependencies, and
-runtime verification matrix. Existing plugin configuration and saved theme
-preferences remain compatible.
+0.7.2 updates the shared configuration UI, compatible dependencies, field
+integration, and workflow security.
 
-- **Shared UI 0.4.1** makes Light the default for fresh profiles without
-  replacing explicit or migrated preferences. It also improves Night-theme
-  feedback, loading-action contrast, focus behavior, and narrow-layout
-  overflow handling.
-- **Current compatible dependencies** update React, Playwright, Biome, ESLint,
-  Size Limit, Webpack, Vite, Knip, Markdownlint, Publint, typescript-eslint,
-  and Node types. TypeScript remains on 6.0 until typescript-eslint supports
-  TypeScript 7.
-- **Node 26 verification** moves the primary and release-build workflows to
-  Node 26 while retaining Node 22 and 24 in the Signal K plugin matrix.
-- **Clean release gates** cover the fresh Light default, legacy-theme
-  migration, all four browser projects, packed metadata and screenshots,
-  bundle limits, and full and runtime dependency audits.
+- **Shared UI 0.6.1** starts fresh profiles in Auto so the panel follows the
+  Signal K host, retains explicit shared preferences, and uses the current
+  directional sticky action bar. The retired `orc-theme` key is ignored.
+- **Valid shared field integration** forwards only control and ARIA properties
+  from `LabeledField`, preventing invalid metadata attributes on the API key
+  input.
+- **Current compatible dependencies** refresh Biome, Playwright, Vite,
+  Webpack, Size Limit, Knip, Dependency Cruiser, globals, tsx, React types, and
+  related packages. TypeScript remains on 6.0 until the typed-lint toolchain
+  supports TypeScript 7.
+- **Hardened workflow gates** pin every action, add actionlint and zizmor,
+  disable caches in release jobs, avoid persisted checkout credentials, and
+  verify release invariants locally.
 
-See the [v0.7.1 changelog entry](CHANGELOG.md#v071) and the
+See the [v0.7.2 changelog entry](CHANGELOG.md#v072) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
@@ -105,12 +104,13 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React is supplied by the Signal K admin host. Version 0.4.1 adds a
-  fresh-profile Light default, stronger Night-theme feedback, and interaction
-  fixes while preserving saved theme preferences.
+  React is supplied by the Signal K admin host. Version 0.6.1 starts fresh
+  profiles in Auto, follows the host theme, and retains explicit preferences
+  stored under the shared key.
 - **Binnacle-aligned verification.** TypeScript, Biome, ESLint, dependency
   boundaries, dead-code checks, Vitest, Playwright, package validation, size
-  budgets, and dependency audits share the same gate structure. Signal K
+  budgets, workflow security, and dependency audits share the same gate
+  structure. Signal K
   integration checks cover both the declared 2.25 floor and the latest server.
 
 See the [development guide](docs/DEVELOPMENT.md) for the full module map

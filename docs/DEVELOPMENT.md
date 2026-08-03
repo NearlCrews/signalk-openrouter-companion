@@ -163,11 +163,11 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.4.1 component library and shares React 19 as a Module
+`signalk-nearlcrews-ui` 0.6.1 component library and shares React 19 as a Module
 Federation singleton supplied by the Signal K admin host. `PanelRoot` owns the
-theme tokens and migrates the former `orc-theme` preference into the shared
-theme key. A profile without a valid shared or legacy preference starts in
-Light without persisting an implicit choice. The panel checks native CSS scope
+theme tokens. A profile without a valid shared preference starts in Auto,
+follows the host, and does not persist an implicit choice. The retired
+`orc-theme` preference is intentionally ignored. The panel checks native CSS scope
 support before mounting, and its responsive rules follow the panel container
 rather than the browser viewport. Chromium and Edge 120 are the minimum
 Chromium-family versions because the shared UI mirrors direction-sensitive
@@ -233,6 +233,7 @@ Playwright, Vite, and browser fixtures through four TypeScript configurations.
 
 ```bash
 npm run verify:commit  # formatting, lint, boundaries, and dead code
+npm run ci:workflows   # action pins and release-workflow invariants
 npm run verify:fast    # commit gate plus all type checks
 npm run verify         # fast gate, coverage, production build, and size budgets
 npm run verify:browser # full local gate plus Chromium
@@ -244,12 +245,10 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The original `signalk-nearlcrews-ui` 0.2 migration increased the panel
-JavaScript from
-17.3 kB gzip to 24.6 kB gzip, a 42 percent increase. This documented
-exception trades duplicated local controls for the shared accessibility,
-validation, responsive layout, and theme contracts. The 25 kB gzip gate keeps
-future growth within less than 2 percent of the migrated bundle.
+The `signalk-nearlcrews-ui` 0.6.1 migration increases the complete panel from
+24.6 kB to 32.17 kB gzip. This documented exception retains the shared
+accessibility, validation, responsive layout, and theme contracts. The 33 kB
+gzip gate leaves a 2.6 percent margin and keeps future growth visible.
 
 ## Local development against a real Signal K server
 
@@ -348,6 +347,7 @@ GitHub Actions workflows under `.github/workflows/`:
 - `ci.yml`: runs the full release gate on Node 26 with npm 11.18.0, including
   Chromium, Firefox, WebKit, package validation, and full and runtime audits.
 - `codeql.yml`: CodeQL static analysis.
+- `workflow-security.yml`: pinned actionlint and zizmor checks.
 - `publish.yml`: verifies, packs, and publishes the exact artifact when a
   non-prerelease GitHub release is published.
 
@@ -365,7 +365,7 @@ release.
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.4.1
+- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.6.1
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 

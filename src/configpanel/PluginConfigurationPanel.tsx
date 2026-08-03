@@ -377,7 +377,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     validationText || noticeText || (dirty ? 'Unsaved changes' : 'No unsaved changes');
 
   return (
-    <PanelRoot legacyThemeStorageKeys={['orc-theme']}>
+    <PanelRoot>
       <Stack gap={4}>
         <Cluster justify="end">
           <ThemeToggle />
@@ -488,7 +488,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
         </CollapsibleSection>
 
         <ActionBar
-          sticky
+          sticky="bottom"
           data-panel-action-bar=""
           statusRef={savedNoticeRef}
           status={

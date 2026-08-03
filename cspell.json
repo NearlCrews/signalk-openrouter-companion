@@ -15,6 +15,7 @@
   ],
   "words": [
     "AccuWeather",
+    "actionlint",
     "analyzers",
     "appIcon",
     "armv",
@@ -25,14 +26,17 @@
     "CodeQL",
     "configpanel",
     "configurator",
+    "cooldown",
     "creds",
     "croner",
     "deadcode",
     "dedup",
     "depcruise",
     "dewpoint",
+    "descriptionid",
     "dietpi",
     "esbuild",
+    "errorid",
     "Furuno",
     "localStorage",
     "lookback",
@@ -47,6 +51,7 @@
     "publint",
     "QuestDB",
     "Raymarine",
+    "rhysd",
     "rescan",
     "rjsf",
     "sandboxed",
@@ -61,6 +66,8 @@
     "unittests",
     "unwritable",
     "Vitest",
-    "webpack"
+    "webpack",
+    "zizmor",
+    "zizmorcore"
   ]
 }

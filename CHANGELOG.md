@@ -6,6 +6,36 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v072"></a>
+
+## [0.7.2] - 2026-08-02
+
+### Changed
+
+- **The configuration panel now uses `signalk-nearlcrews-ui` 0.6.1.** Fresh
+  profiles start in Auto and follow the Signal K host without writing an
+  implicit preference. Explicit Light, Dark, Night, and Auto choices continue
+  to use the shared preference key. The retired `orc-theme` key is ignored. The
+  measured panel grows from 24.6 kB to 32.17 kB gzipped, so its budget moves to
+  33 kB while retaining a 2.6 percent regression margin.
+- **Compatible development dependencies are current.** Biome, Playwright,
+  Vite, Webpack, Size Limit, Knip, Dependency Cruiser, globals, tsx, React
+  types, and related transitive packages are refreshed. TypeScript remains on
+  6.0 because the typed-lint toolchain does not yet support TypeScript 7.
+- **Workflow validation is part of the commit gate.** Local checks preserve
+  full action pins and release invariants. GitHub Actions adds pinned actionlint
+  and zizmor jobs, pins CodeQL, disables release caches, avoids persisted
+  checkout credentials, and applies a seven-day Dependabot cooldown.
+
+### Fixed
+
+- **Shared field metadata no longer leaks onto the API key input.** The
+  `LabeledField` render callback now forwards only valid control and ARIA props,
+  preventing React warnings and invalid `descriptionid` and `errorid` DOM
+  attributes under the current shared UI contract.
+- **The sticky save bar uses the current directional API.** Its explicit
+  bottom position preserves the existing behavior after the shared UI upgrade.
+
 <a id="v071"></a>
 
 ## [0.7.1] - 2026-07-27
