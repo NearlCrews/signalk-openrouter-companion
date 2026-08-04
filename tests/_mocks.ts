@@ -58,6 +58,7 @@ export interface MockApp {
   errorMessages: string[];
   debugMessages: unknown[];
   appErrorMessages: string[];
+  adminMiddlewarePaths: string[];
   unsubscribes: Array<() => void>;
   availablePaths: string[];
   selfPaths: Map<string, unknown>;
@@ -82,6 +83,11 @@ export interface MockApp {
   getSelfPath(path: string): unknown;
   busFor<T = unknown>(path: string): MockBus<T>;
   setSelfPath(path: string, value: unknown): void;
+  securityStrategy?: {
+    addAdminMiddleware(path: string): void;
+    addAdminWriteMiddleware(path: string): void;
+    addWriteMiddleware(path: string): void;
+  };
 }
 
 export function makeMockApp(dataDir: string): MockApp {
@@ -92,6 +98,7 @@ export function makeMockApp(dataDir: string): MockApp {
     errorMessages: [],
     debugMessages: [],
     appErrorMessages: [],
+    adminMiddlewarePaths: [],
     unsubscribes: [],
     availablePaths: [],
     selfPaths: new Map(),
@@ -127,6 +134,13 @@ export function makeMockApp(dataDir: string): MockApp {
     },
     error(msg) {
       app.appErrorMessages.push(msg);
+    },
+    securityStrategy: {
+      addAdminMiddleware(path) {
+        app.adminMiddlewarePaths.push(path);
+      },
+      addAdminWriteMiddleware() {},
+      addWriteMiddleware() {},
     },
     getDataDirPath() {
       return dataDir;

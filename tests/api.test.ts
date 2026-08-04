@@ -92,6 +92,7 @@ describe('plugin REST API', () => {
       const plugin = createPlugin(app as never);
       const { router, routes } = makeRecordingRouter();
       plugin.registerWithRouter(router);
+      expect(app.adminMiddlewarePaths).toEqual(['/plugins/signalk-openrouter-companion/api']);
       expect(routes.map((r) => `${r.method.toUpperCase()} ${r.path}`).sort()).toEqual([
         'GET /api/analyzers/:id/prompt',
         'GET /api/analyzers/:id/reports',
@@ -101,6 +102,19 @@ describe('plugin REST API', () => {
         'POST /api/openrouter/test',
         'POST /api/questdb/test',
       ]);
+    });
+
+    it('registers no routes when the admin middleware is unavailable', () => {
+      app.securityStrategy = undefined;
+      const plugin = createPlugin(app as never);
+      const { router, routes } = makeRecordingRouter();
+
+      plugin.registerWithRouter(router);
+
+      expect(routes).toEqual([]);
+      expect(app.errorMessages).toContainEqual(
+        expect.stringContaining('securityStrategy not available'),
+      );
     });
 
     it('publishes an OpenAPI doc whose operations match the registered routes', () => {
@@ -660,6 +674,43 @@ describe('plugin REST API', () => {
       // Every ok:false response carries an error string, including the
       // reachable-but-wrong-answer probe (HTTP 200 with a falsy result).
       expect(typeof body.error).toBe('string');
+    });
+
+    it('does not follow QuestDB probe redirects', async () => {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:9000' } }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const rt = makeRuntime('http://qdb:9000');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+
+      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+
+      const [, requestInit] = fetchMock.mock.calls[0] ?? [];
+      expect(requestInit?.redirect).toBe('error');
+      expect(r.body).toMatchObject({ ok: false });
+    });
+
+    it('returns a generic error for an invalid QuestDB response body', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('<html>private response</html>', { status: 200 })),
+      );
+      const rt = makeRuntime('http://qdb:9000');
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+
+      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+
+      expect(r.status).toBe(502);
+      expect(r.body).toEqual({
+        ok: false,
+        url: 'http://qdb:9000',
+        error: 'QuestDB is unreachable or returned an invalid response',
+      });
+      expect(JSON.stringify(r.body)).not.toContain('private response');
     });
   });
 });

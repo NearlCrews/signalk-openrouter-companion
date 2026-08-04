@@ -429,7 +429,12 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
           });
         }
       } catch (err) {
-        res.status(502).json({ ok: false, url: normalized, error: stringify(err) });
+        void err;
+        res.status(502).json({
+          ok: false,
+          url: normalized,
+          error: 'QuestDB is unreachable or returned an invalid response',
+        });
       }
     },
   },

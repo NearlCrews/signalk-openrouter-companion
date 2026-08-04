@@ -1,4 +1,4 @@
-import { resolveSystemPrompt } from '../core/cfg.js';
+import { resolveSystemPrompt, sanitizeProducerString } from '../core/cfg.js';
 import { clampAtWord, fmtRatio, fmtUnit } from '../core/format.js';
 import {
   alertIdFor,
@@ -109,7 +109,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   }
 
   buildPrompt(input: AlertInput): { system: string; user: string } {
-    const lines = [`Event: ${input.subkind}`, `Bank: ${input.bankId}`];
+    const lines = [`Event: ${input.subkind}`, `Bank: ${sanitizeProducerString(input.bankId)}`];
     const ed = input.eventData;
     if (typeof ed.soc === 'number') lines.push(`Triggering SoC: ${fmtRatio(ed.soc)}`);
     if (typeof ed.imbalanceV === 'number') {

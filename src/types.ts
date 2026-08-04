@@ -43,7 +43,7 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 // with the panel); these aliases are kept for backward-compat with the
 // analyzer constructor and the existing config shape.
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
-import { clampMin, clampRange, finiteOr } from './core/cfg.js';
+import { clampMin, clampRange, finiteOr, normalizeOpenRouterBaseUrl } from './core/cfg.js';
 import { DEFAULT_SEVERITY_FLOOR_VALUE, type SeverityFloorPresetValue } from './severityFloors.js';
 
 export type SeverityFloor = SeverityFloorPresetValue;
@@ -335,6 +335,7 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
   const a = cfg.analyzers.alerts;
   cfg.openrouter = {
     ...or,
+    baseUrl: normalizeOpenRouterBaseUrl(or.baseUrl, d.openrouter.baseUrl),
     maxCallsPerDay: clampMin(or.maxCallsPerDay, 1, d.openrouter.maxCallsPerDay),
     requestTimeoutMs: clampMin(or.requestTimeoutMs, 1000, d.openrouter.requestTimeoutMs),
   };

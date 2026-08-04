@@ -3,6 +3,7 @@ import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
+  sanitizeProducerString,
 } from '../core/cfg.js';
 import { DAY_MS, fmtNumber, pushBankLines } from '../core/format.js';
 import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
@@ -100,7 +101,9 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     lines.push(`## Generated ${input.generatedAt}`);
     lines.push('');
     for (const b of banks) {
-      pushBankLines(lines, b.id, b, [{ label: 'voltage 24h', summary: b.voltage24h }]);
+      pushBankLines(lines, sanitizeProducerString(b.id), b, [
+        { label: 'voltage 24h', summary: b.voltage24h },
+      ]);
       if (b.cells && b.cells.length > 0) {
         const cellLine = b.cells.map((c) => `${c.index}=${fmtNumber(c.voltage)}`).join(' ');
         lines.push(`- cells: ${cellLine}`);

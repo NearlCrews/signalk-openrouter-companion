@@ -195,7 +195,8 @@ function triggerSchema(opts: {
           default: defaults.put.enabled,
           // PUT path is a fixed convention `plugins.openrouter-companion.<id>.run`
           // (derived from the analyzer id at registration time, not configurable).
-          description: 'PUT to plugins.openrouter-companion.<analyzer-id>.run to fire on demand.',
+          description:
+            'PUT to plugins.openrouter-companion.<analyzer-id>.run to fire on demand. Each trigger consumes the shared OpenRouter budget and is available to clients with Signal K write permission.',
         },
       },
     },

@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 
 test('loads the production remote and completes the save flow', async ({ page }) => {
   const panelRoot = page.locator('[data-snui-root]');
-  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.6.1');
+  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.6.2');
   await expect(panelRoot).not.toHaveAttribute('data-snui-theme');
   await expect(page.getByText('12,480')).toBeVisible();
   const maintenanceSection = page.getByRole('button', { name: /Maintenance Advisor/ });

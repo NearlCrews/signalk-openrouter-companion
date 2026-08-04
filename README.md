@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/signalk-openrouter-companion.svg)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml)
 [![plugin-ci](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D22.18-brightgreen.svg)](https://nodejs.org)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/nearlcrews)
 
@@ -18,26 +18,22 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.2
+## What's new in 0.7.3
 
-0.7.2 updates the shared configuration UI, compatible dependencies, field
-integration, and workflow security.
+0.7.3 closes unauthenticated REST access, hardens outbound endpoints and prompt
+inputs, and updates the shared configuration UI.
 
-- **Shared UI 0.6.1** starts fresh profiles in Auto so the panel follows the
-  Signal K host, retains explicit shared preferences, and uses the current
-  directional sticky action bar. The retired `orc-theme` key is ignored.
-- **Valid shared field integration** forwards only control and ARIA properties
-  from `LabeledField`, preventing invalid metadata attributes on the API key
-  input.
-- **Current compatible dependencies** refresh Biome, Playwright, Vite,
-  Webpack, Size Limit, Knip, Dependency Cruiser, globals, tsx, React types, and
-  related packages. TypeScript remains on 6.0 until the typed-lint toolchain
-  supports TypeScript 7.
-- **Hardened workflow gates** pin every action, add actionlint and zizmor,
-  disable caches in release jobs, avoid persisted checkout credentials, and
-  verify release invariants locally.
+- **Fail-closed REST API** registers routes only when Signal K installs its
+  admin middleware.
+- **Safer outbound tests** reject QuestDB redirects, keep local and LAN hosts
+  available, and do not return upstream response excerpts to the panel.
+- **Protected OpenRouter credentials** require an HTTPS base URL and remove
+  embedded credentials before the API key is sent.
+- **Bounded prompt inputs** normalize producer-controlled identifiers, source
+  labels, and notification text before including them in analyzer prompts.
+- **Shared UI 0.6.2** supplies the exact shared configuration-panel patch.
 
-See the [v0.7.2 changelog entry](CHANGELOG.md#v072) and the
+See the [v0.7.3 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v073) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
@@ -104,7 +100,7 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React is supplied by the Signal K admin host. Version 0.6.1 starts fresh
+  React is supplied by the Signal K admin host. Version 0.6.2 starts fresh
   profiles in Auto, follows the host theme, and retains explicit preferences
   stored under the shared key.
 - **Binnacle-aligned verification.** TypeScript, Biome, ESLint, dependency
@@ -113,7 +109,7 @@ OpenRouter Companion is one plugin built from focused modules:
   structure. Signal K
   integration checks cover both the declared 2.25 floor and the latest server.
 
-See the [development guide](docs/DEVELOPMENT.md) for the full module map
+See the [development guide](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/docs/DEVELOPMENT.md) for the full module map
 and the analyzer extension point.
 
 ## Requirements
@@ -244,11 +240,11 @@ predicted severity meets the configured floor.
 
 ## Documentation
 
-- [Development guide](docs/DEVELOPMENT.md): architecture, the analyzer
+- [Development guide](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/docs/DEVELOPMENT.md): architecture, the analyzer
   extension point, the REST API, build, and tests
-- [Changelog](CHANGELOG.md)
-- [Contributing](.github/CONTRIBUTING.md)
-- [Security policy](.github/SECURITY.md)
+- [Changelog](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md)
+- [Contributing](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/.github/CONTRIBUTING.md)
+- [Security policy](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/.github/SECURITY.md)
 
 ## Development
 
@@ -275,16 +271,16 @@ npm run clean        # remove dist/ and public/
 ```
 
 Run `npm run verify:browser` before pushing and `npm run verify:release` before
-release approval. See the [development guide](docs/DEVELOPMENT.md) for the full
+release approval. See the [development guide](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/docs/DEVELOPMENT.md) for the full
 workflow.
 
 ## License
 
-Apache-2.0: see [LICENSE](LICENSE) for the full text. The software is
+Apache-2.0: see the [license](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/LICENSE) for the full text. The software is
 provided "AS IS", without warranty of any kind. Treat the generated
 reports and alerts as advisory, and keep independent engine and battery
 monitoring in place. Bundled dependency attributions are in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[third-party notices](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgments
 
@@ -307,4 +303,4 @@ Find this plugin useful? You can support its continued development by
 
 - [Report a bug](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=bug_report.yml)
 - [Request a feature](https://github.com/NearlCrews/signalk-openrouter-companion/issues/new?template=feature_request.yml)
-- [Security issues](.github/SECURITY.md)
+- [Security issues](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/.github/SECURITY.md)

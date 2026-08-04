@@ -46,6 +46,39 @@ export function resolveSystemPrompt(custom: string | undefined, fallback: string
   return trimmed ? trimmed : fallback;
 }
 
+/**
+ * Bound producer-controlled labels before including them in an LLM prompt.
+ * This keeps each value on one line, removes control characters, and prevents
+ * an unexpectedly large bus value from dominating the prompt.
+ */
+export function sanitizeProducerString(raw: unknown, maxLength = 256): string {
+  const normalized = [...String(raw)]
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? ' ' : character;
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.slice(0, maxLength);
+}
+
+/** Normalize the raw-JSON-only OpenRouter base URL or return the safe default. */
+export function normalizeOpenRouterBaseUrl(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== 'https:' || url.search || url.hash) return fallback;
+    url.username = '';
+    url.password = '';
+    let normalized = url.href;
+    while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+    return normalized;
+  } catch {
+    return fallback;
+  }
+}
+
 // Shared opening line for every long-form report prompt. The first line of the
 // reply becomes the chartplotter notification (see headlineOf in publisher.ts),
 // so it must be short and plain; the full report is logged to disk. Kept

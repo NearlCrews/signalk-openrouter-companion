@@ -3,6 +3,7 @@ import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
+  sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
 import { asFiniteNumber, DAY_MS, fmtNumber, fmtPct } from '../core/format.js';
@@ -187,7 +188,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     );
     lines.push('');
     for (const eng of input.engines) {
-      lines.push(`### Engine ${eng.engineId}`);
+      lines.push(`### Engine ${sanitizeProducerString(eng.engineId)}`);
       lines.push(
         '| Band | Wk n (fuel/sog) | Base n (fuel/sog) | Fuel.rate wk (m^3/s) | Fuel.rate base | Δ% | SOG wk (m/s) | SOG base | Δ% |',
       );

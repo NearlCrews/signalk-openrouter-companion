@@ -3,6 +3,7 @@ import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
+  sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverEngineIds, WATCH_PREFIXES } from '../core/discovery.js';
 import { fmtNumber, pushBankLines } from '../core/format.js';
@@ -147,7 +148,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
 
     const lines: string[] = [];
     lines.push('## Session');
-    lines.push(`Engine: ${session.engineId}`);
+    lines.push(`Engine: ${sanitizeProducerString(session.engineId)}`);
     lines.push(`Start: ${session.start}`);
     lines.push(`End:   ${session.end}`);
     lines.push(`Duration: ${session.durationSec} s`);
@@ -159,18 +160,19 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
       const unit = unitForPath(path);
       const unitSuffix = unit ? ` ${unit}` : '';
       lines.push(
-        `- ${path}: min=${f(s.min)} max=${f(s.max)} mean=${f(s.mean)}${unitSuffix} count=${f(s.count)} sources=${JSON.stringify(s.sources)}`,
+        `- ${path}: min=${f(s.min)} max=${f(s.max)} mean=${f(s.mean)}${unitSuffix} count=${f(s.count)} sources=${JSON.stringify(s.sources.map((source) => sanitizeProducerString(source)))}`,
       );
     }
     lines.push('');
     lines.push('## Engine notification slots');
     for (const [slot, value] of Object.entries(engineNotifications)) {
-      lines.push(`- ${slot}: ${JSON.stringify(value)}`);
+      const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+      lines.push(`- ${sanitizeProducerString(slot)}: ${sanitizeProducerString(serialized, 512)}`);
     }
     lines.push('');
     lines.push('## Batteries (end-of-session snapshot)');
     for (const b of batteries) {
-      pushBankLines(lines, b.id, b, [
+      pushBankLines(lines, sanitizeProducerString(b.id), b, [
         { label: 'voltage (session)', summary: b.voltageSession },
         { label: 'state of charge (session)', summary: b.socSession },
       ]);

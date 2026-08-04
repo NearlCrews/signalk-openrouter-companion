@@ -637,6 +637,7 @@ export default function createPlugin(app: ServerApiLike): {
         logger.error(
           'app.securityStrategy missing in registerWithRouter; admin middleware NOT applied',
         );
+        return;
       }
       registerApiRoutes(router, () => runtime);
     },

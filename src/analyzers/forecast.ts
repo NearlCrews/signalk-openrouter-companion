@@ -1,5 +1,5 @@
 import type { BufferEntry } from '../core/buffer.js';
-import { resolveSystemPrompt } from '../core/cfg.js';
+import { resolveSystemPrompt, sanitizeProducerString } from '../core/cfg.js';
 import { asFiniteNumber, fmtNumber, fmtSigned, HOUR_MS } from '../core/format.js';
 import {
   notificationReportPath,
@@ -389,7 +389,7 @@ function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): vo
     const hourly = t.buckets.map((b) => (b == null ? '-' : fmtNumber(b))).join(', ');
     const parts = [
       `now=${fmtNumber(t.current)}`,
-      `source=${t.source ?? 'n/a'}`,
+      `source=${sanitizeProducerString(t.source ?? 'n/a')}`,
       `hourly=[${hourly}]`,
     ];
     if (t.baselineMean != null) parts.push(`baseline=${fmtNumber(t.baselineMean)}`);

@@ -130,7 +130,11 @@ The default is `moderate`. When the grade meets or exceeds the floor the notific
 
 ## REST API
 
-Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's `registerWithRouter`. All routes inherit SK admin authentication.
+Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's
+`registerWithRouter`. All routes inherit Signal K admin authentication. If the
+server cannot install the admin middleware, the plugin registers no REST routes.
+The QuestDB test supports the local and LAN hosts commonly used onboard, but it
+rejects redirects and never returns upstream response text to the client.
 
 | Verb | Path | Purpose |
 | ---- | ---- | ------- |
@@ -142,7 +146,14 @@ Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's `registerWi
 | GET | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100) |
 | GET | `/api/analyzers/:id/prompt` | `{ default, current }` for the prompt editor |
 
-Manual fire is also available via the standardized SK PUT trigger paths (`plugins.openrouter-companion.<analyzer>.run`); the REST `fire` endpoint is a panel convenience.
+Manual fire is also available via the standardized Signal K PUT trigger paths
+(`plugins.openrouter-companion.<analyzer>.run`); the REST `fire` endpoint is a
+panel convenience. PUT triggers are available to clients with Signal K write
+permission and consume the shared OpenRouter budget.
+
+Producer-controlled path identifiers, source labels, and notification text are
+untrusted prompt input. Keep them bounded and on one line with
+`sanitizeProducerString` before interpolating them into an analyzer prompt.
 
 ## Build
 
@@ -163,7 +174,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.6.1 component library and shares React 19 as a Module
+`signalk-nearlcrews-ui` 0.6.2 component library and shares React 19 as a Module
 Federation singleton supplied by the Signal K admin host. `PanelRoot` owns the
 theme tokens. A profile without a valid shared preference starts in Auto,
 follows the host, and does not persist an implicit choice. The retired
@@ -245,8 +256,8 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` 0.6.1 migration increases the complete panel from
-24.6 kB to 32.17 kB gzip. This documented exception retains the shared
+The `signalk-nearlcrews-ui` 0.6.2 migration keeps the complete panel near
+32.17 kB gzip. This documented exception retains the shared
 accessibility, validation, responsive layout, and theme contracts. The 33 kB
 gzip gate leaves a 2.6 percent margin and keeps future growth visible.
 
@@ -365,7 +376,7 @@ release.
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.6.1
+- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.6.2
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 

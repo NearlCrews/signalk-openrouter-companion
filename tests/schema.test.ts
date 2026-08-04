@@ -6,7 +6,7 @@ import {
   type EnabledGatedNode,
   type TriggerSchemaNode,
 } from '../src/schema.js';
-import { mergeWithDefaults } from '../src/types.js';
+import { DEFAULT_OPTIONS, mergeWithDefaults } from '../src/types.js';
 
 /**
  * Index into a Record by key, asserting the key is present. Narrows away the
@@ -130,10 +130,10 @@ describe('schema', () => {
 
     const putProps = triggers.properties.put.properties;
     expect(putProps.enabled.default).toBe(true);
-    // PUT path is not stored in the cfg shape; the description now states
-    // the fixed convention rather than embedding a per-analyzer value.
+    // PUT path is not stored in the cfg shape; the description states the
+    // fixed convention, permission boundary, and budget effect.
     expect(putProps.enabled.description).toBe(
-      'PUT to plugins.openrouter-companion.<analyzer-id>.run to fire on demand.',
+      'PUT to plugins.openrouter-companion.<analyzer-id>.run to fire on demand. Each trigger consumes the shared OpenRouter budget and is available to clients with Signal K write permission.',
     );
 
     const events = triggers.properties.events as NonNullable<
@@ -380,6 +380,22 @@ describe('mergeWithDefaults', () => {
     } as never);
     expect(r.openrouter.fallbackModels).toEqual(['openai/gpt-5-mini']);
     expect(r.openrouter.provider).toEqual({ dataCollection: 'deny', sort: 'price' });
+  });
+
+  it('normalizes safe OpenRouter base URLs and rejects unsafe ones', () => {
+    const valid = mergeWithDefaults({
+      openrouter: { baseUrl: 'https://user:secret@router.example.com/api/v1/' },
+    } as never);
+    expect(valid.openrouter.baseUrl).toBe('https://router.example.com/api/v1');
+
+    for (const baseUrl of [
+      'http://router.example.com/api/v1',
+      'https://router.example.com/api/v1?token=secret',
+      'not a URL',
+    ]) {
+      const result = mergeWithDefaults({ openrouter: { baseUrl } } as never);
+      expect(result.openrouter.baseUrl).toBe(DEFAULT_OPTIONS.openrouter.baseUrl);
+    }
   });
 
   it('preserves user-provided events and other fields', () => {

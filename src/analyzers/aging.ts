@@ -3,6 +3,7 @@ import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
+  sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
 import { asFiniteNumber, DAY_MS, fmtNumber } from '../core/format.js';
@@ -157,7 +158,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     lines.push(`Configured windows: ${windowDesc} (longest = ${this.windowDays.at(-1)} days)`);
     lines.push('');
     for (const b of input.banks) {
-      lines.push(`### Bank: ${b.id}`);
+      lines.push(`### Bank: ${sanitizeProducerString(b.id)}`);
       for (const { days, stats: w } of b.windows) {
         lines.push(`- ${days}d window:`);
         lines.push(`  - capacity samples: ${w.capacitySamples}`);

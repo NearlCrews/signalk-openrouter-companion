@@ -3,6 +3,7 @@ import {
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
+  sanitizeProducerString,
 } from '../core/cfg.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, LIVENESS_DEFAULT_STALENESS_SEC } from '../types.js';
@@ -113,7 +114,7 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
       if (p.stale) flags.push('STALE');
       if (p.multiSource) flags.push('MULTI-SOURCE');
       lines.push(
-        `- ${p.path}: last sample ${age}; ${p.sampleCount} samples; sources=[${p.sources.join(', ')}]${
+        `- ${p.path}: last sample ${age}; ${p.sampleCount} samples; sources=[${p.sources.map((source) => sanitizeProducerString(source)).join(', ')}]${
           flags.length > 0 ? ` ${flags.join(' ')}` : ''
         }`,
       );

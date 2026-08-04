@@ -119,7 +119,7 @@ export class QuestDBClient {
   async probe(abortSignal?: AbortSignal): Promise<boolean> {
     const r = await fetchWithTimeout(
       `${this.baseUrl}/exec?query=SELECT%201`,
-      {},
+      { redirect: 'error' },
       QUESTDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
     );

@@ -6,6 +6,34 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v073"></a>
+
+## [0.7.3] - 2026-08-04
+
+### Fixed
+
+- REST routes now fail closed when Signal K cannot install the admin
+  middleware, preventing unauthenticated status, paid-call, report, and
+  connectivity-test access.
+- QuestDB connectivity tests reject redirects and return generic transport and
+  response errors without exposing upstream response text. Local and LAN
+  QuestDB hosts remain supported for normal marine installations.
+- OpenRouter base URLs now require HTTPS, discard embedded credentials, reject
+  query strings and fragments, and normalize trailing slashes before use.
+- Producer-controlled identifiers, source labels, and notification text are
+  reduced to bounded single-line values before entering analyzer prompts.
+- Replaced relative repository links in the packaged README with working
+  absolute links for Signal K App Store readers.
+
+### Changed
+
+- Documented that Signal K PUT triggers are available to clients with write
+  permission and consume the shared OpenRouter budget.
+- Enforced sustainable coverage floors of 75 percent statements, 60 percent
+  branches, 70 percent functions, and 75 percent lines.
+- Updated the shared configuration UI to 0.6.2, publint to 0.3.23, and
+  typescript-eslint to 8.66.0.
+
 <a id="v072"></a>
 
 ## [0.7.2] - 2026-08-02
