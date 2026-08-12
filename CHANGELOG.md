@@ -6,6 +6,10 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v074"></a>
+
+## [0.7.4] - 2026-08-12
+
 ### Added
 
 - Added a selectable history source for the trend analyzers. Existing QuestDB
@@ -1469,3 +1473,6 @@ The changes were derived from a study of
 - Initial release.
 - Plugin core: rolling buffer, engine-session detector, trigger router, OpenRouter HTTP client, optional QuestDB enrichment, default publisher (SK notification + JSONL log), per-day budget cap.
 - Maintenance analyzer: engine-stop trigger and PUT-on-demand trigger, plain-English session reports with engine alarm snapshot and battery state.
+
+[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.3...v0.7.4

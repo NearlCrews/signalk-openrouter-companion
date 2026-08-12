@@ -17,22 +17,23 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.3
+## What's new in 0.7.4
 
-0.7.3 closes unauthenticated REST access, hardens outbound endpoints and prompt
-inputs, and updates the shared configuration UI.
+0.7.4 adds selectable history providers, strengthens configuration safety, and
+refreshes the shared panel and release checks.
 
-- **Fail-closed REST API** registers routes only when Signal K installs its
-  admin middleware.
-- **Safer outbound tests** reject QuestDB redirects, keep local and LAN hosts
-  available, and do not return upstream response excerpts to the panel.
-- **Protected OpenRouter credentials** require an HTTPS base URL and remove
-  embedded credentials before the API key is sent.
-- **Bounded prompt inputs** normalize producer-controlled identifiers, source
-  labels, and notification text before including them in analyzer prompts.
-- **Shared UI 0.6.2** supplies the exact shared configuration-panel patch.
+- **QuestDB or InfluxDB history** lets aging, drift, and forecast analyzers use
+  QuestDB, InfluxDB 1.x, or InfluxDB 2.x through its InfluxQL API.
+- **Credential-safe connection tests** reject embedded credentials and
+  redirects, keep authentication in headers, and return sanitized errors.
+- **Compatible configuration migration** moves legacy QuestDB settings into
+  the history block while preserving fields introduced by newer versions.
+- **Shared UI 0.7.1** supplies the secret input, viewport-aware action bar,
+  theme behavior, and strict host React and React DOM singleton contract.
+- **Stronger release validation** checks documentation, package provenance
+  metadata, App Store inputs, dependency boundaries, and current toolchains.
 
-See the [v0.7.3 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v073) and the
+See the [v0.7.4 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v074) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
