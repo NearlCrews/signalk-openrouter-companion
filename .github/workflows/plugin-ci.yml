@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   validate:
-    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@5d9639abc03bc3387d4b1469c8b0c7fda8aa7130
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@ede45a7abfcdfa3b31f369333a12dcf8b450b8ad
     with:
       format-check-command: npm run format:check
       coverage-command: npm run test:coverage
