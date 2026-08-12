@@ -45,7 +45,7 @@ const statusPayload = {
     tokensToday: 12_480,
     costToday: 0.0832,
   },
-  questdb: { enabled: true, reachable: true },
+  history: { source: 'questdb', reachable: true },
   analyzers: [
     {
       id: 'maintenance',
@@ -154,6 +154,14 @@ window.fetch = async (input, init): Promise<Response> => {
   }
   if (path.endsWith('/questdb/test') && init?.method === 'POST') {
     return jsonResponse({ ok: true, url: 'http://localhost:9000' });
+  }
+  if (path.endsWith('/influxdb/test') && init?.method === 'POST') {
+    return jsonResponse({
+      ok: true,
+      url: 'http://influx.local:8086',
+      database: 'signalk',
+      version: '2',
+    });
   }
   if (path.endsWith('/reports')) return jsonResponse({ reports: [] });
   if (path.endsWith('/prompt')) {

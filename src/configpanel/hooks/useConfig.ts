@@ -2,6 +2,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AnalyzerConfig, PanelConfig } from '../types.js';
 import { jsonEqual } from '../utils.js';
 
+function normalizePanelConfig(configuration: PanelConfig | undefined): PanelConfig {
+  const next = structuredClone(configuration ?? {});
+  const legacy = next.questdb;
+  if (legacy) {
+    next.history = {
+      ...next.history,
+      source: next.history?.source ?? (legacy.enabled === false ? 'none' : 'questdb'),
+      questdb: {
+        ...(legacy.url ? { url: legacy.url } : {}),
+        ...next.history?.questdb,
+      },
+    };
+    delete next.questdb;
+  }
+  return next;
+}
+
 export interface UseConfig {
   cfg: PanelConfig;
   dirty: boolean;
@@ -21,8 +38,8 @@ export interface UseConfig {
 // (functional updaters, no captured deps) so the memoized analyzer rows keep
 // their referential equality across keystrokes elsewhere in the panel.
 export function useConfig(configuration: PanelConfig | undefined): UseConfig {
-  const [cfg, setCfg] = useState<PanelConfig>(() => structuredClone(configuration ?? {}));
-  const [pristine, setPristine] = useState<PanelConfig>(() => structuredClone(configuration ?? {}));
+  const [cfg, setCfg] = useState<PanelConfig>(() => normalizePanelConfig(configuration));
+  const [pristine, setPristine] = useState<PanelConfig>(() => normalizePanelConfig(configuration));
   const [resyncCount, setResyncCount] = useState(0);
 
   // Reset the edit buffer and baseline whenever the host pushes a new config.
@@ -35,8 +52,9 @@ export function useConfig(configuration: PanelConfig | undefined): UseConfig {
     const next = configuration ?? {};
     if (jsonEqual(lastSyncedRef.current, next)) return;
     lastSyncedRef.current = next;
-    setCfg(structuredClone(next));
-    setPristine(structuredClone(next));
+    const normalized = normalizePanelConfig(next);
+    setCfg(normalized);
+    setPristine(structuredClone(normalized));
     setResyncCount((n) => n + 1);
   }, [configuration]);
 

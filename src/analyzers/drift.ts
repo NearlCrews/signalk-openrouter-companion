@@ -6,15 +6,8 @@ import {
   sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
-import { asFiniteNumber, DAY_MS, fmtNumber, fmtPct } from '../core/format.js';
+import { DAY_MS, fmtNumber, fmtPct } from '../core/format.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
-import {
-  escapeSqlLiteral,
-  flattenSql,
-  indexColumns,
-  isoRange,
-  QUESTDB_SELF_CONTEXT_SQL,
-} from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
 import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
@@ -29,11 +22,9 @@ const MIN_BIN_SAMPLES = 30;
 // detector's default stop (1.0 Hz) and start (8.0 Hz) thresholds, roughly
 // 300 RPM.
 const RPM_RUNNING_THRESHOLD_HZ = 5.0;
-// Maximum lag (in microseconds) between an RPM sample and the ASOF-joined
-// fuel.rate or SOG sample for that joined value to count toward the per-bin
-// mean. QuestDB stores TIMESTAMP as microseconds since epoch and arithmetic
-// on two TIMESTAMP columns returns microseconds. 5 seconds = 5_000_000 us.
-const RPM_JOIN_WINDOW_US = 5_000_000;
+// Maximum lag between an RPM sample and a fuel.rate or SOG sample for that
+// joined value to count toward the per-bin mean.
+const RPM_JOIN_WINDOW_MS = 5_000;
 
 export interface DriftCfg {
   triggers: AnalyzerTriggerCfg;
@@ -82,22 +73,9 @@ const BIN_DEFS: Record<BinKey, BinDef> = {
   wot: { label: 'wot', min: 75.0, max: Number.POSITIVE_INFINITY },
 };
 
-// QuestDB CASE expression mapping an RPM (Hz) value to its bin key, derived
-// from BIN_DEFS so the server-side binning cannot drift from the bin edges.
-const BIN_CASE_SQL = ((): string => {
-  const whens: string[] = [];
-  let elseBin: BinKey = 'wot';
-  for (const k of BIN_ORDER) {
-    const { max } = BIN_DEFS[k];
-    if (Number.isFinite(max)) whens.push(`WHEN r.value < ${max} THEN '${k}'`);
-    else elseBin = k;
-  }
-  return `CASE ${whens.join(' ')} ELSE '${elseBin}' END`;
-})();
-
 interface BinStats {
   // Count of RPM samples in this bin that had a fresh fuel.rate / SOG pair
-  // within RPM_JOIN_WINDOW_US. Tracked per metric: fuel.rate and SOG join
+  // within RPM_JOIN_WINDOW_MS. Tracked per metric: fuel.rate and SOG join
   // independently, so one can be well-covered while the other is sparse.
   fuelCount: number;
   sogCount: number;
@@ -142,8 +120,8 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<DriftInput | null> {
-    const { questdb } = deps;
-    if (!questdb) return null;
+    const { history } = deps;
+    if (!history) return null;
     const engineIds = discoverEngineIds(deps.buffer.pathKeys());
     if (engineIds.length === 0) return null;
 
@@ -153,24 +131,27 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     const baselineEnd = weekStart;
     const baselineStart = baselineEnd - this.baselineDays * DAY_MS;
 
-    const engines = (
-      await Promise.all(
-        engineIds.map(async (engineId): Promise<EngineDrift | null> => {
-          const [thisWeek, baseline] = await Promise.all([
-            binEngineWindow(questdb, engineId, weekStart, weekEnd),
-            binEngineWindow(questdb, engineId, baselineStart, baselineEnd),
-          ]);
-          if (!thisWeek || totalBinCount(thisWeek) === 0) return null;
-          if (!baseline || totalBinCount(baseline) === 0) return null;
-          return {
-            engineId,
-            thisWeek,
-            baseline,
-            deltas: computeDeltas(thisWeek, baseline),
-          };
-        }),
-      )
-    ).filter((e): e is EngineDrift => e !== null);
+    // Process engines and windows one at a time so a twin-engine installation
+    // cannot hold every provider response in memory concurrently.
+    const engines: EngineDrift[] = [];
+    for (const engineId of engineIds) {
+      const thisWeek = await binEngineWindow(history, engineId, weekStart, weekEnd, deps.signal);
+      if (!thisWeek || totalBinCount(thisWeek) === 0) continue;
+      const baseline = await binEngineWindow(
+        history,
+        engineId,
+        baselineStart,
+        baselineEnd,
+        deps.signal,
+      );
+      if (!baseline || totalBinCount(baseline) === 0) continue;
+      engines.push({
+        engineId,
+        thisWeek,
+        baseline,
+        deltas: computeDeltas(thisWeek, baseline),
+      });
+    }
     if (engines.length === 0) return null;
 
     return {
@@ -209,84 +190,35 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 }
 
-// Issues one QuestDB query per (engine, window) that does the per-RPM-band
-// aggregation server-side. ASOF JOIN pairs each RPM sample with the most
-// recent preceding fuel.rate and SOG sample. ASOF JOIN has no time bound, so
-// it will pair an RPM sample with a fuel/SOG reading from hours earlier across
-// an engine-off gap. The BETWEEN 0 AND RPM_JOIN_WINDOW_US guard in the CASE
-// expressions drops those stale pairs from both the mean AND the sample count,
-// so n_fuel / n_sog reflect only RPM samples that had a fresh pair, not every
-// RPM row. The lower bound of 0 also rejects inverted pairs from N2K clock
-// skew, where the joined sample carries a timestamp after the RPM sample.
-// fuel.rate and SOG are joined independently, so each carries its own count:
-// a bin with dense fuel coverage but sparse SOG must not pass the SOG gate on
-// fuel-sample density.
+// Requests one provider-owned aggregation per engine and window. QuestDB uses
+// its native ASOF JOIN, while InfluxDB aligns bounded time buckets. The common
+// result keeps provider query syntax and row decoding out of the analyzer.
 async function binEngineWindow(
-  questdb: NonNullable<AnalyzerDeps['questdb']>,
+  history: NonNullable<AnalyzerDeps['history']>,
   engineId: string,
   fromMs: number,
   toMs: number,
+  abortSignal?: AbortSignal,
 ): Promise<Record<BinKey, BinStats> | null> {
   const { rpm, fuelRate } = enginePaths(engineId);
-  const rpmPath = escapeSqlLiteral(rpm);
-  const fuelPath = escapeSqlLiteral(fuelRate);
-  // Escaped to match the sibling rpm and fuel paths; a no-op on this constant.
-  const sogPath = escapeSqlLiteral(SOG_PATH);
-  const [fromIso, toIso] = isoRange(fromMs, toMs);
-  const sql = flattenSql(`
-    WITH r AS (
-      SELECT ts, value FROM signalk
-      WHERE path = '${rpmPath}'
-        AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
-        AND ts >= '${fromIso}'
-        AND ts < '${toIso}'
-        AND value >= ${RPM_RUNNING_THRESHOLD_HZ}
-    ),
-    f AS (
-      SELECT ts, value FROM signalk
-      WHERE path = '${fuelPath}'
-        AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
-        AND ts >= '${fromIso}'
-        AND ts < '${toIso}'
-    ),
-    s AS (
-      SELECT ts, value FROM signalk
-      WHERE path = '${sogPath}'
-        AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
-        AND ts >= '${fromIso}'
-        AND ts < '${toIso}'
-    )
-    SELECT
-      ${BIN_CASE_SQL} AS bin,
-      count(CASE WHEN r.ts - f.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_fuel,
-      count(CASE WHEN r.ts - s.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN 1 END) AS n_sog,
-      avg(CASE WHEN r.ts - f.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN f.value END) AS mean_fuel,
-      avg(CASE WHEN r.ts - s.ts BETWEEN 0 AND ${RPM_JOIN_WINDOW_US} THEN s.value END) AS mean_sog
-    FROM r ASOF JOIN f ASOF JOIN s
-    GROUP BY bin
-  `);
-
-  // A query fault propagates: drift requires QuestDB, so a fault is a real
-  // analyzer failure and must surface as a failure report, not a silent skip.
-  const res = await questdb.query(sql);
-  const cols = indexColumns(res);
-  const binIdx = cols.get('bin') ?? -1;
-  const nFuelIdx = cols.get('n_fuel') ?? -1;
-  const nSogIdx = cols.get('n_sog') ?? -1;
-  const fuelIdx = cols.get('mean_fuel') ?? -1;
-  const sogIdx = cols.get('mean_sog') ?? -1;
-  if (binIdx < 0 || nFuelIdx < 0 || nSogIdx < 0 || fuelIdx < 0 || sogIdx < 0) return null;
-  if (res.dataset.length === 0) return null;
+  const result = await history.binEngineWindow(
+    {
+      rpmPath: rpm,
+      fuelRatePath: fuelRate,
+      sogPath: SOG_PATH,
+      runningThresholdHz: RPM_RUNNING_THRESHOLD_HZ,
+      joinWindowMs: RPM_JOIN_WINDOW_MS,
+      bins: BIN_ORDER.map((key) => ({ key, maxHz: BIN_DEFS[key].max })),
+    },
+    fromMs,
+    toMs,
+    abortSignal,
+  );
+  if (!result) return null;
   const out = emptyBins();
-  for (const row of res.dataset) {
-    const binRaw = row[binIdx];
-    if (typeof binRaw !== 'string' || !isBinKey(binRaw)) continue;
-    out[binRaw] = {
-      fuelCount: asFiniteNumber(row[nFuelIdx]) ?? 0,
-      sogCount: asFiniteNumber(row[nSogIdx]) ?? 0,
-      meanFuelRate: asFiniteNumber(row[fuelIdx]),
-      meanSog: asFiniteNumber(row[sogIdx]),
-    };
+  for (const [key, stats] of result) {
+    if (!isBinKey(key)) continue;
+    out[key] = stats;
   }
   return out;
 }

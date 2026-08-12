@@ -358,30 +358,83 @@ function buildSchemaInner(): PluginSchema {
           },
         },
       },
-      questdb: {
+      history: {
         type: 'object',
-        title: 'QuestDB (optional history source)',
+        title: 'History source',
         description:
-          'If you run signalk-questdb, the plugin pulls 30-day baselines for richer reports.',
+          'Choose the read-only time-series source used by aging, drift, and the optional forecast baseline.',
         properties: {
-          enabled: {
-            type: 'boolean',
-            title: 'Enable QuestDB enrichment',
-            description:
-              'When enabled, the plugin probes QuestDB on start and uses it for history lookups. Falls back gracefully if unreachable.',
-            default: DEFAULT_OPTIONS.questdb.enabled,
+          source: {
+            type: 'string',
+            title: 'Provider',
+            enum: ['none', 'questdb', 'influxdb'],
+            enumNames: ['Disabled', 'QuestDB', 'InfluxDB'],
+            default: DEFAULT_OPTIONS.history.source,
           },
         },
-        ...enabledGate({
-          whenEnabled: {
-            url: {
-              type: 'string',
-              title: 'QuestDB REST URL',
-              description: 'Only used when QuestDB enrichment is enabled.',
-              default: DEFAULT_OPTIONS.questdb.url,
-            },
+        dependencies: {
+          source: {
+            oneOf: [
+              { properties: { source: { const: 'none' } } },
+              {
+                properties: {
+                  source: { const: 'questdb' },
+                  questdb: {
+                    type: 'object',
+                    title: 'QuestDB',
+                    required: ['url'],
+                    properties: {
+                      url: {
+                        type: 'string',
+                        title: 'QuestDB REST URL',
+                        default: DEFAULT_OPTIONS.history.questdb.url,
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                properties: {
+                  source: { const: 'influxdb' },
+                  influxdb: {
+                    type: 'object',
+                    title: 'InfluxDB',
+                    required: ['version', 'url', 'database'],
+                    properties: {
+                      version: {
+                        type: 'string',
+                        title: 'InfluxDB version',
+                        enum: ['1', '2'],
+                        enumNames: ['InfluxDB 1.x', 'InfluxDB 2.x compatibility API'],
+                        default: DEFAULT_OPTIONS.history.influxdb.version,
+                      },
+                      url: {
+                        type: 'string',
+                        title: 'InfluxDB URL',
+                        default: DEFAULT_OPTIONS.history.influxdb.url,
+                      },
+                      database: {
+                        type: 'string',
+                        title: 'Database or DBRP database',
+                        default: DEFAULT_OPTIONS.history.influxdb.database,
+                      },
+                      username: {
+                        type: 'string',
+                        title: 'Username',
+                        default: DEFAULT_OPTIONS.history.influxdb.username,
+                      },
+                      password: {
+                        type: 'string',
+                        title: 'Password or API token',
+                        default: DEFAULT_OPTIONS.history.influxdb.password,
+                      },
+                    },
+                  },
+                },
+              },
+            ],
           },
-        }),
+        },
       },
       analyzers: {
         type: 'object',
@@ -510,7 +563,7 @@ function buildSchemaInner(): PluginSchema {
                 type: 'integer',
                 title: 'Baseline window (days)',
                 description:
-                  'How many days of QuestDB history to use as the baseline for the past-week vs baseline comparison. Default 30. The baseline ends where the past week begins (no overlap).',
+                  'How many days of history to use as the baseline for the past-week vs baseline comparison. Default 30. The baseline ends where the past week begins (no overlap).',
                 default: DEFAULT_OPTIONS.analyzers.drift.baselineDays,
                 minimum: 14,
                 maximum: 365,
@@ -652,8 +705,15 @@ function buildUiSchemaInner(): PluginUiSchema {
         'ui:order': ['sort', 'allowFallbacks', 'dataCollection', 'zdr', 'maxPrice'],
       },
     },
-    questdb: {
-      'ui:order': ['enabled', 'url'],
+    history: {
+      'ui:order': ['source', 'questdb', 'influxdb'],
+      influxdb: {
+        'ui:order': ['version', 'url', 'database', 'username', 'password'],
+        password: {
+          'ui:widget': 'password',
+          'ui:autocomplete': 'off',
+        },
+      },
     },
     analyzers: {
       maintenance: {

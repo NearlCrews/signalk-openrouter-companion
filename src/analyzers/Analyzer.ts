@@ -45,7 +45,7 @@ interface AppForAnalyzer {
 
 export interface AnalyzerDeps {
   buffer: import('../core/buffer.js').RollingBuffer;
-  questdb: import('../core/questdb.js').QuestDBClient | null;
+  history: import('../core/history.js').HistoryProvider | null;
   publisher: import('../core/publisher.js').ReportPublisher;
   budget: import('../core/budget.js').BudgetTracker;
   llm: import('../core/openrouter.js').OpenRouterClient;

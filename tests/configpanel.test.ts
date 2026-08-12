@@ -73,7 +73,11 @@ describe('clamp', () => {
 });
 
 describe('isHttpUrl', () => {
-  it.each(['http://localhost:9000', 'https://questdb.example.test/exec'])('accepts %s', (value) => {
+  it.each([
+    'http://localhost:9000',
+    'https://questdb.example.test/exec',
+    'http://user:secret@questdb.local:9000',
+  ])('accepts %s', (value) => {
     expect(isHttpUrl(value)).toBe(true);
   });
 
@@ -87,6 +91,10 @@ describe('isHttpUrl', () => {
     'http://questdb.local:9000#fragment',
   ])('rejects %s', (value) => {
     expect(isHttpUrl(value)).toBe(false);
+  });
+
+  it('can reject embedded credentials for providers that use dedicated fields', () => {
+    expect(isHttpUrl('http://user:secret@influxdb.local:8086', true)).toBe(false);
   });
 });
 

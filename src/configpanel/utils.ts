@@ -59,15 +59,16 @@ export function isPromptOverride(value: string, promptDefault: string | undefine
   return value !== promptDefault;
 }
 
-// The QuestDB API only supports HTTP and HTTPS base URLs. Query strings and
-// fragments cannot be part of the base because the client owns the /exec query.
-export function isHttpUrl(value: string | undefined): boolean {
+// History providers only support HTTP and HTTPS base URLs. Query strings and
+// fragments cannot be part of the base because each client owns its API query.
+export function isHttpUrl(value: string | undefined, rejectCredentials = false): boolean {
   const trimmed = value?.trim();
   if (!trimmed) return false;
   try {
     const url = new URL(trimmed);
     return (
       (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (!rejectCredentials || (url.username === '' && url.password === '')) &&
       url.search === '' &&
       url.hash === ''
     );

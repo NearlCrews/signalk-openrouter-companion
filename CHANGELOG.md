@@ -6,6 +6,28 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- Added a selectable history source for the trend analyzers. Existing QuestDB
+  installations remain the default, while InfluxDB 1.x and InfluxDB 2.x are
+  supported through the standard InfluxQL query API used by
+  `signalk-to-influxdb` and the DBRP mapping created by
+  `signalk-to-influxdb2`.
+- Added credential-safe InfluxDB connection testing in the configuration panel.
+  Authentication stays in Basic or Token authorization headers, redirects are
+  rejected, and errors do not return upstream response text or credentials.
+
+### Changed
+
+- Aging, engine drift, and the optional weather baseline now consume a shared,
+  read-only history-provider contract instead of embedding QuestDB queries in
+  the analyzers. QuestDB retains its native aggregate queries, while InfluxDB
+  uses bounded aggregate queries and time buckets instead of downloading raw
+  telemetry.
+- Legacy `questdb.enabled` and `questdb.url` settings migrate automatically to
+  the new `history` block in both the backend and the custom configuration
+  panel.
+
 <a id="v073"></a>
 
 ## [0.7.3] - 2026-08-04

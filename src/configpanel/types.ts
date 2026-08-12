@@ -19,6 +19,7 @@ export interface AnalyzerConfig {
 // The edit buffer the panel maintains and saves. Every key is optional: a
 // fresh install pushes an empty object and the server fills defaults.
 export interface PanelConfig {
+  [key: string]: unknown;
   openrouter?: {
     apiKey?: string;
     model?: string;
@@ -35,6 +36,19 @@ export interface PanelConfig {
       zdr?: boolean;
     };
   };
+  history?: {
+    source?: 'none' | 'questdb' | 'influxdb';
+    questdb?: { url?: string };
+    influxdb?: {
+      version?: '1' | '2';
+      url?: string;
+      database?: string;
+      username?: string;
+      password?: string;
+    };
+  };
+  // Read only during migration from releases that stored QuestDB at the top
+  // level. The panel normalizes this into `history` before editing or saving.
   questdb?: { enabled?: boolean; url?: string };
   analyzers?: Record<string, AnalyzerConfig>;
 }
@@ -62,7 +76,7 @@ export interface PanelStatus {
     tokensToday: number;
     costToday: number;
   };
-  questdb: { enabled: boolean; reachable: boolean | null };
+  history: { source: 'none' | 'questdb' | 'influxdb'; reachable: boolean | null };
   analyzers: AnalyzerStatus[];
 }
 
@@ -116,8 +130,8 @@ export interface TestResult {
   text: string;
 }
 
-// The QuestDB probe result: a reachable URL or a failure message.
-export type QdbTestResult = { ok: true; url: string } | { ok: false; text: string };
+// The selected history-provider probe result: a reachable URL or a failure.
+export type HistoryTestResult = { ok: true; url: string } | { ok: false; text: string };
 
 // The standard envelope every panel REST call resolves to.
 export interface FetchResult<T = unknown> {

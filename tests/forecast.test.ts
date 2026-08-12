@@ -168,7 +168,7 @@ describe('ForecastAnalyzer', () => {
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf, { questdb: stub }));
       expect(r).not.toBeNull();
-      expect((r as ForecastInput).hasQuestdbBaseline).toBe(true);
+      expect((r as ForecastInput).hasHistoryBaseline).toBe(true);
     });
   });
 
@@ -240,7 +240,7 @@ describe('ForecastAnalyzer', () => {
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
       expect(r).not.toBeNull();
       const input = r as ForecastInput;
-      expect(input.hasQuestdbBaseline).toBe(false);
+      expect(input.hasHistoryBaseline).toBe(false);
       for (const t of input.trends) expect(t.baselineMean).toBeNull();
     });
 
@@ -256,7 +256,7 @@ describe('ForecastAnalyzer', () => {
       expect(r).not.toBeNull();
       const input = r as ForecastInput;
       // queryBaseline swallows the failure: the analyzer still runs on the buffer.
-      expect(input.hasQuestdbBaseline).toBe(false);
+      expect(input.hasHistoryBaseline).toBe(false);
       for (const t of input.trends) expect(t.baselineMean).toBeNull();
       expect(stub.calls).toHaveLength(1);
     });
@@ -270,7 +270,7 @@ describe('ForecastAnalyzer', () => {
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf, { questdb: stub }));
       expect(r).not.toBeNull();
       const input = r as ForecastInput;
-      expect(input.hasQuestdbBaseline).toBe(true);
+      expect(input.hasHistoryBaseline).toBe(true);
       const pressure = input.trends.find((t) => t.path === PRESSURE_PATH);
       expect(pressure?.baselineMean).toBe(101_900);
       // One baseline query, scoped to the weather paths.
@@ -317,7 +317,7 @@ describe('ForecastAnalyzer', () => {
         trendWindowHours: 12,
         tendencyHours: 3,
         pressureTendencyHpa: -6,
-        hasQuestdbBaseline: false,
+        hasHistoryBaseline: false,
         trends: [
           {
             path: PRESSURE_PATH,
@@ -338,7 +338,7 @@ describe('ForecastAnalyzer', () => {
       expect(out.user).toContain('Barometric tendency: -6.0 hPa over the last 3h.');
       expect(out.user).toContain('### Canonical paths');
       expect(out.user).toContain('### Extension paths');
-      expect(out.user).toContain('No QuestDB baseline available');
+      expect(out.user).toContain('No history baseline available');
     });
 
     it('honors a customSystemPrompt override', () => {
@@ -350,7 +350,7 @@ describe('ForecastAnalyzer', () => {
           trendWindowHours: 12,
           tendencyHours: 3,
           pressureTendencyHpa: null,
-          hasQuestdbBaseline: false,
+          hasHistoryBaseline: false,
           trends: [],
         }).system,
       ).toBe('Custom forecaster prompt.');

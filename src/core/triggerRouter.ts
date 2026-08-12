@@ -7,8 +7,8 @@ import type {
   TriggerSpec,
 } from '../analyzers/Analyzer.js';
 import type { AnalyzerId } from '../analyzers/ids.js';
+import type { HistoryProvider } from './history.js';
 import { stringify } from './logger.js';
-import type { QuestDBClient } from './questdb.js';
 
 // cron triggers are dispatched directly via runById (a cron job names its
 // analyzer ids); only put and battery-event flow through dispatch + match.
@@ -32,10 +32,10 @@ export class TriggerRouter {
     private deps: AnalyzerDeps,
   ) {}
 
-  // Swap in a QuestDB client discovered after construction (the plugin probes
-  // QuestDB once at start and re-probes if it was unreachable then).
-  setQuestdb(questdb: QuestDBClient | null): void {
-    this.deps.questdb = questdb;
+  // Swap in a history provider discovered after construction. The plugin
+  // probes once at start and periodically re-probes an unavailable source.
+  setHistory(history: HistoryProvider | null): void {
+    this.deps.history = history;
   }
 
   // Skip SK admin-UI churn when the status string hasn't changed.

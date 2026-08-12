@@ -44,7 +44,9 @@ src/
     ├── publisher.ts          handleMessage notification + JSONL log writer; exports JsonlEntry
     ├── budget.ts             Per-day OpenRouter call cap
     ├── openrouter.ts         HTTP client with retry and backoff ladder
-    ├── questdb.ts            HTTP client + escapeSqlLiteral + indexColumns + decodePathKeyed + isoRange + QUESTDB_SELF_CONTEXT_SQL
+    ├── history.ts            Read-only history-provider contract
+    ├── influxdb.ts           InfluxQL history provider
+    ├── questdb.ts            QuestDB history provider and HTTP client
     ├── http.ts               fetchWithTimeout: fetch wrapper with AbortSignal-based timeout
     ├── discovery.ts          Engine and bank id discovery from SK paths
     ├── skNode.ts             readNumberAt + readValueAt + asTreeMap + readBankSnapshot
@@ -133,8 +135,9 @@ The default is `moderate`. When the grade meets or exceeds the floor the notific
 Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's
 `registerWithRouter`. All routes inherit Signal K admin authentication. If the
 server cannot install the admin middleware, the plugin registers no REST routes.
-The QuestDB test supports the local and LAN hosts commonly used onboard, but it
-rejects redirects and never returns upstream response text to the client.
+History-provider tests support the local and LAN hosts commonly used onboard,
+but reject redirects and never return upstream response text or credentials to
+the client.
 
 | Verb | Path | Purpose |
 | ---- | ---- | ------- |
@@ -142,6 +145,7 @@ rejects redirects and never returns upstream response text to the client.
 | POST | `/api/openrouter/test` | One-token ping with the saved key |
 | GET | `/api/openrouter/models` | Proxy to the OpenRouter models list, cached 1 h |
 | POST | `/api/questdb/test` | Probe a QuestDB URL |
+| POST | `/api/influxdb/test` | Probe an InfluxDB 1.x or 2.x InfluxQL endpoint |
 | POST | `/api/analyzers/:id/fire` | Manually trigger an analyzer |
 | GET | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100) |
 | GET | `/api/analyzers/:id/prompt` | `{ default, current }` for the prompt editor |

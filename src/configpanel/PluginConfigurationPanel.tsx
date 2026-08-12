@@ -17,14 +17,14 @@ import {
 import { DEFAULT_SEVERITY_FLOOR_VALUE } from '../severityFloors.js';
 import { errText, fetchJson, REPORT_LIMIT } from './api.js';
 import { AnalyzerRow } from './components/AnalyzerRow.js';
+import { HistorySection } from './components/HistorySection.js';
 import { OpenRouterSection } from './components/OpenRouterSection.js';
-import { QuestDBSection } from './components/QuestDBSection.js';
 import { StatusBlock } from './components/StatusBlock.js';
 import { fireOutcomeText, isFireSuccess } from './fireOutcome.js';
 import { useOpenRouterModels } from './hooks/useOpenRouterModels.js';
 import { useSaveLifecycle } from './hooks/useSaveLifecycle.js';
 import { useStatus } from './hooks/useStatus.js';
-import type { AnalyzerUiState, PanelConfig, QdbTestResult, TestResult } from './types.js';
+import type { AnalyzerUiState, HistoryTestResult, PanelConfig, TestResult } from './types.js';
 import { isHttpUrl, isPromptOverride } from './utils.js';
 
 interface Props {
@@ -34,7 +34,7 @@ interface Props {
 
 // The collapsible top-level sections, keyed by their DOM ids.
 const SECTION_OPENROUTER = 'orc-section-openrouter';
-const SECTION_QUESTDB = 'orc-section-questdb';
+const SECTION_HISTORY = 'orc-section-history';
 const SECTION_ANALYZERS = 'orc-section-analyzers';
 
 // One shared empty-ui object so an analyzer with no UI state yet passes a stable
@@ -76,12 +76,22 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
 
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
-  const [qdbTest, setQdbTest] = useState<QdbTestResult | null>(null);
-  const [qdbTesting, setQdbTesting] = useState(false);
+  const [historyTest, setHistoryTest] = useState<HistoryTestResult | null>(null);
+  const [historyTesting, setHistoryTesting] = useState(false);
   const [analyzerUi, setAnalyzerUi] = useState<Record<string, AnalyzerUiState>>({});
-  const [validationTarget, setValidationTarget] = useState<'api-key' | 'questdb-url' | null>(null);
+  const [validationTarget, setValidationTarget] = useState<
+    'api-key' | 'history-url' | 'history-database' | null
+  >(null);
   const apiKeyRef = useRef<HTMLInputElement>(null);
-  const questdbUrlRef = useRef<HTMLInputElement>(null);
+  const historyUrlRef = useRef<HTMLInputElement>(null);
+  const historyDatabaseRef = useRef<HTMLInputElement>(null);
+  const setHistorySection = useCallback(
+    (patch: Partial<PanelConfig>): void => {
+      setHistoryTest(null);
+      setSection(patch);
+    },
+    [setSection],
+  );
   // Mirror of analyzerUi for reads from event handlers without going through the
   // state updater. The updater functions must be pure (StrictMode and concurrent
   // rendering may call them more than once), so any side effect (loadReports,
@@ -162,18 +172,57 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     setTesting(false);
   }, []);
 
-  const qdbUrl = cfg.questdb?.url;
-  const runQdbTest = useCallback(async (): Promise<void> => {
-    setQdbTesting(true);
-    setQdbTest(null);
-    const r = await fetchJson<{ ok?: boolean; url?: string; error?: string }>('/questdb/test', {
+  const historySource = cfg.history?.source ?? 'questdb';
+  const questdbUrl = cfg.history?.questdb?.url;
+  const influxdbVersion = cfg.history?.influxdb?.version ?? '1';
+  const influxdbUrl = cfg.history?.influxdb?.url;
+  const influxdbDatabase = cfg.history?.influxdb?.database;
+  const influxdbUsername = cfg.history?.influxdb?.username;
+  const influxdbPassword = cfg.history?.influxdb?.password;
+  const runHistoryTest = useCallback(async (): Promise<void> => {
+    if (historySource === 'none') return;
+    setHistoryTesting(true);
+    setHistoryTest(null);
+    const isInfluxDB = historySource === 'influxdb';
+    const r = await fetchJson<{
+      ok?: boolean;
+      url?: string;
+      database?: string;
+      version?: string;
+      error?: string;
+    }>(isInfluxDB ? '/influxdb/test' : '/questdb/test', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ url: qdbUrl }),
+      body: JSON.stringify(
+        isInfluxDB
+          ? {
+              version: influxdbVersion,
+              url: influxdbUrl,
+              database: influxdbDatabase,
+              username: influxdbUsername,
+              password: influxdbPassword,
+            }
+          : { url: questdbUrl },
+      ),
     });
-    setQdbTest(r.body?.ok ? { ok: true, url: r.body.url ?? '' } : { ok: false, text: errText(r) });
-    setQdbTesting(false);
-  }, [qdbUrl]);
+    setHistoryTest(
+      r.body?.ok
+        ? {
+            ok: true,
+            url: r.body.url ?? '',
+          }
+        : { ok: false, text: errText(r) },
+    );
+    setHistoryTesting(false);
+  }, [
+    historySource,
+    influxdbDatabase,
+    influxdbPassword,
+    influxdbUrl,
+    influxdbUsername,
+    influxdbVersion,
+    questdbUrl,
+  ]);
 
   const loadReports = useCallback(
     (id: string): Promise<void> =>
@@ -315,7 +364,10 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   };
 
   const noApiKey = !(cfg.openrouter?.apiKey ?? '').trim();
-  const invalidQuestDbUrl = Boolean(cfg.questdb?.enabled) && !isHttpUrl(cfg.questdb?.url);
+  const historyUrl = historySource === 'influxdb' ? influxdbUrl : questdbUrl;
+  const invalidHistoryUrl =
+    historySource !== 'none' && !isHttpUrl(historyUrl, historySource === 'influxdb');
+  const missingHistoryDatabase = historySource === 'influxdb' && !(influxdbDatabase ?? '').trim();
 
   // Open the OpenRouter section and move focus to the API key field, so the
   // first-run callout's button lands the user exactly where they need to type.
@@ -326,10 +378,17 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     });
   };
 
-  const focusQuestDbUrl = (): void => {
-    openSection(SECTION_QUESTDB);
+  const focusHistoryUrl = (): void => {
+    openSection(SECTION_HISTORY);
     requestAnimationFrame(() => {
-      questdbUrlRef.current?.focus();
+      historyUrlRef.current?.focus();
+    });
+  };
+
+  const focusHistoryDatabase = (): void => {
+    openSection(SECTION_HISTORY);
+    requestAnimationFrame(() => {
+      historyDatabaseRef.current?.focus();
     });
   };
 
@@ -339,9 +398,14 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
       focusApiKey();
       return;
     }
-    if (invalidQuestDbUrl) {
-      setValidationTarget('questdb-url');
-      focusQuestDbUrl();
+    if (invalidHistoryUrl) {
+      setValidationTarget('history-url');
+      focusHistoryUrl();
+      return;
+    }
+    if (missingHistoryDatabase) {
+      setValidationTarget('history-database');
+      focusHistoryDatabase();
       return;
     }
     setValidationTarget(null);
@@ -359,9 +423,11 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   const validationText =
     validationTarget === 'api-key' && noApiKey
       ? 'Enter an OpenRouter API key before saving.'
-      : validationTarget === 'questdb-url' && invalidQuestDbUrl
-        ? 'Enter a valid QuestDB HTTP or HTTPS base URL without a query or fragment before saving.'
-        : '';
+      : validationTarget === 'history-url' && invalidHistoryUrl
+        ? 'Enter a valid history-provider HTTP or HTTPS base URL without a query or fragment before saving.'
+        : validationTarget === 'history-database' && missingHistoryDatabase
+          ? 'Enter the InfluxDB database or DBRP database name before saving.'
+          : '';
   const saveStatusTone: StatusTone = validationText
     ? 'danger'
     : savedNotice?.error
@@ -426,18 +492,19 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
         </CollapsibleSection>
 
         <CollapsibleSection
-          id={SECTION_QUESTDB}
-          title="QuestDB enrichment"
-          open={Boolean(openSections[SECTION_QUESTDB])}
-          onOpenChange={(open) => setSectionOpen(SECTION_QUESTDB, open)}
+          id={SECTION_HISTORY}
+          title="History source"
+          open={Boolean(openSections[SECTION_HISTORY])}
+          onOpenChange={(open) => setSectionOpen(SECTION_HISTORY, open)}
         >
-          <QuestDBSection
+          <HistorySection
             cfg={cfg}
-            set={setSection}
-            testResult={qdbTest}
-            onTest={runQdbTest}
-            testing={qdbTesting}
-            urlRef={questdbUrlRef}
+            set={setHistorySection}
+            testResult={historyTest}
+            onTest={runHistoryTest}
+            testing={historyTesting}
+            urlRef={historyUrlRef}
+            databaseRef={historyDatabaseRef}
           />
         </CollapsibleSection>
 

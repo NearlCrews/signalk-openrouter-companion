@@ -4,7 +4,9 @@ import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '..
 import { ANALYZER_DEFAULT_SYSTEM_PROMPTS } from '../analyzers/registry.js';
 import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
+import type { HistoryProvider } from './history.js';
 import { fetchWithTimeout } from './http.js';
+import { InfluxDBClient } from './influxdb.js';
 import { stringify } from './logger.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
@@ -34,16 +36,16 @@ export interface PluginRuntime {
   // PluginOptions is the storage shape; the runtime only reads, so a typed
   // alias is enough. Avoids drift between the stripped duplicate that this
   // type used to declare and the real option type in src/types.ts.
-  cfg: Pick<PluginOptions, 'openrouter' | 'questdb' | 'analyzers'>;
+  cfg: Pick<PluginOptions, 'openrouter' | 'history' | 'analyzers'>;
   llm: OpenRouterClient;
   budget: BudgetTracker;
-  questdbLive: QuestDBClient | null;
-  questdbProbed: boolean;
+  historyLive: HistoryProvider | null;
+  historyProbed: boolean;
   analyzers: Analyzer[];
   apiKeySet: boolean;
   router: TriggerRouter | null;
   logPath: string;
-  // Lifecycle abort signal, fired by stop(). Direct LLM/QuestDB calls from
+  // Lifecycle abort signal, fired by stop(). Direct LLM/history calls from
   // the REST surface (admin Test buttons) wire this so stop() aborts the
   // in-flight request rather than waiting out the full request timeout.
   signal: AbortSignal;
@@ -65,6 +67,7 @@ interface StatusResponse {
     tokensToday: number;
     costToday: number;
   };
+  history: { source: PluginOptions['history']['source']; reachable: boolean | null };
   questdb: { enabled: boolean; reachable: boolean | null };
   analyzers: Array<{
     id: AnalyzerId;
@@ -93,9 +96,17 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
       tokensToday: rt.budget.tokensToday(),
       costToday: rt.budget.costToday(),
     },
+    history: {
+      source: rt.cfg.history.source,
+      reachable:
+        rt.cfg.history.source !== 'none' && rt.historyProbed ? rt.historyLive !== null : null,
+    },
+    // Retain the old status key for clients written before the provider
+    // selector. It now reflects whether QuestDB is the selected source.
     questdb: {
-      enabled: rt.cfg.questdb.enabled,
-      reachable: rt.cfg.questdb.enabled && rt.questdbProbed ? rt.questdbLive !== null : null,
+      enabled: rt.cfg.history.source === 'questdb',
+      reachable:
+        rt.cfg.history.source === 'questdb' && rt.historyProbed ? rt.historyLive !== null : null,
     },
     analyzers: ANALYZER_IDS.map((id) => {
       const section = rt.cfg.analyzers[id];
@@ -381,7 +392,7 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
     handler: (getRuntime) => async (req, res) => {
       const body = (req.body ?? {}) as { url?: string };
       const rt = getRuntime();
-      const url = body.url || rt?.cfg.questdb.url;
+      const url = body.url || rt?.cfg.history.questdb.url;
       if (!url) {
         res.status(400).json({ ok: false, error: 'no URL provided and none in saved config' });
         return;
@@ -434,6 +445,88 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
           ok: false,
           url: normalized,
           error: 'QuestDB is unreachable or returned an invalid response',
+        });
+      }
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/influxdb/test',
+    summary: 'Probe an InfluxDB v1-compatible query API for reachability.',
+    handler: (getRuntime) => async (req, res) => {
+      const body = (req.body ?? {}) as Partial<PluginOptions['history']['influxdb']>;
+      const rt = getRuntime();
+      const saved = rt?.cfg.history.influxdb;
+      const url = body.url ?? saved?.url;
+      const database = body.database ?? saved?.database;
+      const version = body.version ?? saved?.version ?? '1';
+      const username = body.username ?? saved?.username ?? '';
+      const password = body.password ?? saved?.password ?? '';
+      if (!url || !database) {
+        res.status(400).json({
+          ok: false,
+          error: 'an InfluxDB URL and database are required',
+        });
+        return;
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        res.status(400).json({ ok: false, error: 'invalid URL' });
+        return;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
+        return;
+      }
+      if (parsed.username || parsed.password) {
+        res.status(400).json({
+          ok: false,
+          error: 'InfluxDB base URL must not include credentials',
+        });
+        return;
+      }
+      if (parsed.search || parsed.hash) {
+        res.status(400).json({
+          ok: false,
+          error: 'InfluxDB base URL must not include a query string or fragment',
+        });
+        return;
+      }
+      if (version !== '1' && version !== '2') {
+        res.status(400).json({ ok: false, error: 'unsupported InfluxDB version' });
+        return;
+      }
+      const normalized = stripTrailingSlashes(parsed.href);
+      try {
+        const client = new InfluxDBClient({
+          url: normalized,
+          database,
+          version,
+          username,
+          password,
+          selfContext: 'vessels.self',
+        });
+        const reachable = await client.probe(rt?.signal);
+        if (reachable) {
+          sendOk(res, { url: normalized, database, version });
+        } else {
+          res.json({
+            ok: false,
+            url: normalized,
+            database,
+            version,
+            error: 'reachable but did not return a result set',
+          });
+        }
+      } catch {
+        res.status(502).json({
+          ok: false,
+          url: normalized,
+          database,
+          version,
+          error: 'InfluxDB is unreachable or returned an invalid response',
         });
       }
     },
