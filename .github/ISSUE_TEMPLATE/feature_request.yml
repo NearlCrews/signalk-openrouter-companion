@@ -33,11 +33,11 @@ body:
       options:
         - New analyzer (state)
         - New analyzer (transition / event-driven)
-        - New analyzer (trend / QuestDB-backed)
+        - New analyzer (trend / history-backed)
         - Existing analyzer enhancement
         - Plugin core (lifecycle, schema, triggers)
         - OpenRouter integration (model, prompt, retry)
-        - QuestDB integration
+        - History-provider integration
         - Configuration / admin UI
         - Performance
         - Documentation

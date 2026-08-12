@@ -13,6 +13,7 @@ import {
   type StatusTone,
   supportsNativeCssScope,
   ThemeToggle,
+  UnsupportedBrowserNotice,
 } from 'signalk-nearlcrews-ui';
 import { DEFAULT_SEVERITY_FLOOR_VALUE } from '../severityFloors.js';
 import { errText, fetchJson, REPORT_LIMIT } from './api.js';
@@ -44,13 +45,10 @@ const EMPTY_UI: AnalyzerUiState = Object.freeze({});
 export default function PluginConfigurationPanel(props: Props): ReactElement {
   if (!supportsNativeCssScope(window)) {
     return (
-      <div data-browser-compatibility-message="" role="alert">
-        <h2>Browser update required</h2>
-        <p>
-          This panel requires native CSS @scope. Update the browser or embedded WebView before
-          reopening Signal K Admin.
-        </p>
-      </div>
+      <UnsupportedBrowserNotice>
+        This panel requires native CSS @scope. Update the browser or embedded WebView before
+        reopening Signal K Admin.
+      </UnsupportedBrowserNotice>
     );
   }
 
@@ -365,8 +363,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
 
   const noApiKey = !(cfg.openrouter?.apiKey ?? '').trim();
   const historyUrl = historySource === 'influxdb' ? influxdbUrl : questdbUrl;
-  const invalidHistoryUrl =
-    historySource !== 'none' && !isHttpUrl(historyUrl, historySource === 'influxdb');
+  const invalidHistoryUrl = historySource !== 'none' && !isHttpUrl(historyUrl);
   const missingHistoryDatabase = historySource === 'influxdb' && !(influxdbDatabase ?? '').trim();
 
   // Open the OpenRouter section and move focus to the API key field, so the
@@ -424,7 +421,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     validationTarget === 'api-key' && noApiKey
       ? 'Enter an OpenRouter API key before saving.'
       : validationTarget === 'history-url' && invalidHistoryUrl
-        ? 'Enter a valid history-provider HTTP or HTTPS base URL without a query or fragment before saving.'
+        ? 'Enter a valid history-provider HTTP or HTTPS base URL without credentials, a query, or a fragment before saving.'
         : validationTarget === 'history-database' && missingHistoryDatabase
           ? 'Enter the InfluxDB database or DBRP database name before saving.'
           : '';
@@ -555,7 +552,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
         </CollapsibleSection>
 
         <ActionBar
-          sticky="bottom"
+          sticky="viewport-bottom"
           data-panel-action-bar=""
           statusRef={savedNoticeRef}
           status={

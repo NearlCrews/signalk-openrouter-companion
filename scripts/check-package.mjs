@@ -12,6 +12,57 @@ const { stdout } = await execFileAsync(
 const [packResult] = JSON.parse(stdout);
 const files = new Set(packResult.files.map((file) => file.path));
 
+const requiredKeywords = [
+  'signalk-node-server-plugin',
+  'signalk-plugin-configurator',
+  'signalk-category-cloud',
+  'signalk-category-notifications',
+  'signalk-category-utility',
+];
+for (const keyword of requiredKeywords) {
+  if (!packageJson.keywords?.includes(keyword)) {
+    throw new Error(`Package metadata must include the ${keyword} keyword.`);
+  }
+}
+
+if (packageJson.signalk?.displayName !== 'OpenRouter Companion') {
+  throw new Error('signalk.displayName must remain OpenRouter Companion.');
+}
+for (const recommendation of [
+  'signalk-nmea2000-emitter-cannon',
+  'signalk-questdb',
+  'signalk-to-influxdb',
+  'signalk-to-influxdb2',
+  'signalk-virtual-weather-sensors',
+]) {
+  if (!packageJson.signalk?.recommends?.includes(recommendation)) {
+    throw new Error(`signalk.recommends must include ${recommendation}.`);
+  }
+}
+if (packageJson.author?.name !== 'Nearl Crews') {
+  throw new Error('Package author metadata must identify Nearl Crews.');
+}
+if (
+  packageJson.repository?.type !== 'git' ||
+  packageJson.repository?.url !==
+    'git+https://github.com/NearlCrews/signalk-openrouter-companion.git'
+) {
+  throw new Error('Package repository metadata must identify the canonical GitHub repository.');
+}
+if (packageJson.license !== 'Apache-2.0') {
+  throw new Error('Package license must remain Apache-2.0.');
+}
+if (packageJson.engines?.node !== '>=22.18') {
+  throw new Error('The bundled plugin runtime must retain its Node >=22.18 compatibility floor.');
+}
+if (
+  packageJson.publishConfig?.access !== 'public' ||
+  packageJson.publishConfig?.provenance !== true ||
+  packageJson.publishConfig?.registry !== 'https://registry.npmjs.org/'
+) {
+  throw new Error('publishConfig must require public npm publication with provenance.');
+}
+
 for (const requiredPath of [
   'CHANGELOG.md',
   'LICENSE',
@@ -45,6 +96,27 @@ for (const [field, declaredPath] of declaredAssets) {
   }
 }
 
+const readPngDimensions = async (path) => {
+  const source = await readFile(path);
+  if (source.length < 24 || source.toString('hex', 0, 8) !== '89504e470d0a1a0a') {
+    throw new Error(`${path} must be a valid PNG file.`);
+  }
+  return { width: source.readUInt32BE(16), height: source.readUInt32BE(20) };
+};
+
+const appIconPath = normalizeDeclaredPath(packageJson.signalk.appIcon);
+const appIconDimensions = await readPngDimensions(appIconPath);
+if (appIconDimensions.width !== 192 || appIconDimensions.height !== 192) {
+  throw new Error(`${appIconPath} must be a 192 by 192 pixel PNG.`);
+}
+for (const declaredPath of packageJson.signalk.screenshots) {
+  const screenshotPath = normalizeDeclaredPath(declaredPath);
+  const dimensions = await readPngDimensions(screenshotPath);
+  if (dimensions.width !== 1280 || dimensions.height !== 800) {
+    throw new Error(`${screenshotPath} must be a 1280 by 800 pixel PNG.`);
+  }
+}
+
 for (const file of files) {
   if (
     file.startsWith('src/') ||
@@ -66,8 +138,16 @@ if (packageJson.exports?.['.'] !== './dist/index.js') {
 if (packageJson.dependencies?.['signalk-nearlcrews-ui']) {
   throw new Error('signalk-nearlcrews-ui must be a bundled development dependency.');
 }
-if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.6.2') {
-  throw new Error('The UI package must be pinned to exact version 0.6.2 during its 0.x series.');
+for (const lifecycleScript of ['prepare', 'preinstall', 'install', 'postinstall']) {
+  if (packageJson.scripts?.[lifecycleScript]) {
+    throw new Error(`Signal K plugins must not define an ${lifecycleScript} lifecycle script.`);
+  }
+}
+if (packageJson.gitHead !== undefined && !/^[0-9a-f]{40}$/.test(packageJson.gitHead)) {
+  throw new Error('gitHead must be a full lowercase Git commit SHA when it is present.');
+}
+if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.7.0') {
+  throw new Error('The UI package must be pinned to exact version 0.7.0 during its 0.x series.');
 }
 
 console.log(`Packed package passed: ${files.size} files in ${packResult.filename}.`);

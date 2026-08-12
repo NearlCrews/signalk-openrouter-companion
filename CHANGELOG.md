@@ -14,19 +14,46 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   `signalk-to-influxdb` and the DBRP mapping created by
   `signalk-to-influxdb2`.
 - Added credential-safe InfluxDB connection testing in the configuration panel.
-  Authentication stays in Basic or Token authorization headers, redirects are
-  rejected, and errors do not return upstream response text or credentials.
+  Authentication stays in a Basic or InfluxDB 2 Token authorization header,
+  base URLs with embedded credentials and redirects are rejected, and errors
+  do not return upstream response text or credentials.
 
 ### Changed
 
+- Updated the exact bundled `signalk-nearlcrews-ui` dependency to 0.7.0.
 - Aging, engine drift, and the optional weather baseline now consume a shared,
   read-only history-provider contract instead of embedding QuestDB queries in
   the analyzers. QuestDB retains its native aggregate queries, while InfluxDB
-  uses bounded aggregate queries and time buckets instead of downloading raw
-  telemetry.
+  reads raw telemetry in one bounded, chunked stream and performs the same
+  preceding-sample, freshness-bounded engine joins without widening long
+  history windows.
 - Legacy `questdb.enabled` and `questdb.url` settings migrate automatically to
   the new `history` block in both the backend and the custom configuration
   panel.
+- Configuration saves preserve keys that a newer server or another extension
+  added outside the panel's known fields. The panel now treats the host's
+  `save` callback as the documented void request, reports that a save was
+  requested until the host resynchronizes, and consumes the host's React and
+  React DOM singletons. The panel size ceiling is now 36 kB gzip to cover the
+  shared UI's new secret input and viewport-aware action bar with measured
+  headroom.
+- Documentation checks now validate Markdown style, spelling directives, and
+  local links in the commit gate. A scheduled external-link check retries
+  transient failures without making remote-site availability a merge blocker.
+- The npm release metadata now requires the public registry and provenance, and
+  the workflow records and verifies the exact release commit in the packed
+  `gitHead` metadata before publishing the already-verified tarball.
+- App Store metadata now categorizes the plugin's cloud integration and lists
+  each supported QuestDB and InfluxDB writer as an optional companion.
+- Refreshed compatible development dependencies, including Signal K server
+  types 2.31, Biome 2.5.8, axe-core 4.13, Dependency Cruiser 18.2, ESLint
+  10.8.1, Knip 6.32, typescript-eslint 8.67, and Vite 8.2.1. TypeScript remains
+  on 6.0 because typescript-eslint supports versions below 6.1.
+- Refreshed the pinned official Signal K plugin workflow, setup-go 7, and
+  zizmor 0.6.2 while retaining full commit SHA pins and read-only permissions.
+- Aligned the source-build environment with the shared UI package on Node
+  22.22.2+, Node 24.15+, or Node 26, while retaining Node 22.18 as the bundled
+  plugin's runtime floor.
 
 <a id="v073"></a>
 

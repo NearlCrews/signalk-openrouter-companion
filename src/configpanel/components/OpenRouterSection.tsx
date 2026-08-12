@@ -1,15 +1,7 @@
 import type { ReactElement, RefObject } from 'react';
-import { memo, useState } from 'react';
-import {
-  Banner,
-  Button,
-  InputGroup,
-  InputGroupControl,
-  LabeledField,
-  Select,
-  Stack,
-  TextInput,
-} from 'signalk-nearlcrews-ui';
+import { memo } from 'react';
+import { Banner, Button, LabeledField, Select, Stack, TextInput } from 'signalk-nearlcrews-ui';
+import { SecretInput } from 'signalk-nearlcrews-ui/forms';
 import type { ModelOption, ModelsState, PanelConfig } from '../types.js';
 import { IntegerInput } from './IntegerInput.js';
 
@@ -31,7 +23,6 @@ export const OpenRouterSection = memo(function OpenRouterSection({
   apiKeyRef,
 }: Props): ReactElement {
   const openRouter: NonNullable<PanelConfig['openrouter']> = cfg.openrouter ?? {};
-  const [showKey, setShowKey] = useState(false);
   const noApiKey = !openRouter.apiKey?.trim();
   const modelHint =
     modelsState === 'loading'
@@ -50,34 +41,20 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         required
       >
         {(controlProps) => (
-          <InputGroup>
-            <InputGroupControl width="grow">
-              <TextInput
-                id={controlProps.id}
-                aria-describedby={controlProps['aria-describedby']}
-                aria-errormessage={controlProps['aria-errormessage']}
-                aria-invalid={controlProps['aria-invalid']}
-                disabled={controlProps.disabled}
-                name={controlProps.name}
-                required={controlProps.required}
-                ref={apiKeyRef}
-                type={showKey ? 'text' : 'password'}
-                autoComplete="new-password"
-                spellCheck={false}
-                value={openRouter.apiKey ?? ''}
-                onChange={(event) =>
-                  set({ openrouter: { ...openRouter, apiKey: event.target.value } })
-                }
-              />
-            </InputGroupControl>
-            <Button
-              size="compact"
-              aria-pressed={showKey}
-              onClick={() => setShowKey((visible) => !visible)}
-            >
-              {showKey ? 'Hide' : 'Show'}
-            </Button>
-          </InputGroup>
+          <SecretInput
+            id={controlProps.id}
+            aria-describedby={controlProps['aria-describedby']}
+            aria-errormessage={controlProps['aria-errormessage']}
+            aria-invalid={controlProps['aria-invalid']}
+            disabled={controlProps.disabled}
+            name={controlProps.name}
+            required={controlProps.required}
+            ref={apiKeyRef}
+            autoComplete="new-password"
+            spellCheck={false}
+            value={openRouter.apiKey ?? ''}
+            onChange={(event) => set({ openrouter: { ...openRouter, apiKey: event.target.value } })}
+          />
         )}
       </LabeledField>
 

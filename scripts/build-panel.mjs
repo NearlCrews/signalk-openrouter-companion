@@ -4,6 +4,10 @@ import webpack from 'webpack';
 
 const require = createRequire(import.meta.url);
 const config = require('../webpack.config.cjs');
+const federationPlugin = config.plugins.find(
+  (plugin) => plugin?.constructor?.name === 'ModuleFederationPlugin',
+);
+const sharedDependencies = Object.keys(federationPlugin?.options?.shared ?? {});
 
 const stats = await new Promise((resolve, reject) => {
   webpack(config, (error, result) => {
@@ -44,6 +48,7 @@ await writeFile(
   `${JSON.stringify(
     {
       ...statsJson,
+      sharedDependencies,
       errorsCount: statsJson.errors?.length ?? 0,
       warningsCount: statsJson.warnings?.length ?? 0,
     },

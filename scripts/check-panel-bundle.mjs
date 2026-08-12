@@ -1,4 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 const outputDirectory = 'public';
@@ -11,6 +12,8 @@ const files = await Promise.all(
   })),
 );
 const stats = JSON.parse(await readFile('.tmp/panel-stats.json', 'utf8'));
+const require = createRequire(import.meta.url);
+const webpackConfig = require('../webpack.config.cjs');
 
 if (stats.errorsCount !== 0 || stats.warningsCount !== 0) {
   throw new Error(
@@ -26,6 +29,26 @@ if (!remoteEntry?.source.includes('export')) {
 const combined = files.map((file) => file.source).join('\n');
 if (!combined.includes('data-snui-version')) {
   throw new Error('The configuration panel did not bundle signalk-nearlcrews-ui.');
+}
+const federationOptions = webpackConfig.plugins.find((plugin) => plugin.options?.shared)?.options;
+if (federationOptions === undefined) {
+  throw new Error('webpack.config.cjs must include Module Federation shared-package options.');
+}
+if (federationOptions.shared['signalk-nearlcrews-ui'] !== undefined) {
+  throw new Error('signalk-nearlcrews-ui must stay bundled into the configuration panel.');
+}
+for (const sharedPackage of ['react', 'react-dom']) {
+  const share = federationOptions.shared[sharedPackage];
+  if (
+    share?.singleton !== true ||
+    share.strictVersion !== true ||
+    share.requiredVersion !== '>=19.2.0 <20.0.0' ||
+    share.import !== false
+  ) {
+    throw new Error(
+      `webpack.config.cjs must consume host-provided ${sharedPackage} as a strict singleton.`,
+    );
+  }
 }
 
 for (const marker of [
@@ -54,6 +77,13 @@ if (!moduleNames.some((name) => name.startsWith('consume shared module (default)
   throw new Error('The panel is not consuming React from the Module Federation host share scope.');
 }
 
+const configuredSharedDependencies = stats.sharedDependencies ?? [];
+for (const dependency of ['react', 'react-dom']) {
+  if (!configuredSharedDependencies.includes(dependency)) {
+    throw new Error(`The panel does not configure ${dependency} as a host-shared dependency.`);
+  }
+}
+
 const bundledReactModules = moduleNames.filter((name) =>
   /node_modules[\\/]react(?:-dom)?[\\/]/.test(name),
 );
@@ -68,4 +98,6 @@ if (unexpectedReactModules.length > 0) {
   );
 }
 
-console.log(`Panel bundle passed: ${javascriptNames.length} JavaScript files, host-shared React.`);
+console.log(
+  `Panel bundle passed: ${javascriptNames.length} JavaScript files, host-shared React and React DOM.`,
+);

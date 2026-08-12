@@ -8,42 +8,40 @@ const server = await createServer({
 });
 await server.listen();
 
+const fixtureUrl = server.resolvedUrls?.local[0];
+if (!fixtureUrl) {
+  await server.close();
+  throw new Error('The browser fixture server did not expose a local URL');
+}
+
 let browser;
 try {
   browser = await chromium.launch();
   const page = await browser.newPage({
     colorScheme: 'light',
     deviceScaleFactor: 1,
-    viewport: { width: 900, height: 1100 },
+    viewport: { width: 1280, height: 800 },
   });
-  await page.goto('http://127.0.0.1:4174/?screenshots');
+  await page.goto(new URL('?screenshots', fixtureUrl).href);
   await page.locator('body[data-fixture-ready="true"]').waitFor();
   await page.getByRole('heading', { name: 'Live status' }).waitFor();
 
   await page.getByRole('button', { name: 'OpenRouter', exact: true }).click();
-  const panel = page.locator('[data-snui-root]');
   const themeGroup = page.getByRole('radiogroup', { name: 'Panel theme' });
+  const captureViewport = async (path) => {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.mouse.move(0, 0);
+    await page.screenshot({ animations: 'disabled', caret: 'hide', path });
+  };
 
   await themeGroup.getByRole('radio', { name: 'Light' }).click();
-  await page.mouse.move(0, 0);
-  await panel.screenshot({
-    animations: 'disabled',
-    path: 'assets/screenshots/panel-overview.png',
-  });
+  await captureViewport('assets/screenshots/panel-overview.png');
 
   await themeGroup.getByRole('radio', { name: 'Dark' }).click();
-  await page.mouse.move(0, 0);
-  await panel.screenshot({
-    animations: 'disabled',
-    path: 'assets/screenshots/panel-overview-dark.png',
-  });
+  await captureViewport('assets/screenshots/panel-overview-dark.png');
 
   await themeGroup.getByRole('radio', { name: 'Night' }).click();
-  await page.mouse.move(0, 0);
-  await panel.screenshot({
-    animations: 'disabled',
-    path: 'assets/screenshots/panel-overview-night.png',
-  });
+  await captureViewport('assets/screenshots/panel-overview-night.png');
 
   await themeGroup.getByRole('radio', { name: 'Light' }).click();
 
@@ -53,9 +51,12 @@ try {
   await page.locator('[data-panel-action-bar]').evaluate((element) => {
     element.style.display = 'none';
   });
+  const analyzerSection = page.locator('#orc-section-analyzers');
+  await analyzerSection.evaluate((element) => element.scrollIntoView({ block: 'start' }));
   await page.mouse.move(0, 0);
-  await page.locator('#orc-section-analyzers').screenshot({
+  await page.screenshot({
     animations: 'disabled',
+    caret: 'hide',
     path: 'assets/screenshots/panel-analyzers.png',
   });
 } finally {

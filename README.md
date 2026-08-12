@@ -3,7 +3,6 @@
 [![npm version](https://img.shields.io/npm/v/signalk-openrouter-companion.svg)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![npm downloads](https://img.shields.io/npm/dm/signalk-openrouter-companion.svg)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml)
-[![plugin-ci](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D22.18-brightgreen.svg)](https://nodejs.org)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/nearlcrews)
@@ -100,9 +99,10 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React is supplied by the Signal K admin host. Version 0.6.2 starts fresh
-  profiles in Auto, follows the host theme, and retains explicit preferences
-  stored under the shared key.
+  React and React DOM are supplied by the Signal K admin host. Version 0.7.0
+  starts fresh profiles in Auto, follows an explicit host theme, and otherwise
+  stays Light. System follows the operating-system preference, and all explicit
+  choices persist under the shared key.
 - **Binnacle-aligned verification.** TypeScript, Biome, ESLint, dependency
   boundaries, dead-code checks, Vitest, Playwright, package validation, size
   budgets, workflow security, and dependency audits share the same gate
@@ -133,7 +133,7 @@ and the analyzer extension point.
 
 ## Installation
 
-Install from the Signal K admin UI under **AppStore, then Available**, or
+Install from the Signal K admin UI under **Apps and Plugins, then Store**, or
 from npm:
 
 ```bash
@@ -151,7 +151,7 @@ npm run build
 ln -s "$(pwd)" ~/.signalk/node_modules/signalk-openrouter-companion
 ```
 
-Then enable it under **Server, then Plugin Config** and set your
+Then enable it under **Apps and Plugins, then Plugin Configuration** and set your
 OpenRouter API key in the panel that opens.
 
 ## Configuration
@@ -265,9 +265,11 @@ predicted severity meets the configured floor.
 
 ## Development
 
-This project targets Node 22.18 or newer, with TypeScript 6 for development.
-The primary CI gate runs on Node 26 with npm 11.18.0, and Signal K plugin CI
-checks Node 22, 24, and 26 across its desktop platforms.
+The published plugin runs on Node 22.18 or newer. Building from source requires
+Node 22.22.2+, Node 24.15+, or Node 26, with TypeScript 6 for development. The
+checked-in `.node-version` selects Node 22.22.2. The primary CI gate runs on
+Node 26 with npm 11.18.0, and Signal K plugin CI checks Node 22, 24, and 26
+across its desktop platforms.
 
 ```bash
 git clone https://github.com/NearlCrews/signalk-openrouter-companion.git

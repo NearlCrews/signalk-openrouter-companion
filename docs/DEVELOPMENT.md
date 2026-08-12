@@ -25,10 +25,10 @@ src/
 │   ├── maintenance.ts        State: engine-session narrative
 │   ├── health.ts             State: daily battery snapshot
 │   ├── alerts.ts             Transition: threshold crossings
-│   ├── aging.ts              Trend: capacity loss per bank from QuestDB
-│   ├── drift.ts              Trend: fuel-economy drift per RPM bin from QuestDB
+│   ├── aging.ts              Trend: capacity loss per bank from selected history
+│   ├── drift.ts              Trend: fuel-economy drift from selected history
 │   ├── liveness.ts           State: stale-path and multi-source detection
-│   └── forecast.ts           Trend: short-term weather outlook from buffer + optional QuestDB
+│   └── forecast.ts           Trend: weather outlook from buffer + optional history
 ├── configpanel/
 │   ├── PluginConfigurationPanel.tsx  Module Federation panel exposed as `./PluginConfigurationPanel`
 │   ├── components/           Shared UI composition plus plugin-specific CSS Modules
@@ -99,11 +99,11 @@ below and in [CONTRIBUTING.md](../.github/CONTRIBUTING.md).
 
 The seven analyzers are split by purpose so they don't duplicate findings:
 
-- **State** (`maintenance`, `health`, `liveness`): describe "now". Read from the in-memory `RollingBuffer` (`maintenance` and `health` also read the live SK tree via `app.getSelfPath(...)`; `liveness` reads the buffer only). No QuestDB.
+- **State** (`maintenance`, `health`, `liveness`): describe "now". Read from the in-memory `RollingBuffer` (`maintenance` and `health` also read the live SK tree via `app.getSelfPath(...)`; `liveness` reads the buffer only). No long-term history provider.
 - **Transition** (`alerts`): describe a threshold crossing. Triggered by `battery-event` subkinds from `BatteryMonitor`. Reads a one-shot snapshot.
-- **Trend** (`aging`, `drift`, `forecast`): describe gradual change over a window. `aging` and `drift` read history only from QuestDB; the buffer just discovers which banks and engines exist. `forecast` is the exception: it reads weather trends straight from the `RollingBuffer` (which retains ~24h) and treats QuestDB as an optional baseline extension, so it still produces a forecast with no QuestDB configured.
+- **Trend** (`aging`, `drift`, `forecast`): describe gradual change over a window. `aging` and `drift` read the selected QuestDB or InfluxDB provider through the shared `HistoryProvider` contract; the buffer just discovers which banks and engines exist. `forecast` is the exception: it reads weather trends straight from the `RollingBuffer` (which retains about 24 hours) and treats the selected provider as an optional baseline extension, so it still produces a forecast with history disabled.
 
-Trend analyzers own QuestDB queries; state analyzers don't, so a daily health report stays independent of long-term history and won't duplicate the trend analyzers' findings.
+Trend analyzers request provider-neutral summaries; the QuestDB and InfluxDB implementations own their query details. State analyzers do not use long-term history, so a daily health report stays independent of the selected provider and does not duplicate the trend analyzers' findings.
 
 ### Weather Outlook Advisor
 
@@ -116,7 +116,7 @@ The `forecast` analyzer broadens the Companion past engine and battery telemetry
 
 Both lists live as static `WEATHER_CANONICAL_PATHS` / `WEATHER_EXTENSION_PATHS` constants in `src/core/paths.ts`, and the analyzer exposes their union as its `watchedPaths` so the lifecycle subscribes them generically. Each buffered value keeps its `$source` so the prompt distinguishes an AccuWeather-sourced reading from a real onboard sensor.
 
-**Graceful degradation.** The analyzer is source-agnostic and never hard-depends on the weather plugin. On a canonical-only feed it still produces a forecast: pressure tendency, wind veer or back, and temperature/dewpoint convergence carry the prediction. When the extension paths are also present the outlook is enriched, since a lowering cloud ceiling, collapsing visibility, precipitation onset, and the 24h temperature departure are strong leading indicators. If less than ~1h of history is buffered and no QuestDB baseline is reachable, `collectContext` returns `null` and the tick is skipped, spending no OpenRouter call.
+**Graceful degradation.** The analyzer is source-agnostic and never hard-depends on the weather plugin. On a canonical-only feed it still produces a forecast: pressure tendency, wind veer or back, and temperature/dewpoint convergence carry the prediction. When the extension paths are also present the outlook is enriched, since a lowering cloud ceiling, collapsing visibility, precipitation onset, and the 24h temperature departure are strong leading indicators. If less than about one hour of history is buffered and no selected history-provider baseline is reachable, `collectContext` returns `null` and the tick is skipped, spending no OpenRouter call.
 
 **Severity grading and the floor.** The model returns a machine-readable first line, `SEVERITY: severe|moderate|minor|none`, ahead of the prose paragraph. `forecast` parses and strips that line; a missing or malformed line falls back to grade `none`. The `severityFloor` config dropdown has three settings that control when the notification raises an alarm:
 
@@ -166,7 +166,7 @@ npm run build          # clean + tsc -d + esbuild bundle + webpack panel
 npm run build:types    # tsc --emitDeclarationOnly --declaration --outDir dist
 npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
 npm run build:panel    # node scripts/build-panel.mjs (admin UI panel + build stats)
-npm run check:panel    # verify the remote, shared UI, and host-shared React
+npm run check:panel    # verify the remote, bundled shared UI, and host React pair
 npm run clean          # delete dist/ and public/ via Node fs.rmSync (cross-platform)
 ```
 
@@ -178,13 +178,14 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.6.2 component library and shares React 19 as a Module
-Federation singleton supplied by the Signal K admin host. `PanelRoot` owns the
-theme tokens. A profile without a valid shared preference starts in Auto,
-follows the host, and does not persist an implicit choice. The retired
-`orc-theme` preference is intentionally ignored. The panel checks native CSS scope
-support before mounting, and its responsive rules follow the panel container
-rather than the browser viewport. Chromium and Edge 120 are the minimum
+`signalk-nearlcrews-ui` 0.7.0 component library and shares React 19 and React
+DOM as Module Federation singletons supplied by the Signal K admin host.
+`PanelRoot` owns the theme tokens. A profile without a valid shared preference
+starts in Auto, follows an explicit host theme, otherwise stays Light, and does
+not persist an implicit choice. System follows the operating-system preference.
+The retired `orc-theme` preference is intentionally ignored. The panel checks
+native CSS scope support before mounting, and its responsive rules follow the
+panel container rather than the browser viewport. Chromium and Edge 120 are the minimum
 Chromium-family versions because the shared UI mirrors direction-sensitive
 controls with `:dir()`. Plugin-specific drawer and report styles stay in CSS
 Modules.
@@ -208,6 +209,11 @@ npm run test:host-asset # running Signal K Admin requests the installed remote
 npm run test:integration # unsecured CI server loads the plugin and configurator remote
 ```
 
+The browser fixture uses port 4174 by default. Set `ORC_BROWSER_PORT` to an
+unused local port when another development server is already using it.
+`npm run screenshots` captures the declared App Store screenshots at 1280 by
+800 pixels, and `npm run package:check` rejects stale dimensions.
+
 `test:integration` targets the unsecured temporary server used by plugin-ci. On
 a secured, installed server, use `test:host-asset` to verify the public Admin UI
 and configurator asset without requesting authenticated plugin metadata.
@@ -215,8 +221,8 @@ and configurator asset without requesting authenticated plugin metadata.
 The unit and integration suite covers:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
-- Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), QuestDB client (probe + query + error paths).
-- `tests/api.test.ts` covers all seven REST endpoints: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), questdb test (URL override/probe).
+- Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), and both history providers (probe, query, decode, and error paths).
+- `tests/api.test.ts` covers all eight REST route families: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), QuestDB test, and InfluxDB test.
 - `tests/integration.test.ts` exercises the plugin end-to-end with a mocked SK server and `vi.stubGlobal('fetch')` for OpenRouter.
 
 The shared test mocks live in `tests/_mocks.ts`:
@@ -239,15 +245,21 @@ npm run type-check     # backend, tests, panel, and tooling configs
 ```
 
 Biome owns formatting and its recommended lint rules. ESLint adds typed promise
-checks and React Hooks rules. Markdownlint and cspell cover documentation. The
-repo follows strict-mode TypeScript with no implicit `any` and no unchecked
-indexed access. The `type-check` script covers `src/`, tests, the config panel,
+checks and React Hooks rules. The documentation gate uses exact-pinned
+markdownlint-cli2 0.23.2, cspell 10.0.1, and Linkinator 8.0.3. Local files and
+fragments block the commit gate. External links run in a scheduled workflow
+with bounded concurrency, retries, and rate-limit warnings because remote rate
+limits and bot protection make them unsuitable for the merge gate. The repo
+follows strict-mode TypeScript with no implicit `any` and no unchecked indexed
+access. The `type-check` script covers `src/`, tests, the config panel,
 Playwright, Vite, and browser fixtures through four TypeScript configurations.
 
 ## Verification gates
 
 ```bash
 npm run verify:commit  # formatting, lint, boundaries, and dead code
+npm run check:links:local # deterministic local files and Markdown fragments
+npm run check:links:external # networked external-link maintenance check
 npm run ci:workflows   # action pins and release-workflow invariants
 npm run verify:fast    # commit gate plus all type checks
 npm run verify         # fast gate, coverage, production build, and size budgets
@@ -260,10 +272,10 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` 0.6.2 migration keeps the complete panel near
-32.17 kB gzip. This documented exception retains the shared
-accessibility, validation, responsive layout, and theme contracts. The 33 kB
-gzip gate leaves a 2.6 percent margin and keeps future growth visible.
+The `signalk-nearlcrews-ui` 0.7.0 migration keeps the complete panel near
+35.1 kB gzip. This documented exception retains the shared accessibility,
+validation, responsive layout, and theme contracts. The 36 kB gzip gate leaves
+about 2.5 percent headroom and keeps future growth visible.
 
 ## Local development against a real Signal K server
 
@@ -363,8 +375,10 @@ GitHub Actions workflows under `.github/workflows/`:
   Chromium, Firefox, WebKit, package validation, and full and runtime audits.
 - `codeql.yml`: CodeQL static analysis.
 - `workflow-security.yml`: pinned actionlint and zizmor checks.
-- `publish.yml`: verifies, packs, and publishes the exact artifact when a
-  non-prerelease GitHub release is published.
+- `publish.yml`: writes the release commit to the package's `gitHead`, verifies
+  that exact manifest and code, packs it once, checks the tarball commit
+  metadata, and publishes the verified artifact when a non-prerelease GitHub
+  release is published.
 
 The validation workflows run on pushes and pull requests to `main`, and CodeQL
 also runs weekly. Publishing runs only for a published, non-prerelease GitHub
@@ -373,14 +387,17 @@ release.
 ## Tech stack
 
 - TypeScript 6 strict, ESM, ES2022 target
-- Node 22.18+ and npm 11.18.0 for development. The manifest accepts npm 10.9.3
-  only so the upstream Node 22 plugin workflow can bootstrap the project.
-- `@signalk/server-api` 2.30 types with a `>=2.24.0 <3` runtime peer range. The
+- Node 22.22.2+, Node 24.15+, or Node 26 with npm 11.18.0 for development.
+  The published plugin remains compatible with Node 22.18 or newer. The
+  manifest accepts npm 10.9.3 only so the upstream Node 22 plugin workflow can
+  bootstrap the project.
+- `@signalk/server-api` 2.31 types with a `>=2.24.0 <3` runtime peer range. The
   separate Signal K server floor is 2.25.0 because that release added the ESM
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5, esbuild-loader 4, React 19, and `signalk-nearlcrews-ui` 0.6.2
+- Webpack 5, esbuild-loader 4, React 19, React DOM 19, and
+  `signalk-nearlcrews-ui` 0.7.0
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 

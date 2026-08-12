@@ -412,6 +412,13 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
         return;
       }
+      if (parsed.username || parsed.password) {
+        res.status(400).json({
+          ok: false,
+          error: 'QuestDB base URL must not include credentials',
+        });
+        return;
+      }
       if (parsed.search || parsed.hash) {
         res.status(400).json({
           ok: false,

@@ -1,5 +1,5 @@
 import type { RefObject } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AnalyzerConfig, PanelConfig, PanelStatus, SavedNotice } from '../types.js';
 import { useConfig } from './useConfig.js';
 
@@ -95,30 +95,24 @@ export function useSaveLifecycle(
     return () => clearTimeout(handle);
   }, [savedNotice]);
 
-  const showSaveError = useCallback((err: unknown): void => {
-    setSaving(false);
-    if (latchTimerRef.current) {
-      clearTimeout(latchTimerRef.current);
-      latchTimerRef.current = null;
-    }
-    restartWatchRef.current = null;
-    setSavedNotice({
-      at: new Date().toLocaleTimeString(),
-      phase: NOTICE_DONE,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    savedNoticeRef.current?.focus();
-  }, []);
-
   const onSave = (): void => {
     if (saving) return;
     setSaving(true);
-    let result: unknown;
     try {
-      result = save(cfg);
+      save(cfg);
     } catch (err) {
-      // save() threw synchronously (transient client error, validation reject).
-      showSaveError(err);
+      setSaving(false);
+      if (latchTimerRef.current) {
+        clearTimeout(latchTimerRef.current);
+        latchTimerRef.current = null;
+      }
+      restartWatchRef.current = null;
+      setSavedNotice({
+        at: new Date().toLocaleTimeString(),
+        phase: NOTICE_DONE,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      savedNoticeRef.current?.focus();
       return;
     }
     // Arm the restart watcher only when a startedAt is known. With status null
@@ -128,9 +122,6 @@ export function useSaveLifecycle(
     restartWatchRef.current =
       typeof status?.startedAt === 'number' ? { prior: status.startedAt } : null;
     setSavedNotice({ at: new Date().toLocaleTimeString(), phase: NOTICE_RESTARTING });
-    // Surface a host save that rejects asynchronously instead of relying on the
-    // 30s latch to silently lapse.
-    Promise.resolve(result).catch(showSaveError);
     // Fallback: if the host never pushes a fresh configuration prop (the only
     // other path that clears `saving`), drop the latch after a generous timeout
     // so the Save button is not pinned forever on a silent failure.
@@ -152,7 +143,7 @@ export function useSaveLifecycle(
       ? `Save failed at ${savedNotice.at}: ${savedNotice.error}`
       : savedNotice.phase === NOTICE_DONE
         ? `Saved at ${savedNotice.at}. Plugin restarted.`
-        : `Saved at ${savedNotice.at}. Plugin restarting...`
+        : `Save requested at ${savedNotice.at}. Plugin restarting...`
     : '';
 
   return {

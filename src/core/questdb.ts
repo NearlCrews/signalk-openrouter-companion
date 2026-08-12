@@ -109,6 +109,8 @@ export class QuestDBClient implements HistoryProvider {
     const rawUrl = cfg.url.trim();
     try {
       const parsed = new URL(rawUrl);
+      parsed.username = '';
+      parsed.password = '';
       parsed.search = '';
       parsed.hash = '';
       parsed.pathname = stripTrailingSlashes(parsed.pathname);

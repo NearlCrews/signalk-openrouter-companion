@@ -131,27 +131,24 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     const baselineEnd = weekStart;
     const baselineStart = baselineEnd - this.baselineDays * DAY_MS;
 
-    // Process engines and windows one at a time so a twin-engine installation
-    // cannot hold every provider response in memory concurrently.
-    const engines: EngineDrift[] = [];
-    for (const engineId of engineIds) {
-      const thisWeek = await binEngineWindow(history, engineId, weekStart, weekEnd, deps.signal);
-      if (!thisWeek || totalBinCount(thisWeek) === 0) continue;
-      const baseline = await binEngineWindow(
-        history,
-        engineId,
-        baselineStart,
-        baselineEnd,
-        deps.signal,
-      );
-      if (!baseline || totalBinCount(baseline) === 0) continue;
-      engines.push({
-        engineId,
-        thisWeek,
-        baseline,
-        deltas: computeDeltas(thisWeek, baseline),
-      });
-    }
+    const engines = (
+      await Promise.all(
+        engineIds.map(async (engineId): Promise<EngineDrift | null> => {
+          const [thisWeek, baseline] = await Promise.all([
+            binEngineWindow(history, engineId, weekStart, weekEnd, deps.signal),
+            binEngineWindow(history, engineId, baselineStart, baselineEnd, deps.signal),
+          ]);
+          if (!thisWeek || totalBinCount(thisWeek) === 0) return null;
+          if (!baseline || totalBinCount(baseline) === 0) return null;
+          return {
+            engineId,
+            thisWeek,
+            baseline,
+            deltas: computeDeltas(thisWeek, baseline),
+          };
+        }),
+      )
+    ).filter((e): e is EngineDrift => e !== null);
     if (engines.length === 0) return null;
 
     return {
@@ -190,9 +187,9 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
   }
 }
 
-// Requests one provider-owned aggregation per engine and window. QuestDB uses
-// its native ASOF JOIN, while InfluxDB aligns bounded time buckets. The common
-// result keeps provider query syntax and row decoding out of the analyzer.
+// Requests one provider-owned aggregation per engine and window. Each provider
+// performs a preceding-sample ASOF match inside the same freshness window. The
+// common result keeps provider query syntax and row decoding out of the analyzer.
 async function binEngineWindow(
   history: NonNullable<AnalyzerDeps['history']>,
   engineId: string,

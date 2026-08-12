@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
 import { CronScheduler } from '../src/core/cronScheduler.js';
+import { QuestDBClient } from '../src/core/questdb.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
 import createPlugin from '../src/index.js';
 import { cleanupTmpDir, type MockApp, makeMockApp, makeTmpDir } from './_mocks.js';
@@ -14,6 +15,7 @@ describe('plugin lifecycle', () => {
   });
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     await cleanupTmpDir(dir);
   });
 
@@ -211,6 +213,110 @@ describe('plugin lifecycle', () => {
     expect(app.buses.has('electrical.alternators.1.voltage')).toBe(true);
 
     await plugin.stop();
+  });
+
+  it('recovers an unavailable history source and exposes it through status', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-10T12:00:00Z'));
+    const probeSpy = vi
+      .spyOn(QuestDBClient.prototype, 'probe')
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const setHistorySpy = vi.spyOn(TriggerRouter.prototype, 'setHistory');
+    const routes = new Map<string, (req: RouteRequest, res: RouteResponse) => unknown>();
+    const plugin = createPlugin(app as never);
+    plugin.registerWithRouter({
+      get: (path, handler) => routes.set(path, handler),
+      post: (path, handler) => routes.set(path, handler),
+    });
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, history: { source: 'questdb' } } as never,
+      () => {},
+    );
+    await plugin._whenReady();
+
+    const readStatus = (): { code: number; body: unknown } => {
+      let code = 200;
+      let body: unknown;
+      const res: RouteResponse = {
+        status(value) {
+          code = value;
+          return res;
+        },
+        json(value) {
+          body = value;
+          return res;
+        },
+        send(value) {
+          body = value;
+          return res;
+        },
+      };
+      routes.get('/api/status')?.({}, res);
+      return { code, body };
+    };
+
+    expect(readStatus()).toMatchObject({
+      code: 200,
+      body: { history: { source: 'questdb', reachable: false } },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(probeSpy).toHaveBeenCalledTimes(2);
+    expect(setHistorySpy).toHaveBeenCalledWith(expect.any(QuestDBClient));
+    expect(readStatus()).toMatchObject({
+      code: 200,
+      body: { history: { source: 'questdb', reachable: true } },
+    });
+
+    await plugin.stop();
+  });
+
+  it('does not reconnect history after stop wins a recovery-probe race', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-10T12:00:00Z'));
+    let resolveRecovery: (reachable: boolean) => void = () => {};
+    const recovery = new Promise<boolean>((resolve) => {
+      resolveRecovery = resolve;
+    });
+    const probeSpy = vi
+      .spyOn(QuestDBClient.prototype, 'probe')
+      .mockResolvedValueOnce(false)
+      .mockReturnValueOnce(recovery);
+    const setHistorySpy = vi.spyOn(TriggerRouter.prototype, 'setHistory');
+    const routes = new Map<string, (req: RouteRequest, res: RouteResponse) => unknown>();
+    const plugin = createPlugin(app as never);
+    plugin.registerWithRouter({
+      get: (path, handler) => routes.set(path, handler),
+      post: (path, handler) => routes.set(path, handler),
+    });
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, history: { source: 'questdb' } } as never,
+      () => {},
+    );
+    await plugin._whenReady();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(probeSpy).toHaveBeenCalledTimes(2);
+
+    await plugin.stop();
+    resolveRecovery(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(setHistorySpy).not.toHaveBeenCalled();
+    let statusCode = 200;
+    const res: RouteResponse = {
+      status(code) {
+        statusCode = code;
+        return res;
+      },
+      json() {
+        return res;
+      },
+      send() {
+        return res;
+      },
+    };
+    routes.get('/api/status')?.({}, res);
+    expect(statusCode).toBe(503);
   });
 
   it('binds each cron job to only its own (pattern, timezone) analyzers', async () => {

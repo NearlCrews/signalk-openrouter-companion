@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug. Please redact your OpenRouter API key and any vessel-identifying information before sharing logs or config.
+        Thanks for reporting a bug. Please redact OpenRouter and history-provider credentials plus any vessel-identifying information before sharing logs or configuration.
 
   - type: textarea
     id: description
@@ -66,7 +66,7 @@ body:
     id: logs
     attributes:
       label: Server log output
-      description: Run with DEBUG=signalk-openrouter-companion and paste the relevant lines. Redact API keys.
+      description: Run with DEBUG=signalk-openrouter-companion and paste the relevant lines. Redact OpenRouter and history-provider credentials.
       render: shell
 
   - type: textarea
@@ -80,7 +80,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      placeholder: "0.5.6"
+      placeholder: "0.7.3"
     validations:
       required: true
 
@@ -122,20 +122,24 @@ body:
       description: Model slug from your config (e.g., `anthropic/claude-haiku-4.5`)
 
   - type: dropdown
-    id: questdb
+    id: history-provider
     attributes:
-      label: QuestDB co-installed?
-      description: The aging and drift analyzers require it, forecast uses it as an optional baseline, and the other analyzers ignore it.
+      label: History provider
+      description: Aging and drift require history, and forecast can use it as an optional baseline.
       options:
-        - Yes, reachable at the configured URL
-        - Yes, but unreachable from the plugin
-        - No
+        - Disabled
+        - QuestDB, reachable
+        - QuestDB, unreachable
+        - InfluxDB 1.x, reachable
+        - InfluxDB 1.x, unreachable
+        - InfluxDB 2.x, reachable
+        - InfluxDB 2.x, unreachable
 
   - type: textarea
     id: config
     attributes:
       label: Plugin configuration
-      description: Contents of `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` with API keys redacted.
+      description: Contents of `~/.signalk/plugin-config-data/signalk-openrouter-companion.json` with OpenRouter and history-provider credentials redacted.
       render: json
 
   - type: checkboxes
@@ -145,7 +149,7 @@ body:
       options:
         - label: I have checked existing issues for duplicates
           required: true
-        - label: I have redacted my OpenRouter API key
+        - label: I have redacted OpenRouter and history-provider credentials
           required: true
         - label: I have redacted any vessel-identifying information (boat name, MMSI, location)
           required: true

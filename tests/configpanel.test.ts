@@ -1,6 +1,6 @@
+import { formatRelativeAge } from 'signalk-nearlcrews-ui';
 import { describe, expect, it } from 'vitest';
 import { fireOutcomeText, isFireSuccess } from '../src/configpanel/fireOutcome.js';
-import { humanizeAgo } from '../src/configpanel/recency.js';
 import { buildScheduleOptions } from '../src/configpanel/scheduleOptions.js';
 import { clamp, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
 import { CRON_PRESETS } from '../src/cronPresets.js';
@@ -73,11 +73,7 @@ describe('clamp', () => {
 });
 
 describe('isHttpUrl', () => {
-  it.each([
-    'http://localhost:9000',
-    'https://questdb.example.test/exec',
-    'http://user:secret@questdb.local:9000',
-  ])('accepts %s', (value) => {
+  it.each(['http://localhost:9000', 'https://questdb.example.test/exec'])('accepts %s', (value) => {
     expect(isHttpUrl(value)).toBe(true);
   });
 
@@ -87,14 +83,19 @@ describe('isHttpUrl', () => {
     'questdb.local:9000',
     'ftp://questdb.local',
     'not a url',
+    'http://operator:secret@questdb.local:9000',
     'http://questdb.local:9000?token=secret',
     'http://questdb.local:9000#fragment',
   ])('rejects %s', (value) => {
     expect(isHttpUrl(value)).toBe(false);
   });
+});
 
-  it('can reject embedded credentials for providers that use dedicated fields', () => {
-    expect(isHttpUrl('http://user:secret@influxdb.local:8086', true)).toBe(false);
+describe('shared status age formatting', () => {
+  it('uses the shared UI relative-age contract', () => {
+    expect(formatRelativeAge(0, { locale: 'en' })).toBe('0s ago');
+    expect(formatRelativeAge(59_500, { locale: 'en' })).toBe('1m ago');
+    expect(formatRelativeAge(undefined, { fallback: 'unknown' })).toBe('unknown');
   });
 });
 
@@ -112,26 +113,6 @@ describe('fire outcome mapping', () => {
     expect(isFireSuccess(undefined)).toBe(true);
     expect(isFireSuccess('failed')).toBe(false);
     expect(isFireSuccess('unknown')).toBe(false);
-  });
-});
-
-describe('humanizeAgo', () => {
-  it('returns "unknown" for a missing, non-finite, or negative age', () => {
-    expect(humanizeAgo(undefined)).toBe('unknown');
-    expect(humanizeAgo(Number.NaN)).toBe('unknown');
-    expect(humanizeAgo(Number.POSITIVE_INFINITY)).toBe('unknown');
-    expect(humanizeAgo(-1)).toBe('unknown');
-  });
-
-  it('formats seconds, minutes, hours, and days', () => {
-    expect(humanizeAgo(0)).toBe('0s ago');
-    expect(humanizeAgo(8_000)).toBe('8s ago');
-    expect(humanizeAgo(59_000)).toBe('59s ago');
-    expect(humanizeAgo(60_000)).toBe('1m ago');
-    expect(humanizeAgo(59 * 60_000)).toBe('59m ago');
-    expect(humanizeAgo(60 * 60_000)).toBe('1h ago');
-    expect(humanizeAgo(23 * 60 * 60_000)).toBe('23h ago');
-    expect(humanizeAgo(24 * 60 * 60_000)).toBe('1d ago');
   });
 });
 

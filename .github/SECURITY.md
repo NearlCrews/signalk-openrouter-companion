@@ -10,8 +10,8 @@ We actively support the following versions with security updates:
 
 | Version | Supported |
 | ------- | --------- |
-| 0.6.x   | Yes       |
-| < 0.6   | No        |
+| 0.7.x   | Yes       |
+| < 0.7   | No        |
 
 ## Reporting a Vulnerability
 
@@ -57,7 +57,8 @@ Out of scope:
 
 - The Signal K server itself: report to [SignalK/signalk-server](https://github.com/SignalK/signalk-server).
 - OpenRouter's API or any individual model behavior: report to OpenRouter.
-- QuestDB: report to [questdb/questdb](https://github.com/questdb/questdb).
+- QuestDB or InfluxDB: report database vulnerabilities to the relevant
+  upstream project.
 - The user's local NMEA 2000 bus.
 
 ## Security Best Practices
@@ -81,7 +82,9 @@ When using this plugin:
    accumulate in `reports.jsonl` indefinitely on a constrained device.
 6. **Keep Updated**: always use the latest version, and keep your Node.js
    runtime up to date. There is no outbound TLS pinning; the plugin
-   trusts the system CA store for openrouter.ai and the QuestDB URL.
+   trusts the system CA store for openrouter.ai and any HTTPS history-provider
+   URL. Onboard HTTP history providers are not encrypted, so keep them on a
+   trusted vessel network.
 
 ## Dependency Security
 
@@ -103,20 +106,29 @@ npm run audit:runtime
   (`~/.signalk/plugin-config-data/signalk-openrouter-companion.json`) and
   never logged. The schema marks the field as a password input. If you
   see the key echoed in logs, that is a bug, please report it.
-- **Vessel telemetry sent to OpenRouter**: each analyzer's prompt
-  includes the relevant subset of telemetry (engine RPM, fuel rate,
-  battery voltage and state of charge, weather readings). No GPS
-  coordinates and no identifying metadata are included. If you do not
-  want telemetry leaving the boat, do not enable the analyzers.
+- **Vessel telemetry sent to OpenRouter**: each analyzer's prompt includes the
+  relevant subset of telemetry, such as engine RPM, fuel rate, battery voltage
+  and state of charge, and weather readings. The plugin does not deliberately
+  collect position coordinates, the vessel name, or the MMSI, but prompts can
+  include Signal K path and source labels plus locally assigned engine and
+  battery identifiers. If you do not want telemetry leaving the boat, do not
+  enable the analyzers.
 - **Generated reports**: written locally to `reports.jsonl` in the
-  plugin's data directory and published as Signal K notifications. They
-  contain the same telemetry that was sent to OpenRouter plus the model's
-  prose response.
+  plugin's data directory and published as Signal K notifications. The log
+  stores the generated prose and run metadata, not the exact prompt or raw
+  telemetry payload. The prose can still repeat or summarize telemetry values
+  that were sent to OpenRouter.
+- **History-provider credentials**: an optional InfluxDB username, password,
+  or API token is stored in the same Signal K plugin configuration. The panel
+  renders the secret as a password field, passes it to Signal K's configuration
+  callback when saving, and sends it to the authenticated connection-test route.
+  Runtime InfluxDB queries send it only in the authorization header. Status and
+  error responses do not include it.
 
 ## Signal K Security
 
 This plugin operates within the Signal K server environment. Please also
-refer to the [Signal K documentation](https://signalk.org/documentation/)
+refer to the [Signal K server documentation](https://demo.signalk.org/documentation/)
 and Signal K server security best practices.
 
 ## Marine Safety Notice

@@ -252,6 +252,7 @@ export default function createPlugin(app: ServerApiLike): {
                   selfContext: app.selfContext,
                 })
               : null;
+        let historyProbeInFlight = false;
         const probePromise: Promise<HistoryProvider | null> = historyCandidate
           ? historyCandidate
               .probe(lifecycle.signal)
@@ -585,19 +586,34 @@ export default function createPlugin(app: ServerApiLike): {
             }
             // History recovery: a source that is down at start (or starts after
             // this plugin) must not leave trend analyzers disabled forever.
-            if (historyCandidate && router && runtime && !runtime.historyLive) {
+            if (
+              historyCandidate &&
+              router &&
+              runtime &&
+              !runtime.historyLive &&
+              !historyProbeInFlight
+            ) {
               const live = runtime;
               const routerForRecovery = router;
+              historyProbeInFlight = true;
               void historyCandidate
                 .probe(lifecycle.signal)
                 .then((ok) => {
-                  if (ok) {
+                  if (
+                    ok &&
+                    !lifecycle.signal.aborted &&
+                    runtime === live &&
+                    activeRouter === routerForRecovery
+                  ) {
                     routerForRecovery.setHistory(historyCandidate);
                     live.historyLive = historyCandidate;
                     logger.debug('History source recovered; trend analyzers re-enabled');
                   }
                 })
-                .catch(() => {});
+                .catch(() => {})
+                .finally(() => {
+                  historyProbeInFlight = false;
+                });
             }
           }, RESCAN_INTERVAL_MS),
         );

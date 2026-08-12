@@ -14,6 +14,17 @@ function okResult(columns: string[] = ['name'], values: unknown[][] = [['measure
   );
 }
 
+function chunkedResult(chunks: Array<{ columns: string[]; values: unknown[][] }>): Response {
+  return new Response(
+    chunks
+      .map(({ columns, values }) =>
+        JSON.stringify({ results: [{ series: [{ name: 'series', columns, values }] }] }),
+      )
+      .join('\n'),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+}
+
 function requestAt(
   mock: ReturnType<typeof vi.fn>,
   index = 0,
@@ -40,7 +51,7 @@ describe('InfluxDBClient', () => {
     fetchMock.mockResolvedValueOnce(okResult());
     const client = new InfluxDBClient({
       version: '2',
-      url: '  http://influx.local:8086///?discarded=yes#old  ',
+      url: '  http://embedded:secret@influx.local:8086///?discarded=yes#old  ',
       database: 'boat history',
       username: 'operator',
       password: 'token-value',
@@ -76,27 +87,6 @@ describe('InfluxDBClient', () => {
     await client.probe();
 
     expect(new Headers(requestAt(fetchMock).init.headers).has('authorization')).toBe(false);
-  });
-
-  it('removes credentials embedded in a hand-edited base URL', async () => {
-    fetchMock.mockResolvedValueOnce(okResult());
-    const client = new InfluxDBClient({
-      version: '1',
-      url: 'http://embedded:secret@influx.local:8086',
-      database: 'signalk',
-      username: '',
-      password: '',
-      selfContext: 'vessels.self',
-    });
-
-    await client.probe();
-
-    const { url, init } = requestAt(fetchMock);
-    expect(url.username).toBe('');
-    expect(url.password).toBe('');
-    expect(url.href).not.toContain('embedded');
-    expect(url.href).not.toContain('secret');
-    expect(new Headers(init.headers).has('authorization')).toBe(false);
   });
 
   it('uses token authentication for InfluxDB 2 when no username is configured', async () => {
@@ -172,29 +162,43 @@ describe('InfluxDBClient', () => {
     expect(requestAt(fetchMock).url.searchParams.get('q')).toContain('"self" = \'true\'');
   });
 
-  it('aligns bounded time buckets and aggregates engine metrics by RPM band', async () => {
+  it('ASOF-aligns preceding engine metrics without widening the freshness window', async () => {
     const t0 = Date.parse('2026-08-01T00:00:00Z');
-    const t1 = t0 + 5_000;
-    const t2 = t0 + 10_000;
     fetchMock.mockImplementation(async (input: string) => {
       const query = new URL(input).searchParams.get('q') ?? '';
-      const columns = ['time', 'mean_value', 'sample_count'];
+      const columns = ['time', 'value'];
       if (query.includes('propulsion.port.revolutions')) {
-        return okResult(columns, [
-          [t0, 10, 2],
-          [t1, 20, 1],
-          [t2, 3, 4],
+        return chunkedResult([
+          {
+            columns,
+            values: [
+              [t0 + 1_000, 10],
+              [t0 + 6_000, 20],
+              [t0 + 11_000, 10],
+            ],
+          },
         ]);
       }
       if (query.includes('propulsion.port.fuel.rate')) {
-        return okResult(columns, [
-          [t0, 2, 3],
-          [t1, 4, 1],
+        return chunkedResult([
+          {
+            columns,
+            values: [
+              [t0, 2],
+              [t0 + 1_500, 99],
+              [t0 + 7_000, 4],
+            ],
+          },
         ]);
       }
-      return okResult(columns, [
-        [t0, 5, 2],
-        [t1, 6, 2],
+      return chunkedResult([
+        {
+          columns,
+          values: [
+            [t0, 5],
+            [t0 + 7_000, 7],
+          ],
+        },
       ]);
     });
     const client = new InfluxDBClient({
@@ -218,31 +222,42 @@ describe('InfluxDBClient', () => {
         ],
       },
       t0,
-      t0 + 15_000,
+      t0 + 12_000,
     );
 
     expect(result?.get('idle')).toEqual({
       fuelCount: 2,
       sogCount: 2,
-      meanFuelRate: 2,
-      meanSog: 5,
+      meanFuelRate: 3,
+      meanSog: 6,
     });
     expect(result?.get('cruise')).toEqual({
       fuelCount: 1,
-      sogCount: 1,
-      meanFuelRate: 4,
-      meanSog: 6,
+      sogCount: 0,
+      meanFuelRate: 99,
+      meanSog: null,
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
     for (let index = 0; index < 3; index += 1) {
       const request = requestAt(fetchMock, index);
       expect(request.url.searchParams.get('epoch')).toBe('ms');
-      expect(request.url.searchParams.get('q')).toContain('GROUP BY time(5s) fill(none)');
+      expect(request.url.searchParams.get('q')).toMatch(/SELECT "value" .* ORDER BY time ASC/);
+      expect(request.url.searchParams.get('chunked')).toBe('true');
+      expect(request.url.searchParams.get('chunk_size')).toBe('10000');
     }
   });
 
-  it('widens long engine windows to keep aggregate result sets bounded', async () => {
-    fetchMock.mockImplementation(async () => okResult([], []));
+  it('streams raw engine samples in one linear chunked query per measurement', async () => {
+    const t0 = Date.parse('2026-08-01T00:00:00Z');
+    const firstChunk = Array.from({ length: 10_000 }, (_, index) => [t0 + index, 10]);
+    fetchMock.mockImplementation(async (input: string) => {
+      const query = new URL(input).searchParams.get('q') ?? '';
+      if (!query.includes('FROM "rpm"')) return chunkedResult([]);
+      return chunkedResult([
+        { columns: ['time', 'value'], values: firstChunk },
+        { columns: ['time', 'value'], values: [[t0 + 10_000, 10]] },
+      ]);
+    });
     const client = new InfluxDBClient({
       version: '2',
       url: 'http://influx.local:8086',
@@ -250,9 +265,7 @@ describe('InfluxDBClient', () => {
       username: '',
       password: '',
     });
-    const fromMs = Date.parse('2025-08-01T00:00:00Z');
-
-    await client.binEngineWindow(
+    const result = await client.binEngineWindow(
       {
         rpmPath: 'rpm',
         fuelRatePath: 'fuel',
@@ -261,13 +274,182 @@ describe('InfluxDBClient', () => {
         joinWindowMs: 5_000,
         bins: [{ key: 'all', maxHz: Number.POSITIVE_INFINITY }],
       },
-      fromMs,
-      fromMs + 365 * 24 * 60 * 60 * 1000,
+      t0,
+      t0 + 20_000,
     );
 
-    expect(requestAt(fetchMock).url.searchParams.get('q')).toContain(
-      'GROUP BY time(631s) fill(none)',
+    expect(result?.get('all')).toEqual({
+      fuelCount: 0,
+      sogCount: 0,
+      meanFuelRate: null,
+      meanSog: null,
+    });
+    const rpmRequests = fetchMock.mock.calls
+      .map((call) => new URL(String(call[0])).searchParams.get('q') ?? '')
+      .filter((query) => query.includes('FROM "rpm"'));
+    expect(rpmRequests).toHaveLength(1);
+    expect(rpmRequests[0]).not.toContain('OFFSET');
+  });
+
+  it('aborts all engine streams when the shared sample budget is exceeded', async () => {
+    const t0 = Date.parse('2026-08-01T00:00:00Z');
+    fetchMock.mockImplementation(async () =>
+      chunkedResult([
+        {
+          columns: ['time', 'value'],
+          values: [
+            [t0, 10],
+            [t0 + 1, 10],
+          ],
+        },
+      ]),
     );
+    const client = new InfluxDBClient(
+      {
+        version: '2',
+        url: 'http://influx.local:8086',
+        database: 'signalk',
+        username: '',
+        password: '',
+      },
+      { engineMaxSamples: 1 },
+    );
+
+    await expect(
+      client.binEngineWindow(
+        {
+          rpmPath: 'rpm',
+          fuelRatePath: 'fuel',
+          sogPath: 'sog',
+          runningThresholdHz: 5,
+          joinWindowMs: 5_000,
+          bins: [{ key: 'all', maxHz: Number.POSITIVE_INFINITY }],
+        },
+        t0,
+        t0 + 1_000,
+      ),
+    ).rejects.toThrow('InfluxDB engine history exceeded its bounded query budget');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the engine stream when the shared byte budget is exceeded', async () => {
+    fetchMock.mockResolvedValueOnce(
+      chunkedResult([{ columns: ['time', 'value'], values: [[0, 10]] }]),
+    );
+    const client = new InfluxDBClient(
+      {
+        version: '2',
+        url: 'http://influx.local:8086',
+        database: 'signalk',
+        username: '',
+        password: '',
+      },
+      { engineMaxBytes: 1 },
+    );
+
+    await expect(
+      client.binEngineWindow(
+        {
+          rpmPath: 'rpm',
+          fuelRatePath: 'fuel',
+          sogPath: 'sog',
+          runningThresholdHz: 5,
+          joinWindowMs: 5_000,
+          bins: [{ key: 'all', maxHz: Number.POSITIVE_INFINITY }],
+        },
+        0,
+        1_000,
+      ),
+    ).rejects.toThrow('InfluxDB engine history exceeded its bounded query budget');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts a hung engine request when the overall deadline expires', async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation(
+      async (_input: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          requestSignal = init?.signal as AbortSignal | undefined;
+          requestSignal?.addEventListener(
+            'abort',
+            () => reject(requestSignal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    const client = new InfluxDBClient(
+      {
+        version: '2',
+        url: 'http://influx.local:8086',
+        database: 'signalk',
+        username: '',
+        password: '',
+      },
+      { engineTimeoutMs: 25 },
+    );
+    const pending = client.binEngineWindow(
+      {
+        rpmPath: 'rpm',
+        fuelRatePath: 'fuel',
+        sogPath: 'sog',
+        runningThresholdHz: 5,
+        joinWindowMs: 5_000,
+        bins: [{ key: 'all', maxHz: Number.POSITIVE_INFINITY }],
+      },
+      0,
+      1_000,
+    );
+    const expectedRejection = expect(pending).rejects.toThrow(
+      'InfluxDB engine history exceeded its bounded query budget',
+    );
+    expect(requestSignal).toBeDefined();
+    await vi.advanceTimersByTimeAsync(25);
+
+    await expectedRejection;
+    expect(requestSignal?.aborted).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('cancels an in-flight engine stream when the caller aborts', async () => {
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation(
+      async (_input: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          requestSignal = init?.signal as AbortSignal | undefined;
+          requestSignal?.addEventListener(
+            'abort',
+            () => reject(requestSignal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+    const client = new InfluxDBClient({
+      version: '2',
+      url: 'http://influx.local:8086',
+      database: 'signalk',
+      username: '',
+      password: '',
+    });
+    const controller = new AbortController();
+    const pending = client.binEngineWindow(
+      {
+        rpmPath: 'rpm',
+        fuelRatePath: 'fuel',
+        sogPath: 'sog',
+        runningThresholdHz: 5,
+        joinWindowMs: 5_000,
+        bins: [{ key: 'all', maxHz: Number.POSITIVE_INFINITY }],
+      },
+      0,
+      1_000,
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it('returns no engine window when the RPM measurement has no rows', async () => {

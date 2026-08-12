@@ -40,7 +40,8 @@
 - [ ] `npm run test:host-asset` passes against Signal K Admin when the panel changes
 - [ ] Tests cover the change. New `collectContext` paths have a happy-path test and at least one null-path test.
 - [ ] No em dashes anywhere (code, commits, PR description, docs).
-- [ ] Shared helpers used where applicable: `buildTriggers`, `bankPaths`/`enginePaths`, `notificationReportPath`/`pluginPutPath`, `publishReport`, `escapeSqlLiteral` + `indexColumns`, `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio`, `clampPositiveInt`.
+- [ ] Shared helpers used where applicable: `buildTriggers`, `bankPaths`/`enginePaths`, `notificationReportPath`/`pluginPutPath`, `publishReport`, the `HistoryProvider` contract, `fmtNumber`/`fmtPct`/`fmtUnit`/`fmtRatio`, and `clampPositiveInt`.
+- [ ] Logs, fixtures, screenshots, and pasted configuration redact OpenRouter and history-provider credentials plus vessel-identifying data.
 - [ ] CHANGELOG entry under the relevant release (or `[Unreleased]` if applicable).
 - [ ] No unrelated formatting churn.
 

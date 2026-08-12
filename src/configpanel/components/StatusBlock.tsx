@@ -4,13 +4,13 @@ import {
   Banner,
   Button,
   Cluster,
+  formatRelativeAge,
   Metric,
   MetricGrid,
   Stack,
   StatusIndicator,
   type StatusTone,
 } from 'signalk-nearlcrews-ui';
-import { humanizeAgo } from '../recency.js';
 import type { PanelStatus, TestResult } from '../types.js';
 
 interface Props {
@@ -126,7 +126,9 @@ export const StatusBlock = memo(function StatusBlock({
           </StatusIndicator>
         ) : null}
         {stale ? (
-          <StatusIndicator tone="warning">Status updated {humanizeAgo(staleAgeMs)}</StatusIndicator>
+          <StatusIndicator tone="warning">
+            Status updated {formatRelativeAge(staleAgeMs)}
+          </StatusIndicator>
         ) : null}
       </Cluster>
     </Stack>

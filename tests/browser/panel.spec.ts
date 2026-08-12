@@ -1,5 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
+import packageJson from '../../package.json' with { type: 'json' };
+
+const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui'];
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -7,17 +10,38 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Live status' })).toBeVisible();
 });
 
+test('shows a standalone compatibility alert when native CSS scope is unavailable', async ({
+  page,
+}) => {
+  await page.goto('/?unsupported-css-scope');
+  await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
+
+  const notice = page.getByRole('alert');
+  await expect(notice).toHaveAttribute('data-browser-compatibility-message', '');
+  await expect(notice).toContainText('Browser update required');
+  await expect(notice).toContainText('This panel requires native CSS @scope.');
+  await expect(page.locator('[data-snui-root]')).toHaveCount(0);
+});
+
 test('loads the production remote and completes the save flow', async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const panelRoot = page.locator('[data-snui-root]');
-  await expect(panelRoot).toHaveAttribute('data-snui-version', '0.6.2');
+  await expect(panelRoot).toHaveAttribute('data-snui-version', EXPECTED_UI_VERSION);
   await expect(panelRoot).not.toHaveAttribute('data-snui-theme');
+  await expect(page.locator('[data-panel-action-bar]')).toHaveClass(
+    /snui-action-bar--sticky-viewport-bottom/,
+  );
   await expect(page.getByText('12,480')).toBeVisible();
   const maintenanceSection = page.getByRole('button', { name: /Maintenance Advisor/ });
   await expect(maintenanceSection).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Analyzers' }).click();
   await expect(maintenanceSection).toBeVisible();
+  const maintenanceEnabled = page.getByRole('checkbox', {
+    name: 'Maintenance Advisor: Enabled',
+  });
+  await maintenanceEnabled.click();
+  await maintenanceEnabled.click();
   await page.getByRole('button', { name: 'Analyzers' }).click();
   await expect(maintenanceSection).toBeHidden();
 
@@ -25,6 +49,11 @@ test('loads the production remote and completes the save flow', async ({ page })
   const apiKey = page.getByRole('textbox', { name: 'API key', exact: true });
   await expect(apiKey).toBeFocused();
   await expect(apiKey).toHaveAttribute('aria-invalid', 'true');
+  await expect(apiKey).toHaveAttribute('type', 'password');
+  await page.getByRole('button', { name: 'Show' }).click();
+  await expect(apiKey).toHaveAttribute('type', 'text');
+  await page.getByRole('button', { name: 'Hide' }).click();
+  await expect(apiKey).toHaveAttribute('type', 'password');
   await expect(apiKey).not.toHaveAttribute('descriptionid');
   await expect(apiKey).not.toHaveAttribute('errorid');
   await expect(page.getByText('Enter an OpenRouter API key.')).toBeVisible();
@@ -57,16 +86,18 @@ test('loads the production remote and completes the save flow', async ({ page })
   const questdbUrl = page.getByRole('textbox', { name: 'QuestDB REST URL', exact: true });
   await questdbUrl.fill('ftp://questdb.local');
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
+  await questdbUrl.fill('http://operator:secret@questdb.local:9000');
+  await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
   await questdbUrl.fill('http://questdb.local:9000?token=secret');
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
   await saveButton.click();
   await expect(questdbUrl).toBeFocused();
   await expect(
-    page.getByText('Enter an HTTP or HTTPS base URL without a query or fragment.'),
+    page.getByText('Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment.'),
   ).toBeVisible();
   await expect(
     page.getByText(
-      'Enter a valid history-provider HTTP or HTTPS base URL without a query or fragment before saving.',
+      'Enter a valid history-provider HTTP or HTTPS base URL without credentials, a query, or a fragment before saving.',
     ),
   ).toBeVisible();
   await expect(page.locator('body')).not.toHaveAttribute('data-save-count', /\d/);
@@ -76,7 +107,26 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(page.locator('body')).toHaveAttribute('data-saved-configuration', /fixture-key/);
   const savedConfiguration = await page.locator('body').getAttribute('data-saved-configuration');
   expect(JSON.parse(savedConfiguration ?? '{}')).toMatchObject({
-    history: { source: 'questdb', questdb: { url: 'http://localhost:9000' } },
+    extensionOwnedByAnotherPlugin: {
+      enabled: true,
+      nested: { retained: 'unchanged' },
+    },
+    openrouter: { futureOpenRouterSetting: { retained: 'openrouter' } },
+    history: {
+      source: 'questdb',
+      futureHistorySetting: { retained: 'history' },
+      questdb: {
+        url: 'http://localhost:9000',
+        futureQuestDBSetting: { retained: 'questdb' },
+      },
+      influxdb: { futureInfluxDBSetting: { retained: 'influxdb' } },
+    },
+    analyzers: {
+      maintenance: {
+        enabled: true,
+        futureAnalyzerSetting: { retained: 'analyzer' },
+      },
+    },
   });
   expect(JSON.parse(savedConfiguration ?? '{}')).not.toHaveProperty('questdb');
   await expect(page.locator('body')).toHaveAttribute('data-save-count', '1');
@@ -87,6 +137,7 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(saveButton).toHaveAccessibleDescription('Saving');
   const saveStatus = page.locator('[data-panel-action-bar] [tabindex="-1"]');
   await expect(saveStatus).toBeFocused();
+  await expect(saveStatus).toContainText('Save requested at');
   await expect(saveStatus).toContainText('Plugin restarting');
 
   await saveButton.dispatchEvent('click');
@@ -110,6 +161,8 @@ test('configures and tests InfluxDB history without exposing credentials', async
   await provider.selectOption('influxdb');
   const influxUrl = page.getByRole('textbox', { name: 'InfluxDB URL', exact: true });
   const database = page.getByRole('textbox', { name: 'Database', exact: true });
+  await influxUrl.fill('http://operator:secret@influx.local:8086');
+  await expect(influxUrl).toHaveAttribute('aria-invalid', 'true');
   await influxUrl.fill('http://influx.local:8086');
 
   const saveButton = page
@@ -125,6 +178,10 @@ test('configures and tests InfluxDB history without exposing credentials', async
   await page.getByRole('combobox', { name: 'InfluxDB version' }).selectOption('2');
   await page.getByRole('textbox', { name: 'Username', exact: true }).fill('operator');
   await page.getByLabel('Password or API token', { exact: true }).fill('fixture-token');
+  await expect(page.getByLabel('Password or API token', { exact: true })).toHaveAttribute(
+    'type',
+    'password',
+  );
   await page.getByRole('button', { name: 'Test connection' }).click();
   await expect(page.getByText('Reachable at http://influx.local:8086')).toBeVisible();
 
@@ -141,7 +198,13 @@ test('configures and tests InfluxDB history without exposing credentials', async
         database: 'signalk',
         username: 'operator',
         password: 'fixture-token',
+        futureInfluxDBSetting: { retained: 'influxdb' },
       },
+      futureHistorySetting: { retained: 'history' },
+    },
+    openrouter: { futureOpenRouterSetting: { retained: 'openrouter' } },
+    analyzers: {
+      maintenance: { futureAnalyzerSetting: { retained: 'analyzer' } },
     },
   });
   expect(saved).not.toHaveProperty('questdb');
@@ -184,9 +247,13 @@ test('ignores an older status response that resolves after a newer poll', async 
 });
 
 test('defaults a fresh profile to Auto without persisting an implicit choice', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
   await page.evaluate(() => {
     localStorage.removeItem('signalk-nearlcrews-ui.theme.v1');
     localStorage.removeItem('orc-theme');
+    document.documentElement.removeAttribute('data-bs-theme');
+    document.documentElement.removeAttribute('data-coreui-theme');
+    document.documentElement.classList.remove('dark-mode');
   });
   await page.reload();
   await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
@@ -194,6 +261,8 @@ test('defaults a fresh profile to Auto without persisting an implicit choice', a
   const root = page.locator('[data-snui-root]');
   const themeGroup = page.getByRole('radiogroup', { name: 'Panel theme' });
   await expect(root).not.toHaveAttribute('data-snui-theme');
+  await expect(root).toHaveCSS('background-color', 'rgb(244, 246, 248)');
+  await expect(root).toHaveCSS('color', 'rgb(24, 32, 44)');
   await expect(themeGroup.getByRole('radio', { name: 'Auto' })).toBeChecked();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
@@ -208,6 +277,7 @@ test('defaults a fresh profile to Auto without persisting an implicit choice', a
 });
 
 test('ignores the retired legacy preference and supports every theme', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
   await page.evaluate(() => {
     localStorage.removeItem('signalk-nearlcrews-ui.theme.v1');
     localStorage.setItem('orc-theme', 'night');
@@ -225,12 +295,18 @@ test('ignores the retired legacy preference and supports every theme', async ({ 
     ['Light', 'light'],
     ['Dark', 'dark'],
     ['Night', 'night'],
+    ['System', 'system'],
   ] as const) {
     await themeGroup.getByRole('radio', { name: label }).click();
     await expect(page.locator('[data-snui-root]')).toHaveAttribute('data-snui-theme', value);
   }
+  await expect(page.locator('[data-snui-root]')).toHaveCSS('background-color', 'rgb(16, 19, 28)');
   await themeGroup.getByRole('radio', { name: 'Auto' }).click();
   await expect(page.locator('[data-snui-root]')).not.toHaveAttribute('data-snui-theme');
+  await expect(page.locator('[data-snui-root]')).toHaveCSS(
+    'background-color',
+    'rgb(244, 246, 248)',
+  );
 });
 
 test('has no Axe findings or horizontal overflow at 320 pixels', async ({ page }) => {
@@ -268,13 +344,4 @@ test('provides coarse-pointer controls with 44-pixel targets @coarse', async ({ 
     const box = await control.boundingBox();
     expect(box?.height).toBeGreaterThanOrEqual(44);
   }
-});
-
-test('shows a compatibility message when native CSS scope is unavailable', async ({ page }) => {
-  await page.goto('/?unsupported-css-scope');
-  await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
-  await expect(page.locator('[data-browser-compatibility-message]')).toContainText(
-    'Browser update required',
-  );
-  await expect(page.locator('[data-snui-root]')).toHaveCount(0);
 });

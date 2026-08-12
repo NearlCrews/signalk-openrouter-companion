@@ -27,9 +27,11 @@ describe('QuestDBClient', () => {
     expect(await q.probe()).toBe(true);
   });
 
-  it('normalizes whitespace, trailing slashes, queries, and fragments before requests', async () => {
+  it('removes embedded credentials, queries, and fragments before requests', async () => {
     fetchMock.mockResolvedValueOnce(ok({ dataset: [[1]], columns: [] }));
-    const q = new QuestDBClient({ url: '  http://localhost:9000///?token=old#fragment  ' });
+    const q = new QuestDBClient({
+      url: '  http://operator:secret@localhost:9000///?token=old#fragment  ',
+    });
     await expect(q.probe()).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:9000/exec?query=SELECT%201',

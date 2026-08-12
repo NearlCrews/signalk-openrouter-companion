@@ -1,4 +1,5 @@
 import * as React from 'react';
+import * as ReactDOM from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
 declare const __REMOTE_URL__: string;
@@ -20,6 +21,15 @@ interface ShareScope {
       readonly eager: boolean;
       readonly from: string;
       readonly get: () => Promise<() => typeof React>;
+      readonly loaded: boolean;
+    }
+  >;
+  readonly 'react-dom': Record<
+    string,
+    {
+      readonly eager: boolean;
+      readonly from: string;
+      readonly get: () => Promise<() => typeof ReactDOM>;
       readonly loaded: boolean;
     }
   >;
@@ -182,6 +192,14 @@ const shareScope: ShareScope = {
       loaded: true,
     },
   },
+  'react-dom': {
+    [ReactDOM.version]: {
+      eager: true,
+      from: 'openrouter-companion-browser-fixture',
+      get: () => Promise.resolve(() => ReactDOM),
+      loaded: true,
+    },
+  },
 };
 
 try {
@@ -193,10 +211,23 @@ try {
   if (!(rootElement instanceof HTMLElement)) throw new Error('Fixture root is missing.');
 
   const initialConfiguration = {
+    extensionOwnedByAnotherPlugin: {
+      enabled: true,
+      nested: { retained: 'unchanged' },
+    },
     openrouter: {
       ...(screenshotMode ? { apiKey: 'sk-or-v1-fixture-not-a-real-key' } : {}),
       model: 'anthropic/claude-sonnet-4',
       maxCallsPerDay: 50,
+      futureOpenRouterSetting: { retained: 'openrouter' },
+    },
+    history: {
+      futureHistorySetting: { retained: 'history' },
+      questdb: { futureQuestDBSetting: { retained: 'questdb' } },
+      influxdb: { futureInfluxDBSetting: { retained: 'influxdb' } },
+    },
+    analyzers: {
+      maintenance: { futureAnalyzerSetting: { retained: 'analyzer' } },
     },
     questdb: { enabled: true, url: 'http://localhost:9000' },
   };
@@ -210,9 +241,12 @@ try {
       document.body.dataset.saveCount = String(priorSaveCount + 1);
       document.body.dataset.savedConfiguration = JSON.stringify(nextConfiguration);
       let completed = false;
+      let fallbackTimer: number | undefined;
       const completeHostResync = (): void => {
         if (completed) return;
         completed = true;
+        document.removeEventListener('fixture-host-resync', completeHostResync);
+        if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
         setConfiguration(nextConfiguration);
         statusPayload.startedAt += 1;
         document.body.dataset.hostResyncCount = String(
@@ -221,7 +255,7 @@ try {
         document.dispatchEvent(new Event('visibilitychange'));
       };
       document.addEventListener('fixture-host-resync', completeHostResync, { once: true });
-      setTimeout(completeHostResync, 5000);
+      fallbackTimer = window.setTimeout(completeHostResync, 95_000);
     };
 
     return <Panel configuration={configuration} save={save} />;
@@ -236,6 +270,9 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   const errorElement = document.querySelector('#fixture-error');
-  if (errorElement) errorElement.textContent = message;
+  if (errorElement) {
+    errorElement.setAttribute('role', 'alert');
+    errorElement.textContent = message;
+  }
   document.body.dataset.fixtureReady = 'false';
 }

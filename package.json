@@ -23,6 +23,7 @@
     "signalk-plugin-configurator",
     "signalk-category-utility",
     "signalk-category-notifications",
+    "signalk-category-cloud",
     "openrouter",
     "llm",
     "marine"
@@ -39,7 +40,10 @@
     ],
     "recommends": [
       "signalk-virtual-weather-sensors",
-      "signalk-nmea2000-emitter-cannon"
+      "signalk-nmea2000-emitter-cannon",
+      "signalk-questdb",
+      "signalk-to-influxdb",
+      "signalk-to-influxdb2"
     ]
   },
   "engines": {
@@ -48,7 +52,7 @@
   "devEngines": {
     "runtime": {
       "name": "node",
-      "version": ">=22.18",
+      "version": "^22.22.2 || ^24.15.0 || ^26.0.0",
       "onFail": "error"
     },
     "packageManager": {
@@ -79,6 +83,11 @@
   "peerDependencies": {
     "@signalk/server-api": ">=2.24.0 <3"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "croner": "^10.0.1"
   },
@@ -88,36 +97,37 @@
     }
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.12.1",
-    "@biomejs/biome": "^2.5.6",
+    "@axe-core/playwright": "^4.13.0",
+    "@biomejs/biome": "^2.5.8",
     "@playwright/test": "^1.62.1",
-    "@signalk/server-api": "2.30.0",
+    "@signalk/server-api": "2.31.0",
     "@size-limit/file": "^13.0.3",
-    "@types/node": "26.1.2",
+    "@types/node": "26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "4.1.10",
     "cspell": "10.0.1",
     "css-loader": "^7.1.4",
-    "dependency-cruiser": "^18.1.1",
-    "esbuild": "^0.28.1",
+    "dependency-cruiser": "^18.2.0",
+    "esbuild": "^0.28.2",
     "esbuild-loader": "^4.5.0",
-    "eslint": "10.8.0",
+    "eslint": "10.8.1",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.9.0",
-    "knip": "^6.31.0",
+    "globals": "^17.10.0",
+    "knip": "^6.32.2",
+    "linkinator": "8.0.3",
     "markdownlint-cli2": "0.23.2",
     "publint": "0.3.23",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "signalk-nearlcrews-ui": "0.6.2",
+    "signalk-nearlcrews-ui": "0.7.0",
     "size-limit": "^13.0.3",
     "style-loader": "^4.0.0",
-    "tsx": "^4.23.5",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "8.66.0",
-    "vite": "^8.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vite": "^8.2.1",
     "vitest": "4.1.10",
     "webpack": "^5.109.2",
     "webpack-cli": "^7.2.2"
@@ -145,8 +155,11 @@
     "lint": "npm run lint:code && npm run lint:docs && npm run spellcheck",
     "lint:code": "biome lint . && eslint . --cache --cache-location .cache/eslint",
     "lint:docs": "markdownlint-cli2 \"*.md\" \".github/*.md\" \"docs/*.md\"",
+    "lint:docs:fix": "markdownlint-cli2 --fix \"*.md\" \".github/*.md\" \"docs/*.md\"",
     "lint:fix": "biome lint --write . && eslint . --fix --cache --cache-location .cache/eslint",
-    "spellcheck": "cspell --no-progress --show-suggestions README.md CHANGELOG.md THIRD_PARTY_NOTICES.md CLAUDE.md \".github/**/*.{md,yml,yaml}\" \"docs/*.md\"",
+    "spellcheck": "cspell lint --no-progress --show-suggestions --validate-directives --no-cache README.md CHANGELOG.md THIRD_PARTY_NOTICES.md CLAUDE.md \".github/**/*.{md,yml,yaml}\" \"docs/*.md\"",
+    "check:links:local": "linkinator \"*.md\" \"docs/*.md\" \".github/*.md\" --markdown --check-fragments --skip \"^https?://(?!127\\\\.0\\\\.0\\\\.1:)\" --verbosity error",
+    "check:links:external": "linkinator \"*.md\" \"docs/*.md\" \".github/*.md\" --markdown --concurrency 10 --timeout 15000 --retry --retry-errors --retry-errors-count 2 --retry-errors-jitter 1000 --redirects warn --status-code \"403:warn\" --status-code \"429:warn\" --verbosity warning",
     "ci:biome": "biome ci .",
     "ci:workflows": "node scripts/check-workflows.mjs",
     "cruise": "depcruise src --config .dependency-cruiser.cjs",
@@ -160,7 +173,7 @@
     "audit:release": "npm audit --audit-level=high",
     "screenshots": "npm run build && node scripts/capture-screenshots.mjs",
     "validate": "npm run verify",
-    "verify:commit": "npm run ci:biome && npm run lint && npm run ci:workflows && npm run cruise && npm run deadcode",
+    "verify:commit": "npm run ci:biome && npm run lint && npm run check:links:local && npm run ci:workflows && npm run cruise && npm run deadcode",
     "verify:fast": "npm run verify:commit && npm run check",
     "verify": "npm run verify:fast && npm run test:coverage && npm run build && npm run size",
     "verify:browser": "npm run verify && npm run test:browser",
@@ -177,11 +190,11 @@
     {
       "name": "Configuration panel JavaScript",
       "path": "public/*.{js,mjs}",
-      "limit": "33 kB",
+      "limit": "36 kB",
       "gzip": true
     }
   ],
   "allowScripts": {
-    "esbuild@0.28.1": true
+    "esbuild@0.28.2": true
   }
 }

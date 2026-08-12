@@ -9,6 +9,7 @@ import {
   StatusIndicator,
   TextInput,
 } from 'signalk-nearlcrews-ui';
+import { SecretInput } from 'signalk-nearlcrews-ui/forms';
 import type { HistoryTestResult, PanelConfig } from '../types.js';
 import { isHttpUrl } from '../utils.js';
 
@@ -37,7 +38,7 @@ export const HistorySection = memo(function HistorySection({
   const influxdb = history.influxdb ?? {};
   const activeUrl = source === 'influxdb' ? influxdb.url : questdb.url;
   const noUrl = source !== 'none' && !activeUrl?.trim();
-  const invalidUrl = source !== 'none' && !noUrl && !isHttpUrl(activeUrl, source === 'influxdb');
+  const invalidUrl = source !== 'none' && !noUrl && !isHttpUrl(activeUrl);
   const missingDatabase = source === 'influxdb' && !influxdb.database?.trim();
 
   return (
@@ -72,7 +73,7 @@ export const HistorySection = memo(function HistorySection({
             noUrl
               ? 'Enter the QuestDB REST URL.'
               : invalidUrl
-                ? 'Enter an HTTP or HTTPS base URL without a query or fragment.'
+                ? 'Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment.'
                 : undefined
           }
           layout="inline"
@@ -119,7 +120,7 @@ export const HistorySection = memo(function HistorySection({
               noUrl
                 ? 'Enter the InfluxDB URL.'
                 : invalidUrl
-                  ? 'Enter an HTTP or HTTPS base URL without a query or fragment.'
+                  ? 'Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment.'
                   : undefined
             }
             layout="inline"
@@ -181,8 +182,7 @@ export const HistorySection = memo(function HistorySection({
             description="InfluxDB 2 uses an API token here."
             layout="inline"
           >
-            <TextInput
-              type="password"
+            <SecretInput
               autoComplete="new-password"
               value={influxdb.password ?? ''}
               onChange={(event) =>

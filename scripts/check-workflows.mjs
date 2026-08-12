@@ -31,8 +31,21 @@ for (const expected of ['github/codeql-action/init@', 'github/codeql-action/anal
   if (!codeql.includes(expected)) failures.push(`codeql.yml must include ${expected}.`);
 }
 
+const docsLinks = await readFile('.github/workflows/docs-links.yml', 'utf8');
+for (const expected of ['schedule:', 'workflow_dispatch:', 'run check:links:external']) {
+  if (!docsLinks.includes(expected)) {
+    failures.push(`docs-links.yml must include ${expected}.`);
+  }
+}
+
 const publish = await readFile('.github/workflows/publish.yml', 'utf8');
-for (const expected of ['--provenance --access public', 'name: npm-package', 'needs: build']) {
+for (const expected of [
+  '--provenance --access public',
+  'name: npm-package',
+  'needs: build',
+  'npm@11.18.0 pkg set gitHead="$GITHUB_SHA"',
+  'PACKED_GIT_HEAD=',
+]) {
   if (!publish.includes(expected)) failures.push(`publish.yml must retain ${expected}.`);
 }
 

@@ -59,16 +59,18 @@ export function isPromptOverride(value: string, promptDefault: string | undefine
   return value !== promptDefault;
 }
 
-// History providers only support HTTP and HTTPS base URLs. Query strings and
-// fragments cannot be part of the base because each client owns its API query.
-export function isHttpUrl(value: string | undefined, rejectCredentials = false): boolean {
+// History providers only support HTTP and HTTPS base URLs. Credentials, query
+// strings, and fragments cannot be part of the base because each client owns
+// authentication and its API query.
+export function isHttpUrl(value: string | undefined): boolean {
   const trimmed = value?.trim();
   if (!trimmed) return false;
   try {
     const url = new URL(trimmed);
     return (
       (url.protocol === 'http:' || url.protocol === 'https:') &&
-      (!rejectCredentials || (url.username === '' && url.password === '')) &&
+      url.username === '' &&
+      url.password === '' &&
       url.search === '' &&
       url.hash === ''
     );

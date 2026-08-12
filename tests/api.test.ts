@@ -611,6 +611,10 @@ describe('plugin REST API', () => {
       ['not a URL', 'invalid URL'],
       ['ftp://questdb.local', 'unsupported URL scheme'],
       [
+        'http://operator:secret@questdb.local:9000',
+        'QuestDB base URL must not include credentials',
+      ],
+      [
         'http://questdb.local:9000?token=secret',
         'QuestDB base URL must not include a query string or fragment',
       ],
@@ -760,7 +764,7 @@ describe('plugin REST API', () => {
       [{ url: 'not a URL', database: 'signalk' }, 'invalid URL'],
       [{ url: 'ftp://influx.local', database: 'signalk' }, 'unsupported URL scheme'],
       [
-        { url: 'http://user:secret@influx.local:8086', database: 'signalk' },
+        { url: 'http://operator:secret@influx.local:8086', database: 'signalk' },
         'InfluxDB base URL must not include credentials',
       ],
       [

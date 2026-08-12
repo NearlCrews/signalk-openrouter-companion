@@ -1,7 +1,8 @@
 // Builds the Signal K admin UI panel exposed via Module Federation.
 // Output goes to public/, which the SK server mounts at
 // /<package>/ when the package has the `signalk-plugin-configurator` keyword.
-// React 19 is shared as a singleton so we reuse the admin UI's React runtime.
+// React 19 and React DOM are shared as singletons so the panel reuses the
+// runtimes supplied by Signal K Admin.
 const path = require('node:path');
 const { ModuleFederationPlugin } = require('webpack').container;
 const pkg = require('./package.json');
@@ -87,15 +88,19 @@ module.exports = {
       exposes: {
         './PluginConfigurationPanel': './src/configpanel/PluginConfigurationPanel',
       },
-      // Match the minimal share set used by signalk-virtual-weather-sensors:
-      // share only `react` as a singleton. The panel never imports
-      // `react-dom` directly (the host owns the root render), and
-      // `react/jsx-runtime` is small and stateless so a bundled copy is
-      // fine. Sharing more than necessary just bloats the federation
-      // negotiation without payoff.
+      // Signal K Admin owns both stateful React runtimes. The shared UI can use
+      // React DOM for portals, so consuming both host singletons prevents a
+      // second renderer from crossing the host/component boundary.
       shared: {
         react: {
           singleton: true,
+          strictVersion: true,
+          requiredVersion: '>=19.2.0 <20.0.0',
+          import: false,
+        },
+        'react-dom': {
+          singleton: true,
+          strictVersion: true,
           requiredVersion: '>=19.2.0 <20.0.0',
           import: false,
         },

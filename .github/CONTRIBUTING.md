@@ -57,10 +57,11 @@ those before proposing a structural change.
 
 ## Code style
 
-- TypeScript 6, strict mode, ESM. Node 22.18 or newer. The primary CI gate
-  runs on Node 26 with npm 11.18.0, and Signal K plugin CI checks Node 22, 24,
-  and 26. The manifest accepts npm 10.9.3 only for the upstream Node 22
-  bootstrap.
+- TypeScript 6, strict mode, ESM. Use Node 22.22.2+, Node 24.15+, or Node 26
+  when building from source. The published plugin runtime remains compatible
+  with Node 22.18 or newer. The primary CI gate runs on Node 26 with npm
+  11.18.0, and Signal K plugin CI checks Node 22, 24, and 26. The manifest
+  accepts npm 10.9.3 only for the upstream Node 22 bootstrap.
 - Biome handles lint and format, ESLint handles typed and React Hooks rules,
   Markdownlint checks documentation, and cspell checks prose. Use
   `npm run lint`, or `npm run lint:fix` for the safe code fixes.
@@ -77,12 +78,12 @@ those before proposing a structural change.
   external APIs). Skip defensive runtime checks for scenarios that cannot
   happen.
 - Prefer the shared helpers in `src/core/`: `buildTriggers` and
-  `manualPutCtx`, `bankPaths`, `enginePaths`, and
-  `notificationReportPath`, `escapeSqlLiteral` plus `indexColumns`,
-  `publishReport`, `clampPositiveInt`, `fmtNumber`, `fmtPct`, `fmtUnit`,
-  and `fmtRatio`, and `asTreeMap` plus `readBankSnapshot` for Signal K
-  battery trees. Adding a new analyzer should mostly be wiring these
-  together.
+  `manualPutCtx`, `bankPaths`, `enginePaths`, and `notificationReportPath`,
+  `publishReport`, `clampPositiveInt`, `fmtNumber`, `fmtPct`, `fmtUnit`, and
+  `fmtRatio`, and `asTreeMap` plus `readBankSnapshot` for Signal K battery
+  trees. Trend analyzers use the `HistoryProvider` summary operations. Keep
+  `escapeSqlLiteral`, `indexColumns`, and InfluxQL helpers inside their provider
+  implementations. Adding a new analyzer should mostly be wiring these together.
 
 ## Architecture rule
 
@@ -98,8 +99,8 @@ Seven analyzers ship today: `maintenance`, `health`, `alerts`, `aging`,
 - **State** analyzers describe "now" (`maintenance`, `health`,
   `liveness`).
 - **Transition** analyzers describe a threshold crossing (`alerts`).
-- **Trend** analyzers describe gradual change over time (`aging`,
-  `drift`, and `forecast`; `aging` and `drift` read QuestDB history, and
+- **Trend** analyzers describe gradual change over time (`aging`, `drift`, and
+  `forecast`; `aging` and `drift` read the selected history provider, and
   `forecast` uses it as an optional baseline).
 
 ### Adding a new analyzer
@@ -119,8 +120,8 @@ walkthrough. Short version:
    default prompt to `ANALYZER_DEFAULT_SYSTEM_PROMPTS` in the same file,
    and the config section to `src/schema.ts` plus `src/types.ts`.
    `index.ts` instantiates from the registry automatically.
-5. Add tests under `tests/` using `makeAnalyzerDeps` (and
-   `makeQuestDBStub` for trend analyzers) from `tests/_mocks.ts`.
+5. Add tests under `tests/` using `makeAnalyzerDeps` and an injected
+   history-provider stub for trend analyzers from `tests/_mocks.ts`.
 
 ## Commit messages
 
