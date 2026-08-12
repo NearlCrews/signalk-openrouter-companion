@@ -99,7 +99,7 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React and React DOM are supplied by the Signal K admin host. Version 0.7.0
+  React and React DOM are supplied by the Signal K admin host. Version 0.7.1
   starts fresh profiles in Auto, follows an explicit host theme, and otherwise
   stays Light. System follows the operating-system preference, and all explicit
   choices persist under the shared key.

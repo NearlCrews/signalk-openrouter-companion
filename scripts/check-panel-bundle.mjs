@@ -37,12 +37,18 @@ if (federationOptions === undefined) {
 if (federationOptions.shared['signalk-nearlcrews-ui'] !== undefined) {
   throw new Error('signalk-nearlcrews-ui must stay bundled into the configuration panel.');
 }
+const sharedPackages = Object.keys(federationOptions.shared).sort();
+if (sharedPackages.join(',') !== 'react,react-dom') {
+  throw new Error(
+    `The panel must share only host-provided React and React DOM, received: ${sharedPackages.join(', ')}.`,
+  );
+}
 for (const sharedPackage of ['react', 'react-dom']) {
   const share = federationOptions.shared[sharedPackage];
   if (
     share?.singleton !== true ||
     share.strictVersion !== true ||
-    share.requiredVersion !== '>=19.2.0 <20.0.0' ||
+    share.requiredVersion !== '^19.2.0' ||
     share.import !== false
   ) {
     throw new Error(

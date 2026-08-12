@@ -146,8 +146,8 @@ for (const lifecycleScript of ['prepare', 'preinstall', 'install', 'postinstall'
 if (packageJson.gitHead !== undefined && !/^[0-9a-f]{40}$/.test(packageJson.gitHead)) {
   throw new Error('gitHead must be a full lowercase Git commit SHA when it is present.');
 }
-if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.7.0') {
-  throw new Error('The UI package must be pinned to exact version 0.7.0 during its 0.x series.');
+if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.7.1') {
+  throw new Error('The UI package must be pinned to exact version 0.7.1 during its 0.x series.');
 }
 
 console.log(`Packed package passed: ${files.size} files in ${packResult.filename}.`);

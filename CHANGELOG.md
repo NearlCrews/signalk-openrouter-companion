@@ -20,7 +20,8 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ### Changed
 
-- Updated the exact bundled `signalk-nearlcrews-ui` dependency to 0.7.0.
+- Updated the exact bundled `signalk-nearlcrews-ui` dependency to 0.7.1 and
+  narrowed the host React and React DOM singleton ranges to `^19.2.0`.
 - Aging, engine drift, and the optional weather baseline now consume a shared,
   read-only history-provider contract instead of embedding QuestDB queries in
   the analyzers. QuestDB retains its native aggregate queries, while InfluxDB
