@@ -88,7 +88,7 @@ describe('plugin REST API', () => {
   });
 
   describe('routes registered via registerWithRouter', () => {
-    it('registers status, openrouter test, fire, reports, prompt, models, and questdb-test routes', () => {
+    it('registers status, OpenRouter, history, fire, reports, prompt, and models routes', () => {
       const plugin = createPlugin(app as never);
       const { router, routes } = makeRecordingRouter();
       plugin.registerWithRouter(router);
@@ -99,6 +99,7 @@ describe('plugin REST API', () => {
         'GET /api/openrouter/models',
         'GET /api/status',
         'POST /api/analyzers/:id/fire',
+        'POST /api/influxdb/test',
         'POST /api/openrouter/test',
         'POST /api/questdb/test',
       ]);
@@ -175,6 +176,7 @@ describe('plugin REST API', () => {
       expect(r.status).toBe(200);
       const body = r.body as {
         openrouter: { apiKeySet: boolean; model: string; callsToday: number };
+        history: { source: string; reachable: boolean | null };
         questdb: { enabled: boolean; reachable: boolean | null };
         analyzers: Array<{
           id: string;
@@ -185,6 +187,8 @@ describe('plugin REST API', () => {
       };
       expect(body.openrouter.apiKeySet).toBe(true);
       expect(body.openrouter.callsToday).toBe(0);
+      expect(body.history).toEqual({ source: 'questdb', reachable: true });
+      expect(body.questdb).toEqual({ enabled: true, reachable: true });
       // The status payload lists every analyzer with its enabled flag. Assert
       // one enabled analyzer is present plus the total count, rather than the
       // full set, to stay resilient to default flips.
@@ -592,7 +596,9 @@ describe('plugin REST API', () => {
     });
 
     const makeRuntime = (url: string): PluginRuntime =>
-      makePluginRuntime({ cfg: { questdb: { enabled: true, url } } });
+      makePluginRuntime({
+        cfg: { history: { source: 'questdb', questdb: { url } } },
+      });
 
     it('returns 400 when no url and no plugin runtime', async () => {
       const { router, routes } = makeRecordingRouter();
@@ -711,6 +717,160 @@ describe('plugin REST API', () => {
         error: 'QuestDB is unreachable or returned an invalid response',
       });
       expect(JSON.stringify(r.body)).not.toContain('private response');
+    });
+  });
+
+  describe('/api/influxdb/test handler', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    const makeRuntime = (): PluginRuntime =>
+      makePluginRuntime({
+        cfg: {
+          history: {
+            source: 'influxdb',
+            influxdb: {
+              version: '2',
+              url: 'http://saved-influx:8086',
+              database: 'saved-db',
+              username: 'saved-user',
+              password: 'saved-token',
+            },
+          },
+        },
+      });
+
+    it('requires both a URL and database when no saved configuration exists', async () => {
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => null);
+
+      const r = await call(routes, 'post', '/api/influxdb/test', {
+        body: { url: 'http://influx:8086' },
+      });
+
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({
+        ok: false,
+        error: 'an InfluxDB URL and database are required',
+      });
+    });
+
+    it.each([
+      [{ url: 'not a URL', database: 'signalk' }, 'invalid URL'],
+      [{ url: 'ftp://influx.local', database: 'signalk' }, 'unsupported URL scheme'],
+      [
+        { url: 'http://user:secret@influx.local:8086', database: 'signalk' },
+        'InfluxDB base URL must not include credentials',
+      ],
+      [
+        { url: 'http://influx.local:8086?token=secret', database: 'signalk' },
+        'InfluxDB base URL must not include a query string or fragment',
+      ],
+      [
+        { url: 'http://influx.local:8086', database: 'signalk', version: '3' },
+        'unsupported InfluxDB version',
+      ],
+    ])('rejects invalid InfluxDB settings %#', async (body, error) => {
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => null);
+
+      const r = await call(routes, 'post', '/api/influxdb/test', { body });
+
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({ ok: false, error });
+    });
+
+    it('probes saved settings with Basic auth and never returns credentials', async () => {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(JSON.stringify({ results: [{}] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, makeRuntime);
+
+      const r = await call(routes, 'post', '/api/influxdb/test', { body: {} });
+
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({
+        ok: true,
+        url: 'http://saved-influx:8086',
+        database: 'saved-db',
+        version: '2',
+      });
+      expect(JSON.stringify(r.body)).not.toContain('saved-user');
+      expect(JSON.stringify(r.body)).not.toContain('saved-token');
+      const [rawUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+      expect(String(rawUrl)).not.toContain('saved-token');
+      expect(new Headers(requestInit?.headers).get('authorization')).toBe(
+        `Basic ${Buffer.from('saved-user:saved-token').toString('base64')}`,
+      );
+      expect(requestInit?.redirect).toBe('error');
+    });
+
+    it('uses request settings instead of the saved settings', async () => {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(JSON.stringify({ results: [{}] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, makeRuntime);
+
+      const r = await call(routes, 'post', '/api/influxdb/test', {
+        body: {
+          version: '1',
+          url: 'http://override-influx:8086',
+          database: 'override-db',
+          username: '',
+          password: '',
+        },
+      });
+
+      expect(r.body).toEqual({
+        ok: true,
+        url: 'http://override-influx:8086',
+        database: 'override-db',
+        version: '1',
+      });
+      const request = new URL(String(fetchMock.mock.calls[0]?.[0]));
+      expect(request.origin).toBe('http://override-influx:8086');
+      expect(request.searchParams.get('db')).toBe('override-db');
+    });
+
+    it('returns a generic error without response content or credentials', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ results: [{ error: 'private database detail' }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+        ),
+      );
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, makeRuntime);
+
+      const r = await call(routes, 'post', '/api/influxdb/test', { body: {} });
+
+      expect(r.status).toBe(502);
+      expect(r.body).toEqual({
+        ok: false,
+        url: 'http://saved-influx:8086',
+        database: 'saved-db',
+        version: '2',
+        error: 'InfluxDB is unreachable or returned an invalid response',
+      });
+      expect(JSON.stringify(r.body)).not.toContain('private database detail');
+      expect(JSON.stringify(r.body)).not.toContain('saved-token');
     });
   });
 });

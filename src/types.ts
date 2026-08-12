@@ -69,6 +69,22 @@ export interface ProviderRoutingCfg {
   zdr?: boolean;
 }
 
+type HistorySource = 'none' | 'questdb' | 'influxdb';
+
+interface HistoryCfg {
+  source: HistorySource;
+  questdb: {
+    url: string;
+  };
+  influxdb: {
+    version: '1' | '2';
+    url: string;
+    database: string;
+    username: string;
+    password: string;
+  };
+}
+
 export interface PluginOptions {
   openrouter: {
     apiKey: string;
@@ -79,10 +95,7 @@ export interface PluginOptions {
     fallbackModels?: string[];
     provider?: ProviderRoutingCfg;
   };
-  questdb: {
-    enabled: boolean;
-    url: string;
-  };
+  history: HistoryCfg;
   analyzers: {
     maintenance: {
       enabled: boolean;
@@ -154,7 +167,17 @@ export const DEFAULT_OPTIONS: PluginOptions = {
     maxCallsPerDay: 20,
     requestTimeoutMs: 60_000,
   },
-  questdb: { enabled: true, url: 'http://localhost:9000' },
+  history: {
+    source: 'questdb',
+    questdb: { url: 'http://localhost:9000' },
+    influxdb: {
+      version: '1',
+      url: 'http://localhost:8086',
+      database: 'signalk',
+      username: '',
+      password: '',
+    },
+  },
   analyzers: {
     maintenance: {
       enabled: true,
@@ -290,7 +313,17 @@ function mergeAnalyzerCfg<T extends { triggers: AnalyzerTriggerCfg }>(
   };
 }
 
-export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): PluginOptions {
+type PluginOptionsInput = Omit<Partial<PluginOptions>, 'history'> & {
+  history?: Partial<HistoryCfg> & {
+    questdb?: Partial<HistoryCfg['questdb']>;
+    influxdb?: Partial<HistoryCfg['influxdb']>;
+  };
+  // Pre-history-provider releases stored this top-level block. Keep reading it
+  // so existing installations migrate without re-entering their QuestDB URL.
+  questdb?: { enabled?: boolean; url?: string };
+};
+
+export function mergeWithDefaults(input: PluginOptionsInput | undefined): PluginOptions {
   // Run validateOptions on every return path, including the no-input
   // bootstrap. DEFAULT_OPTIONS values are valid today, so this is a no-op
   // now; the uniform contract ('all returned cfgs are validated') protects
@@ -298,6 +331,15 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
   // otherwise bypass the clamp.
   if (!input) return validateOptions(clone(DEFAULT_OPTIONS));
   const inputAnalyzers = input.analyzers as AnalyzerInputOverlay | undefined;
+  const legacyQuestDB = input.questdb;
+  const historyInput = input.history;
+  const historySource =
+    historyInput?.source ??
+    (legacyQuestDB
+      ? legacyQuestDB.enabled === false
+        ? 'none'
+        : 'questdb'
+      : DEFAULT_OPTIONS.history.source);
   // Merge every analyzer section by iterating ANALYZER_IDS, the single source
   // of truth. A new analyzer added to ids.ts and registry.ts is then merged
   // from saved config automatically, rather than being silently dropped by a
@@ -317,7 +359,18 @@ export function mergeWithDefaults(input: Partial<PluginOptions> | undefined): Pl
   }
   const merged: PluginOptions = {
     openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(input.openrouter ?? {}) },
-    questdb: { ...DEFAULT_OPTIONS.questdb, ...(input.questdb ?? {}) },
+    history: {
+      source: historySource,
+      questdb: {
+        ...DEFAULT_OPTIONS.history.questdb,
+        ...(legacyQuestDB?.url ? { url: legacyQuestDB.url } : {}),
+        ...(historyInput?.questdb ?? {}),
+      },
+      influxdb: {
+        ...DEFAULT_OPTIONS.history.influxdb,
+        ...(historyInput?.influxdb ?? {}),
+      },
+    },
     analyzers: analyzers as PluginOptions['analyzers'],
     output: { ...DEFAULT_OPTIONS.output, ...(input.output ?? {}) },
   };
@@ -333,11 +386,32 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
   const or = cfg.openrouter;
   const m = cfg.analyzers.maintenance;
   const a = cfg.analyzers.alerts;
+  const history = cfg.history;
+  const influxdb = history.influxdb;
   cfg.openrouter = {
     ...or,
     baseUrl: normalizeOpenRouterBaseUrl(or.baseUrl, d.openrouter.baseUrl),
     maxCallsPerDay: clampMin(or.maxCallsPerDay, 1, d.openrouter.maxCallsPerDay),
     requestTimeoutMs: clampMin(or.requestTimeoutMs, 1000, d.openrouter.requestTimeoutMs),
+  };
+  cfg.history = {
+    source:
+      history.source === 'none' || history.source === 'questdb' || history.source === 'influxdb'
+        ? history.source
+        : d.history.source,
+    questdb: {
+      url: typeof history.questdb.url === 'string' ? history.questdb.url : d.history.questdb.url,
+    },
+    influxdb: {
+      version: influxdb.version === '1' || influxdb.version === '2' ? influxdb.version : '1',
+      url: typeof influxdb.url === 'string' ? influxdb.url : d.history.influxdb.url,
+      database:
+        typeof influxdb.database === 'string' ? influxdb.database : d.history.influxdb.database,
+      username:
+        typeof influxdb.username === 'string' ? influxdb.username : d.history.influxdb.username,
+      password:
+        typeof influxdb.password === 'string' ? influxdb.password : d.history.influxdb.password,
+    },
   };
   cfg.analyzers.maintenance = {
     ...m,

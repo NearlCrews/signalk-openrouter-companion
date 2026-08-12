@@ -103,11 +103,38 @@ describe('schema', () => {
     expect(alertsOn.properties.cellImbalanceV).toBeDefined();
   });
 
-  it('hides questdb.url behind a dependencies.enabled gate', () => {
+  it('reveals only the selected history provider settings', () => {
     const s = buildSchema();
-    const questdb = s.properties.questdb as unknown as EnabledGatedNode;
-    const onBranch = enabledTrueBranch(questdb);
-    expect(onBranch.properties.url).toBeDefined();
+    const history = s.properties.history as {
+      properties: { source: { enum: string[] } };
+      dependencies: {
+        source: {
+          oneOf: Array<{ properties: Record<string, Record<string, unknown>> }>;
+        };
+      };
+    };
+    expect(history.properties.source.enum).toEqual(['none', 'questdb', 'influxdb']);
+    const branchFor = (source: string) => {
+      const branch = history.dependencies.source.oneOf.find(
+        (candidate) => (candidate.properties.source as { const?: string }).const === source,
+      );
+      if (!branch) throw new Error(`history branch not found: ${source}`);
+      return branch.properties;
+    };
+    expect(branchFor('none').questdb).toBeUndefined();
+    expect(branchFor('none').influxdb).toBeUndefined();
+    const questdb = branchFor('questdb').questdb as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(questdb.required).toEqual(['url']);
+    expect(questdb.properties.url).toBeDefined();
+    const influxdb = branchFor('influxdb').influxdb as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(influxdb.required).toEqual(['version', 'url', 'database']);
+    expect(influxdb.properties.password).toBeDefined();
   });
 
   it('exposes a triggers block on the maintenance analyzer (enabled-true branch)', () => {
@@ -273,6 +300,8 @@ describe('schema', () => {
     expect(openrouter.requestTimeoutMs).toBeUndefined();
     // The output/* uiSchema block is gone alongside its schema counterpart.
     expect(u.output).toBeUndefined();
+    const history = at(u, 'history') as Record<string, Record<string, Record<string, unknown>>>;
+    expect(at(at(history, 'influxdb'), 'password')['ui:widget']).toBe('password');
   });
 
   it('uiSchema renders events as checkboxes with humanized labels, omitting events for analyzers without any', () => {
@@ -330,12 +359,60 @@ describe('mergeWithDefaults', () => {
     expect(r.analyzers.maintenance.triggers.cron.enabled).toBe(false);
     expect(r.analyzers.maintenance.triggers.put.enabled).toBe(true);
     expect(r.analyzers.maintenance.triggers.events).toEqual(['engine-stop']);
+    expect(r.history).toEqual(DEFAULT_OPTIONS.history);
   });
 
   it('overrides only provided values', () => {
     const r = mergeWithDefaults({ openrouter: { apiKey: 'sk-x' } as never });
     expect(r.openrouter.apiKey).toBe('sk-x');
     expect(r.openrouter.model).toBe('anthropic/claude-haiku-4.5');
+  });
+
+  it('deep-merges history settings and migrates the legacy QuestDB block', () => {
+    const influx = mergeWithDefaults({
+      history: {
+        source: 'influxdb',
+        influxdb: { version: '2', database: 'boat', password: 'token' },
+      },
+    } as never);
+    expect(influx.history.source).toBe('influxdb');
+    expect(influx.history.influxdb).toEqual({
+      ...DEFAULT_OPTIONS.history.influxdb,
+      version: '2',
+      database: 'boat',
+      password: 'token',
+    });
+    expect(influx.history.questdb).toEqual(DEFAULT_OPTIONS.history.questdb);
+
+    const disabledLegacy = mergeWithDefaults({
+      questdb: { enabled: false, url: 'http://legacy:9000' },
+    } as never);
+    expect(disabledLegacy.history.source).toBe('none');
+    expect(disabledLegacy.history.questdb.url).toBe('http://legacy:9000');
+
+    const enabledLegacy = mergeWithDefaults({
+      questdb: { enabled: true, url: 'http://legacy:9000' },
+    } as never);
+    expect(enabledLegacy.history.source).toBe('questdb');
+    expect(enabledLegacy.history.questdb.url).toBe('http://legacy:9000');
+  });
+
+  it('normalizes malformed history settings from hand-edited JSON', () => {
+    const result = mergeWithDefaults({
+      history: {
+        source: 'unknown',
+        questdb: { url: 9000 },
+        influxdb: {
+          version: '3',
+          url: null,
+          database: 42,
+          username: false,
+          password: { token: 'not-a-string' },
+        },
+      },
+    } as never);
+
+    expect(result.history).toEqual(DEFAULT_OPTIONS.history);
   });
 
   it('deep-merges the triggers block', () => {

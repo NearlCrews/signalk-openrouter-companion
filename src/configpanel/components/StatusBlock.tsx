@@ -23,10 +23,10 @@ interface Props {
   staleAgeMs: number | undefined;
 }
 
-function questdbLabel(qdb: PanelStatus['questdb']): { text: string; tone: StatusTone } {
-  if (!qdb.enabled) return { text: 'Disabled', tone: 'neutral' };
-  if (qdb.reachable === null) return { text: 'Probing...', tone: 'warning' };
-  if (qdb.reachable) return { text: 'Reachable', tone: 'success' };
+function historyLabel(history: PanelStatus['history']): { text: string; tone: StatusTone } {
+  if (history.source === 'none') return { text: 'Disabled', tone: 'neutral' };
+  if (history.reachable === null) return { text: 'Probing...', tone: 'warning' };
+  if (history.reachable) return { text: 'Reachable', tone: 'success' };
   return { text: 'Unreachable', tone: 'danger' };
 }
 
@@ -55,11 +55,14 @@ export const StatusBlock = memo(function StatusBlock({
   }
 
   const openrouter: Partial<PanelStatus['openrouter']> = status.openrouter ?? {};
-  const questdb: PanelStatus['questdb'] = status.questdb ?? {
-    enabled: false,
-    reachable: null,
-  };
-  const questdbState = questdbLabel(questdb);
+  const history = status.history;
+  const historyState = historyLabel(history);
+  const historyName =
+    history.source === 'questdb'
+      ? 'QuestDB'
+      : history.source === 'influxdb'
+        ? 'InfluxDB'
+        : 'History';
   const analyzers = status.analyzers ?? [];
   const enabledCount = analyzers.filter((analyzer) => analyzer.enabled).length;
 
@@ -88,10 +91,10 @@ export const StatusBlock = memo(function StatusBlock({
           detail="OpenRouter usage cost"
         />
         <Metric
-          label="QuestDB"
-          value={questdbState.text}
-          detail={questdb.enabled ? 'Trend analyzers depend on this' : 'Trend analyzers will skip'}
-          tone={questdbState.tone}
+          label={historyName}
+          value={historyState.text}
+          detail="Trend history source"
+          tone={historyState.tone}
         />
         <Metric
           label="Analyzers"

@@ -6,15 +6,9 @@ import {
   sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverBankIds } from '../core/discovery.js';
-import { asFiniteNumber, DAY_MS, fmtNumber } from '../core/format.js';
+import { DAY_MS, fmtNumber } from '../core/format.js';
+import type { PathWindowSummary } from '../core/history.js';
 import { bankPaths } from '../core/paths.js';
-import {
-  decodePathKeyed,
-  flattenSql,
-  isoRange,
-  QUESTDB_SELF_CONTEXT_SQL,
-  quotedPathList,
-} from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import {
   AGING_DEFAULT_LONG_DAYS,
@@ -46,12 +40,6 @@ export const AGING_DEFAULT_SYSTEM_PROMPT = [
   REPORT_BODY_INSTRUCTION,
   'Mention each bank by name in one tight clause covering its loss-per-100-cycles and any projected months-to-replace.',
 ].join(' ');
-
-interface PathSummary {
-  first: number | null;
-  last: number | null;
-  n: number;
-}
 
 interface WindowStats {
   capacitySamples: number;
@@ -109,11 +97,11 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AgingInput | null> {
-    if (!deps.questdb) return null;
+    if (!deps.history) return null;
     const bankIds = discoverBankIds(deps.buffer.pathKeys());
     if (bankIds.length === 0) return null;
 
-    const questdb = deps.questdb;
+    const history = deps.history;
 
     const allPaths: string[] = [];
     for (const id of bankIds) {
@@ -125,7 +113,12 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     const summariesByWindow = await Promise.all(
       this.windowDays.map(async (days) => ({
         days,
-        summaries: await queryWindow(questdb, allPaths, days, firedMs),
+        summaries: await history.summarizePaths(
+          allPaths,
+          firedMs - days * DAY_MS,
+          firedMs,
+          deps.signal,
+        ),
       })),
     );
 
@@ -178,15 +171,15 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
 }
 
 function computeWindowStats(
-  cap: PathSummary | undefined,
-  cyc: PathSummary | undefined,
+  cap: PathWindowSummary | undefined,
+  cyc: PathWindowSummary | undefined,
 ): WindowStats {
   const capStart = cap?.first ?? null;
   const capEnd = cap?.last ?? null;
-  const capN = cap?.n ?? 0;
+  const capN = cap?.count ?? 0;
   const cycStart = cyc?.first ?? null;
   const cycEnd = cyc?.last ?? null;
-  const cycN = cyc?.n ?? 0;
+  const cycN = cyc?.count ?? 0;
 
   let capacityDeltaPct: number | null = null;
   if (capN >= 2 && capStart != null && capEnd != null && capStart > 0) {
@@ -214,40 +207,4 @@ function computeWindowStats(
     cyclesDelta,
     lossPer100Cycles,
   };
-}
-
-async function queryWindow(
-  client: NonNullable<AnalyzerDeps['questdb']>,
-  paths: string[],
-  days: number,
-  firedMs: number,
-): Promise<Map<string, PathSummary>> {
-  const escapedPaths = quotedPathList(paths);
-  // Explicit ISO bounds anchored to the trigger time. A server-side now()
-  // upper bound would let BMS samples that arrive between the trigger and the
-  // query execution leak into last(value); pinning ts <= firedAt prevents it.
-  const [fromIso, toIso] = isoRange(firedMs - days * DAY_MS, firedMs);
-  const sql = flattenSql(`
-    SELECT path, first(value) AS first_val, last(value) AS last_val, count() AS n
-    FROM signalk
-    WHERE context = '${QUESTDB_SELF_CONTEXT_SQL}'
-      AND path IN (${escapedPaths})
-      AND ts > '${fromIso}'
-      AND ts <= '${toIso}'
-    GROUP BY path
-  `);
-
-  // A query fault propagates: aging requires QuestDB, so a fault is a real
-  // analyzer failure and must surface as a failure report, not a silent skip.
-  const r = await client.query(sql);
-  return decodePathKeyed(r, (cols) => {
-    const fIdx = cols.get('first_val') ?? -1;
-    const lIdx = cols.get('last_val') ?? -1;
-    const nIdx = cols.get('n') ?? -1;
-    return (row) => ({
-      first: asFiniteNumber(fIdx >= 0 ? row[fIdx] : null),
-      last: asFiniteNumber(lIdx >= 0 ? row[lIdx] : null),
-      n: asFiniteNumber(nIdx >= 0 ? row[nIdx] : null) ?? 0,
-    });
-  });
 }

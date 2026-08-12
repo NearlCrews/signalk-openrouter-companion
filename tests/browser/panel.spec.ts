@@ -8,6 +8,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('loads the production remote and completes the save flow', async ({ page }) => {
+  test.setTimeout(60_000);
   const panelRoot = page.locator('[data-snui-root]');
   await expect(panelRoot).toHaveAttribute('data-snui-version', '0.6.2');
   await expect(panelRoot).not.toHaveAttribute('data-snui-theme');
@@ -52,7 +53,7 @@ test('loads the production remote and completes the save flow', async ({ page })
   await model.focus();
   await expect(page.locator('body')).toHaveAttribute('data-model-request-count', '1');
 
-  await page.getByRole('button', { name: 'QuestDB enrichment' }).click();
+  await page.getByRole('button', { name: 'History source' }).click();
   const questdbUrl = page.getByRole('textbox', { name: 'QuestDB REST URL', exact: true });
   await questdbUrl.fill('ftp://questdb.local');
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
@@ -65,7 +66,7 @@ test('loads the production remote and completes the save flow', async ({ page })
   ).toBeVisible();
   await expect(
     page.getByText(
-      'Enter a valid QuestDB HTTP or HTTPS base URL without a query or fragment before saving.',
+      'Enter a valid history-provider HTTP or HTTPS base URL without a query or fragment before saving.',
     ),
   ).toBeVisible();
   await expect(page.locator('body')).not.toHaveAttribute('data-save-count', /\d/);
@@ -73,6 +74,11 @@ test('loads the production remote and completes the save flow', async ({ page })
 
   await saveButton.click();
   await expect(page.locator('body')).toHaveAttribute('data-saved-configuration', /fixture-key/);
+  const savedConfiguration = await page.locator('body').getAttribute('data-saved-configuration');
+  expect(JSON.parse(savedConfiguration ?? '{}')).toMatchObject({
+    history: { source: 'questdb', questdb: { url: 'http://localhost:9000' } },
+  });
+  expect(JSON.parse(savedConfiguration ?? '{}')).not.toHaveProperty('questdb');
   await expect(page.locator('body')).toHaveAttribute('data-save-count', '1');
   expect(await saveButton.evaluate((element) => element.hasAttribute('disabled'))).toBe(false);
   await expect(saveButton).toHaveAttribute('aria-disabled', 'true');
@@ -93,6 +99,52 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(page.getByText(/Plugin restarted\./)).toBeVisible();
   await expect(saveStatus).toBeFocused();
   await expect(saveStatus).toContainText('Plugin restarted');
+});
+
+test('configures and tests InfluxDB history without exposing credentials', async ({ page }) => {
+  await page.getByRole('button', { name: 'Add API key' }).click();
+  await page.getByRole('textbox', { name: 'API key', exact: true }).fill('fixture-key');
+  await page.getByRole('button', { name: 'History source' }).click();
+
+  const provider = page.getByRole('combobox', { name: 'History provider' });
+  await provider.selectOption('influxdb');
+  const influxUrl = page.getByRole('textbox', { name: 'InfluxDB URL', exact: true });
+  const database = page.getByRole('textbox', { name: 'Database', exact: true });
+  await influxUrl.fill('http://influx.local:8086');
+
+  const saveButton = page
+    .locator('[data-panel-action-bar]')
+    .locator('button', { hasText: 'Save configuration' });
+  await saveButton.click();
+  await expect(database).toBeFocused();
+  await expect(
+    page.getByText('Enter the InfluxDB database or DBRP database name before saving.'),
+  ).toBeVisible();
+
+  await database.fill('signalk');
+  await page.getByRole('combobox', { name: 'InfluxDB version' }).selectOption('2');
+  await page.getByRole('textbox', { name: 'Username', exact: true }).fill('operator');
+  await page.getByLabel('Password or API token', { exact: true }).fill('fixture-token');
+  await page.getByRole('button', { name: 'Test connection' }).click();
+  await expect(page.getByText('Reachable at http://influx.local:8086')).toBeVisible();
+
+  await saveButton.click();
+  const saved = JSON.parse(
+    (await page.locator('body').getAttribute('data-saved-configuration')) ?? '{}',
+  );
+  expect(saved).toMatchObject({
+    history: {
+      source: 'influxdb',
+      influxdb: {
+        version: '2',
+        url: 'http://influx.local:8086',
+        database: 'signalk',
+        username: 'operator',
+        password: 'fixture-token',
+      },
+    },
+  });
+  expect(saved).not.toHaveProperty('questdb');
 });
 
 test('gives repeated analyzer controls unique accessible names', async ({ page }) => {

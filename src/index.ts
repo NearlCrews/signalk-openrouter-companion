@@ -19,6 +19,8 @@ import {
 } from './core/discovery.js';
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
 import { HOUR_MS } from './core/format.js';
+import type { HistoryProvider } from './core/history.js';
+import { InfluxDBClient } from './core/influxdb.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
 import { enginePaths, pluginPutPath } from './core/paths.js';
@@ -241,19 +243,29 @@ export default function createPlugin(app: ServerApiLike): {
           fallbackModels: cfg.openrouter.fallbackModels,
           provider: cfg.openrouter.provider,
         });
-        const questdbCandidate = cfg.questdb.enabled
-          ? new QuestDBClient({ url: cfg.questdb.url })
-          : null;
-        const probePromise: Promise<QuestDBClient | null> = questdbCandidate
-          ? questdbCandidate
+        const historyCandidate: HistoryProvider | null =
+          cfg.history.source === 'questdb'
+            ? new QuestDBClient({ url: cfg.history.questdb.url })
+            : cfg.history.source === 'influxdb'
+              ? new InfluxDBClient({
+                  ...cfg.history.influxdb,
+                  selfContext: app.selfContext,
+                })
+              : null;
+        const probePromise: Promise<HistoryProvider | null> = historyCandidate
+          ? historyCandidate
               .probe(lifecycle.signal)
               .then((ok) => {
                 if (!ok)
-                  logger.debug('QuestDB unreachable; trend analyzers will skip until it recovers');
-                return ok ? questdbCandidate : null;
+                  logger.debug(
+                    'History source unreachable; trend analyzers will skip until it recovers',
+                  );
+                return ok ? historyCandidate : null;
               })
               .catch(() => {
-                logger.debug('QuestDB unreachable; trend analyzers will skip until it recovers');
+                logger.debug(
+                  'History source unreachable; trend analyzers will skip until it recovers',
+                );
                 return null;
               })
           : Promise.resolve(null);
@@ -279,7 +291,7 @@ export default function createPlugin(app: ServerApiLike): {
 
         let router: TriggerRouter | null = null;
         void Promise.all([probePromise, budgetPromise])
-          .then(([questdbLive, budget]) => {
+          .then(([historyLive, budget]) => {
             // stop() may have run while probe/budget were still in flight (a
             // disable, or a restart). The abort signal is the lifecycle
             // marker: if it fired, this start() is dead. Bail before writing
@@ -292,7 +304,7 @@ export default function createPlugin(app: ServerApiLike): {
             }
             router = new TriggerRouter(analyzers, {
               buffer,
-              questdb: questdbLive,
+              history: historyLive,
               publisher,
               budget,
               llm,
@@ -305,13 +317,13 @@ export default function createPlugin(app: ServerApiLike): {
             runtime = {
               cfg: {
                 openrouter: cfg.openrouter,
-                questdb: cfg.questdb,
+                history: cfg.history,
                 analyzers: cfg.analyzers,
               },
               llm,
               budget,
-              questdbLive,
-              questdbProbed: true,
+              historyLive,
+              historyProbed: true,
               analyzers,
               apiKeySet: true,
               router,
@@ -571,20 +583,18 @@ export default function createPlugin(app: ServerApiLike): {
             if (changed) {
               app.setPluginStatus(runningStatus(analyzers.length));
             }
-            // QuestDB recovery: it is probed once at start(), so a QuestDB that
-            // is down then (or starts after this plugin) would otherwise leave
-            // the trend analyzers disabled for the whole plugin lifetime. When
-            // it is enabled but not currently live, re-probe and wire it in.
-            if (questdbCandidate && router && runtime && !runtime.questdbLive) {
+            // History recovery: a source that is down at start (or starts after
+            // this plugin) must not leave trend analyzers disabled forever.
+            if (historyCandidate && router && runtime && !runtime.historyLive) {
               const live = runtime;
               const routerForRecovery = router;
-              void questdbCandidate
+              void historyCandidate
                 .probe(lifecycle.signal)
                 .then((ok) => {
                   if (ok) {
-                    routerForRecovery.setQuestdb(questdbCandidate);
-                    live.questdbLive = questdbCandidate;
-                    logger.debug('QuestDB recovered; trend analyzers re-enabled');
+                    routerForRecovery.setHistory(historyCandidate);
+                    live.historyLive = historyCandidate;
+                    logger.debug('History source recovered; trend analyzers re-enabled');
                   }
                 })
                 .catch(() => {});

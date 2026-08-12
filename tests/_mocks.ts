@@ -8,7 +8,7 @@ import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
 import type { CompleteResult } from '../src/core/openrouter.js';
 import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
-import type { QueryResult } from '../src/core/questdb.js';
+import { type QueryResult, QuestDBClient } from '../src/core/questdb.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
 import { DEFAULT_OPTIONS } from '../src/types.js';
 
@@ -163,8 +163,7 @@ export function makeBuffer(): RollingBuffer {
   return new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
 }
 
-export interface MockQuestDB {
-  query: (sql: string) => Promise<QueryResult>;
+export interface MockQuestDB extends QuestDBClient {
   calls: string[];
 }
 
@@ -172,14 +171,13 @@ export interface MockQuestDB {
 // maps a SQL string to a QueryResult (throw to simulate a failed query).
 // Replaces the per-file stubQuestDB factories in aging.test.ts and drift.test.ts.
 export function makeQuestDBStub(dispatch: (sql: string) => QueryResult): MockQuestDB {
-  const stub: MockQuestDB = {
-    calls: [],
-    query: async (sql: string) => {
-      stub.calls.push(sql);
-      return dispatch(sql);
-    },
+  const client = new QuestDBClient({ url: 'http://unused.invalid' }) as MockQuestDB;
+  client.calls = [];
+  client.query = async (sql: string): Promise<QueryResult> => {
+    client.calls.push(sql);
+    return dispatch(sql);
   };
-  return stub;
+  return client;
 }
 
 // Canonical AnalyzerDeps factory used by every analyzer test. Pass only what
@@ -193,7 +191,7 @@ export function makeAnalyzerDeps(
   return {
     app: { getSelfPath: (p) => app.getSelfPath(p), selfContext: app.selfContext },
     buffer,
-    questdb: (opts.questdb ?? null) as unknown as AnalyzerDeps['questdb'],
+    history: opts.questdb ?? null,
     publisher: (opts.publisher ?? ({} as never)) as never,
     budget: {} as never,
     llm: {} as never,
@@ -208,8 +206,8 @@ export function makeAnalyzerDeps(
 export interface MakePluginRuntimeOpts {
   apiKeySet?: boolean;
   analyzers?: Analyzer[];
-  questdbLive?: PluginRuntime['questdbLive'];
-  questdbProbed?: boolean;
+  historyLive?: PluginRuntime['historyLive'];
+  historyProbed?: boolean;
   router?: PluginRuntime['router'];
   startedAt?: number;
   llm?: PluginRuntime['llm'];
@@ -218,7 +216,11 @@ export interface MakePluginRuntimeOpts {
   logPath?: string;
   cfg?: {
     openrouter?: Partial<PluginRuntime['cfg']['openrouter']>;
-    questdb?: Partial<PluginRuntime['cfg']['questdb']>;
+    history?: {
+      source?: PluginRuntime['cfg']['history']['source'];
+      questdb?: Partial<PluginRuntime['cfg']['history']['questdb']>;
+      influxdb?: Partial<PluginRuntime['cfg']['history']['influxdb']>;
+    };
     analyzers?: Partial<PluginRuntime['cfg']['analyzers']>;
   };
 }
@@ -227,7 +229,17 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
   return {
     cfg: {
       openrouter: { ...DEFAULT_OPTIONS.openrouter, ...(opts.cfg?.openrouter ?? {}) },
-      questdb: { ...DEFAULT_OPTIONS.questdb, ...(opts.cfg?.questdb ?? {}) },
+      history: {
+        source: opts.cfg?.history?.source ?? DEFAULT_OPTIONS.history.source,
+        questdb: {
+          ...DEFAULT_OPTIONS.history.questdb,
+          ...(opts.cfg?.history?.questdb ?? {}),
+        },
+        influxdb: {
+          ...DEFAULT_OPTIONS.history.influxdb,
+          ...(opts.cfg?.history?.influxdb ?? {}),
+        },
+      },
       analyzers: { ...DEFAULT_OPTIONS.analyzers, ...(opts.cfg?.analyzers ?? {}) },
     },
     llm: (opts.llm ?? ({} as never)) as PluginRuntime['llm'],
@@ -237,8 +249,8 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
         tokensToday: () => 0,
         costToday: () => 0,
       } as never)) as PluginRuntime['budget'],
-    questdbLive: opts.questdbLive ?? null,
-    questdbProbed: opts.questdbProbed ?? false,
+    historyLive: opts.historyLive ?? null,
+    historyProbed: opts.historyProbed ?? false,
     analyzers: opts.analyzers ?? [],
     apiKeySet: opts.apiKeySet ?? true,
     router: opts.router ?? null,
@@ -297,7 +309,7 @@ export function makeRouterDeps(
   const deps: AnalyzerDeps = {
     app: { getSelfPath: mocks.getSelfPath as never, selfContext: MOCK_SELF_CONTEXT },
     buffer: new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 }),
-    questdb: null as unknown as AnalyzerDeps['questdb'],
+    history: null,
     publisher: {
       publishReport: mocks.publishReport,
       publishFailure: mocks.publishFailure,

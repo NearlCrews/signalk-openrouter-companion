@@ -70,8 +70,8 @@ in the Signal K admin UI.
   [`signalk-nearlcrews-ui`](https://github.com/NearlCrews/signalk-nearlcrews-ui)
   primitives. Signal K Admin reports the panel as unavailable if its remote
   cannot load; it does not fall back to the JSON Schema form.
-- **Optional QuestDB history** for the trend analyzers, via a co-installed
-  [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb).
+- **Selectable history source** for the trend analyzers: QuestDB, InfluxDB
+  1.x, or InfluxDB 2.x through its InfluxQL compatibility API.
 - **NMEA 2000 bridging**: battery alerts carry stable alert ids that a
   co-installed
   [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon)
@@ -92,8 +92,8 @@ OpenRouter Companion is one plugin built from focused modules:
 
 - **One npm package.** Each monitoring domain is an `Analyzer` module
   under `src/analyzers/`, wired through a shared registry; the trigger
-  router, rolling buffer, budget tracker, OpenRouter client, and QuestDB
-  client live in `src/core/`.
+  router, rolling buffer, budget tracker, OpenRouter client, and history
+  providers live in `src/core/`.
 - **TypeScript 6, ESM.** esbuild bundles the backend to `dist/index.js`;
   webpack with esbuild-loader bundles the React panel to
   `public/remoteEntry.js` as a Module Federation remote the Signal K
@@ -122,10 +122,13 @@ and the analyzer extension point.
   Safari 17.4+.
 - An [OpenRouter](https://openrouter.ai) API key, set in the plugin's
   admin panel. Calls are billed per token.
-- Optional: a co-installed
-  [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb). The
-  `aging` and `drift` analyzers read history from it, the `forecast`
-  analyzer uses it as an optional baseline, and the other four work
+- Optional: one supported history writer and database:
+  [`signalk-questdb`](https://www.npmjs.com/package/signalk-questdb),
+  [`signalk-to-influxdb`](https://www.npmjs.com/package/signalk-to-influxdb)
+  for InfluxDB 1.x, or
+  [`signalk-to-influxdb2`](https://www.npmjs.com/package/signalk-to-influxdb2)
+  for InfluxDB 2.x. The `aging` and `drift` analyzers require history, the
+  `forecast` analyzer uses it as an optional baseline, and the other four work
   without it.
 
 ## Installation
@@ -161,8 +164,21 @@ plugin form. The main settings:
 | OpenRouter API key | Required. Key from openrouter.ai. | n/a |
 | Model | OpenRouter model slug. | anthropic/claude-haiku-4.5 |
 | Max calls per day | Hard cap on OpenRouter calls per UTC day, to bound spend. | 20 |
-| QuestDB | Optional history source for the trend analyzers. | enabled; `http://localhost:9000` |
+| History source | Disabled, QuestDB, or InfluxDB for the trend analyzers. | QuestDB; `http://localhost:9000` |
 | Analyzers | Each of the seven can be enabled or disabled independently. | six on by default; the weather outlook is opt-in |
+
+For InfluxDB 1.x, select InfluxDB and enter the server URL, database, and any
+username and password used by `signalk-to-influxdb`. The provider reads the
+writer's measurement-per-Signal-K-path layout, numeric `value` field, and
+`context` tag for this vessel.
+
+For InfluxDB 2.x, configure `signalk-to-influxdb2` first so its DBRP mapping is
+available, then select version 2 in this panel. Enter the DBRP database name,
+and enter an InfluxDB API token in the password field. Leave the username blank
+to use token authentication, or enter a v1-compatible username to use Basic
+authentication with the token as its password. This provider reads the
+writer's numeric `value` field and `self=true` tag. It does not require Flux
+access or a second time-series database.
 
 Advanced settings (engine RPM thresholds, cell-imbalance settle times,
 trend window lengths, custom cron patterns) are not in the panel; they
@@ -195,7 +211,7 @@ run then fails fast with OpenRouter's routing message rather than retrying.
 
 Seven analyzers ship; six are enabled by default. The weather outlook is
 opt-in because it benefits from a barometer or anemometer on the vessel
-and is more chatty than the per-event analyzers. The two QuestDB-backed
+and is more chatty than the per-event analyzers. The two history-backed
 trend analyzers need a few weeks of history before their reports are
 meaningful.
 
@@ -205,10 +221,11 @@ meaningful.
 - **alerts**: real-time battery threshold crossings (low state of charge,
   cell imbalance), as alarm-grade notifications.
 - **aging**: a monthly look at battery capacity loss per bank over two
-  configurable windows (default 30 and 90 days). Reads QuestDB history.
+  configurable windows (default 30 and 90 days). Reads the selected history
+  source.
 - **drift**: a weekly look at engine fuel economy and per-RPM drift
   against a configurable trailing baseline (default 30 days). Reads
-  QuestDB history.
+  the selected history source.
 - **liveness**: a daily check that the data the other analyzers depend on
   is still flowing, flagging stale and multi-source paths.
 - **forecast**: a short-term weather outlook. Reads how barometric
@@ -291,6 +308,7 @@ Written and maintained by [Nearl Crews](https://github.com/NearlCrews).
 - [OpenRouter](https://openrouter.ai) for the unified LLM API
 - [QuestDB](https://questdb.io) for the time-series database the trend
   analyzers read
+- [InfluxData](https://www.influxdata.com) for the InfluxDB history source
 
 OpenRouter Companion pairs well with sibling plugins such as
 [`signalk-virtual-weather-sensors`](https://www.npmjs.com/package/signalk-virtual-weather-sensors)

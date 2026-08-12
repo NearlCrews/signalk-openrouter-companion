@@ -1,6 +1,7 @@
 import type { BufferEntry } from '../core/buffer.js';
 import { resolveSystemPrompt, sanitizeProducerString } from '../core/cfg.js';
 import { asFiniteNumber, fmtNumber, fmtSigned, HOUR_MS } from '../core/format.js';
+import type { HistoryProvider } from '../core/history.js';
 import {
   notificationReportPath,
   WEATHER_CANONICAL_PATHS,
@@ -8,14 +9,6 @@ import {
   WEATHER_PRESSURE_PATH,
   WIND_DIRECTION_PATH,
 } from '../core/paths.js';
-import {
-  decodePathKeyed,
-  flattenSql,
-  isoRange,
-  QUESTDB_SELF_CONTEXT_SQL,
-  type QuestDBClient,
-  quotedPathList,
-} from '../core/questdb.js';
 import { buildTriggers } from '../core/triggers.js';
 import { isSeverityFloor, SEVERITY_GRADES, type SeverityGrade } from '../severityFloors.js';
 import {
@@ -36,12 +29,12 @@ import { ANALYZER_TITLES } from './ids.js';
 
 // Hourly-mean trend buckets span the last 12h of the rolling buffer.
 const TREND_WINDOW_HOURS = 12;
-// Cold-start floor: with less buffered history than this and no QuestDB
+// Cold-start floor: with less buffered history than this and no provider
 // baseline, collectContext returns null rather than asking the LLM to guess
 // from a near-empty table. Mirrors how the drift analyzer returns null with
 // no data.
 const COLD_START_MIN_HISTORY_MS = HOUR_MS;
-// QuestDB baseline window: 24h to 72h before the trigger, so the LLM can tell
+// History baseline window: 24h to 72h before the trigger, so the LLM can tell
 // a passing squall from a settling multi-day pattern. A strict enhancement,
 // never required.
 const BASELINE_FROM_HOURS = 72;
@@ -140,7 +133,7 @@ interface PathTrend {
   // Hourly means over the trend window, oldest bucket first. null where a
   // bucket holds no numeric sample.
   buckets: Array<number | null>;
-  // 24-72h QuestDB mean, or null when QuestDB is absent or has no rows.
+  // 24-72h provider mean, or null when history is absent or has no rows.
   baselineMean: number | null;
 }
 
@@ -150,7 +143,7 @@ export interface ForecastInput extends AnalysisInput {
   tendencyHours: number;
   // Pre-computed 3h pressure change in hPa, so the LLM does not derive it.
   pressureTendencyHpa: number | null;
-  hasQuestdbBaseline: boolean;
+  hasHistoryBaseline: boolean;
   trends: PathTrend[];
 }
 
@@ -174,25 +167,25 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<ForecastInput | null> {
-    const { buffer, questdb } = deps;
+    const { buffer, history } = deps;
     const firedMs = ctx.firedAt.getTime();
     const windowStart = firedMs - TREND_WINDOW_HOURS * HOUR_MS;
 
     const bufferPaths = new Set(buffer.pathKeys());
 
-    // QuestDB baseline is a strict enhancement: query it first so the cold-
+    // The history baseline is a strict enhancement: query it first so the cold-
     // start guard can let a thin buffer through when a baseline is available.
     // A query fault must not fail the analyzer (it runs buffer-only without
-    // QuestDB), but it is logged so a broken baseline is not invisible.
+    // provider), but it is logged so a broken baseline is not invisible.
     let baseline = new Map<string, number>();
-    if (questdb) {
+    if (history) {
       try {
-        baseline = await queryBaseline(questdb, firedMs);
+        baseline = await queryBaseline(history, firedMs, deps.signal);
       } catch (err) {
-        deps.logger.debug(`forecast: QuestDB baseline query failed: ${String(err)}`);
+        deps.logger.debug(`forecast: history baseline query failed: ${String(err)}`);
       }
     }
-    const hasQuestdbBaseline = baseline.size > 0;
+    const hasHistoryBaseline = baseline.size > 0;
 
     const pathsToReport = ALL_WEATHER_PATHS.filter((p) => bufferPaths.has(p) || baseline.has(p));
     if (pathsToReport.length === 0) return null;
@@ -214,7 +207,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
       }
     }
     const historyMs = oldestTs == null ? 0 : firedMs - oldestTs;
-    if (historyMs < COLD_START_MIN_HISTORY_MS && !hasQuestdbBaseline) return null;
+    if (historyMs < COLD_START_MIN_HISTORY_MS && !hasHistoryBaseline) return null;
 
     const trends: PathTrend[] = pathsToReport.map((path) => {
       const meta = WEATHER_PATH_META[path];
@@ -237,7 +230,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
       trendWindowHours: TREND_WINDOW_HOURS,
       tendencyHours: TENDENCY_HOURS,
       pressureTendencyHpa: pressureTendency(trends),
-      hasQuestdbBaseline,
+      hasHistoryBaseline,
       trends,
     };
   }
@@ -254,9 +247,9 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
         : `Barometric tendency: ${fmtSigned(input.pressureTendencyHpa)} hPa over the last ${input.tendencyHours}h.`,
     );
     lines.push(
-      input.hasQuestdbBaseline
-        ? 'A 24-72h QuestDB baseline mean is shown per path for context.'
-        : 'No QuestDB baseline available; this outlook is based on the rolling buffer only.',
+      input.hasHistoryBaseline
+        ? 'A 24-72h history baseline mean is shown per path for context.'
+        : 'No history baseline available; this outlook is based on the rolling buffer only.',
     );
     lines.push('');
 
@@ -397,34 +390,19 @@ function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): vo
   }
 }
 
-// One QuestDB query that returns the per-path mean over the 24-72h baseline
-// window. Throws on a query fault; the caller logs it and runs buffer-only,
-// since the baseline is a strict enhancement.
+// One provider query that returns the per-path mean over the 24-72h baseline
+// window. Throws on a query fault; the caller logs it and runs buffer-only.
 async function queryBaseline(
-  questdb: QuestDBClient,
+  history: HistoryProvider,
   firedMs: number,
+  abortSignal?: AbortSignal,
 ): Promise<Map<string, number>> {
-  const [fromIso, toIso] = isoRange(
+  return history.meanPaths(
+    ALL_WEATHER_PATHS,
     firedMs - BASELINE_FROM_HOURS * HOUR_MS,
     firedMs - BASELINE_TO_HOURS * HOUR_MS,
+    abortSignal,
   );
-  const pathList = quotedPathList(ALL_WEATHER_PATHS);
-  const sql = flattenSql(`
-    SELECT path, avg(value) AS mean_value FROM signalk
-    WHERE path IN (${pathList})
-      AND context = '${QUESTDB_SELF_CONTEXT_SQL}'
-      AND ts >= '${fromIso}'
-      AND ts < '${toIso}'
-    GROUP BY path
-  `);
-
-  const res = await questdb.query(sql);
-  // A path with no rows in the window has a null mean, which asFiniteNumber
-  // maps to null so decodePathKeyed drops it from the baseline.
-  return decodePathKeyed(res, (cols) => {
-    const meanIdx = cols.get('mean_value') ?? -1;
-    return (row) => (meanIdx >= 0 ? asFiniteNumber(row[meanIdx]) : null);
-  });
 }
 
 interface ParsedForecast {
