@@ -139,7 +139,12 @@ if (packageJson.exports?.['.'] !== './dist/index.js') {
 if (packageJson.dependencies?.['signalk-nearlcrews-ui']) {
   throw new Error('signalk-nearlcrews-ui must be a bundled development dependency.');
 }
-for (const lifecycleScript of ['prepare', 'prepack', 'preinstall', 'install', 'postinstall']) {
+// `prepare` alone corrupts the Signal K plugin-ci pack capture: npm prints its
+// lifecycle banner into `npm pack --ignore-scripts` stdout, which the workflow
+// reads as the tarball path. Measured on npm 10.9 and 11.18, a `prepack` script
+// prints only the tarball name, so it is permitted family-wide. The install
+// hooks stay forbidden because they run on a consumer's machine.
+for (const lifecycleScript of ['prepare', 'preinstall', 'install', 'postinstall']) {
   if (packageJson.scripts?.[lifecycleScript]) {
     throw new Error(`Signal K plugins must not define an ${lifecycleScript} lifecycle script.`);
   }
@@ -147,8 +152,22 @@ for (const lifecycleScript of ['prepare', 'prepack', 'preinstall', 'install', 'p
 if (packageJson.gitHead !== undefined && !/^[0-9a-f]{40}$/.test(packageJson.gitHead)) {
   throw new Error('gitHead must be a full lowercase Git commit SHA when it is present.');
 }
-if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.8.0') {
-  throw new Error('The UI package must be pinned to exact version 0.8.0 during its 0.x series.');
+if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.8.1') {
+  throw new Error('The UI package must be pinned to exact version 0.8.1 during its 0.x series.');
+}
+
+// D2: @types/node must track the advertised runtime floor. Typing against a
+// newer Node than `engines.node` admits lets a later-Node API type-check here
+// and then fail on the oldest lane the plugin advertises.
+const enginesMajor = /(\d+)/.exec(packageJson.engines?.node ?? '')?.[1];
+const typesNodeMajor = /(\d+)/.exec(packageJson.devDependencies?.['@types/node'] ?? '')?.[1];
+if (!enginesMajor || !typesNodeMajor) {
+  throw new Error('Both engines.node and @types/node must declare a major version.');
+}
+if (enginesMajor !== typesNodeMajor) {
+  throw new Error(
+    `@types/node ${typesNodeMajor}.x does not match the engines.node ${enginesMajor}.x runtime floor.`,
+  );
 }
 
 console.log(`Packed package passed: ${files.size} files in ${packResult.filename}.`);

@@ -15,6 +15,12 @@ updates:
     groups:
       dev-deps:
         dependency-type: "development"
+    ignore:
+      # @types/node tracks the engines.node runtime floor, not the newest Node.
+      # scripts/check-package.mjs fails the build when the majors diverge, so a
+      # major bump here would only ever land as a red pull request.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
