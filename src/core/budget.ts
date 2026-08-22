@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 
 interface BudgetOptions {
   maxPerDay: number;
@@ -32,6 +32,13 @@ function nonNegFinite(n: number): number {
 type ResolvedBudgetOptions = BudgetOptions & { now: () => Date };
 
 export class BudgetTracker {
+  // Serializes the state writes. One cron job fans out to several analyzers, so
+  // one run's recordUsage can overlap another's recordCall. Two independent
+  // truncating writes to the same path can leave the longer payload's tail
+  // behind the shorter one, and the unparseable file that results silently
+  // resets the daily spend cap on the next load.
+  private writeChain: Promise<void> = Promise.resolve();
+
   private constructor(
     private opts: ResolvedBudgetOptions,
     private state: PersistedState,
@@ -102,17 +109,31 @@ export class BudgetTracker {
       ...this.state,
       callsToday: this.state.callsToday + 1,
     };
-    try {
-      await writeFile(this.opts.statePath, JSON.stringify(this.state));
-    } catch (err) {
-      // Best-effort persist. The in-memory counter is already incremented, so
-      // a failed write only loses the count across a server restart. It must
-      // not reject: recordCall runs inside the analyzer's try block, and a
-      // rejection here would surface as a spurious analyzer-failure report
-      // even though the LLM call has not been attempted yet. A persistently
-      // failing write quietly weakens the cap, so log it.
-      this.opts.log?.(`budget state write failed: ${String(err)}`);
-    }
+    await this.persist();
+  }
+
+  // Write the current state through the serializing chain, and write it
+  // atomically: a temporary file plus a rename, so a concurrent reader or a
+  // power loss mid-write can only ever see a complete file.
+  //
+  // Best-effort by contract. The in-memory counters are already updated, so a
+  // failed write only loses them across a server restart. It must not reject:
+  // recordCall runs inside the analyzer's try block, and a rejection there
+  // would surface as a spurious analyzer-failure report before the LLM call
+  // has even been attempted. A persistently failing write quietly weakens the
+  // cap, so log it.
+  private persist(): Promise<void> {
+    const snapshot = JSON.stringify(this.state);
+    const tempPath = `${this.opts.statePath}.tmp`;
+    this.writeChain = this.writeChain.then(async () => {
+      try {
+        await writeFile(tempPath, snapshot);
+        await rename(tempPath, this.opts.statePath);
+      } catch (err) {
+        this.opts.log?.(`budget state write failed: ${String(err)}`);
+      }
+    });
+    return this.writeChain;
   }
 
   // Daily token/cost accounting. Unlike recordCall (which runs before the LLM
@@ -129,11 +150,7 @@ export class BudgetTracker {
       tokensToday: this.state.tokensToday + nonNegFinite(usage.totalTokens),
       costToday: this.state.costToday + nonNegFinite(usage.cost),
     };
-    try {
-      await writeFile(this.opts.statePath, JSON.stringify(this.state));
-    } catch (err) {
-      this.opts.log?.(`budget state write failed: ${String(err)}`);
-    }
+    await this.persist();
   }
 
   tokensToday(): number {

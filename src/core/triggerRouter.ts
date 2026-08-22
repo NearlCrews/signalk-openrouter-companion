@@ -22,10 +22,21 @@ interface DispatchExtras {
 // reporting blanket success. `unknown` distinguishes "no analyzer with that
 // id" from `no-input` ("collectContext returned nothing"); the REST endpoint
 // pre-guards unknown ids with a 409, but in-process callers may not.
-export type RunOutcome = 'reported' | 'no-input' | 'budget-exhausted' | 'failed' | 'unknown';
+export type RunOutcome =
+  | 'reported'
+  | 'no-input'
+  | 'budget-exhausted'
+  | 'failed'
+  | 'unknown'
+  | 'already-running';
 
 export class TriggerRouter {
   private lastStatus: string | null = null;
+  // Analyzer ids with a run in flight. A cron fire that overlaps a manual PUT
+  // or REST fire, or a retry ladder that outlives the cron interval, would
+  // otherwise spend two budget calls and publish two reports for what the
+  // operator sees as one event.
+  private readonly inFlight = new Set<string>();
 
   constructor(
     private analyzers: Analyzer[],
@@ -45,11 +56,20 @@ export class TriggerRouter {
     this.deps.setStatus?.(msg);
   }
 
-  async dispatch(kind: TriggerKind, ctx: TriggerCtx, extras: DispatchExtras = {}): Promise<void> {
+  // Returns one outcome per matched analyzer, in match order, so a caller that
+  // has to answer for the run (the PUT handler) can report what actually
+  // happened instead of blanket success. runOne resolves rather than rejects,
+  // so a rejected settlement here would be a bug in runOne itself.
+  async dispatch(
+    kind: TriggerKind,
+    ctx: TriggerCtx,
+    extras: DispatchExtras = {},
+  ): Promise<RunOutcome[]> {
     const matches = this.analyzers.filter((a) =>
       a.triggers.some((t) => triggerMatches(t, kind, extras)),
     );
-    await Promise.allSettled(matches.map((a) => this.runOne(a, ctx)));
+    const settled = await Promise.allSettled(matches.map((a) => this.runOne(a, ctx)));
+    return settled.map((result) => (result.status === 'fulfilled' ? result.value : 'failed'));
   }
 
   // Run a single analyzer by id, bypassing trigger matching. The REST fire
@@ -62,6 +82,11 @@ export class TriggerRouter {
   }
 
   private async runOne(a: Analyzer, ctx: TriggerCtx): Promise<RunOutcome> {
+    if (this.inFlight.has(a.id)) {
+      this.deps.logger.debug(`${a.id}: a run is already in flight, skipping this trigger`);
+      return 'already-running';
+    }
+    this.inFlight.add(a.id);
     try {
       const input = await a.collectContext(ctx, this.deps);
       if (input == null) return 'no-input';
@@ -119,6 +144,8 @@ export class TriggerRouter {
           this.deps.logger.debug(`${a.id}: failed to publish failure: ${stringify(e)}`),
         );
       return 'failed';
+    } finally {
+      this.inFlight.delete(a.id);
     }
   }
 }

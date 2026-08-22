@@ -90,4 +90,36 @@ describe('RollingBuffer', () => {
     expect(buf.summarize('s', 0, 10_000)).toBeNull();
     expect(buf.summarize('missing', 0, 10_000)).toBeNull();
   });
+
+  it('folds a window into newest timestamp, count, and sources', () => {
+    const buf = new RollingBuffer({ maxAgeMs: 60_000, maxEntriesPerPath: 100 });
+    buf.record('rpm', 100, 1000, 's2');
+    buf.record('rpm', 'not a number', 1500, 's1');
+    buf.record('rpm', 300, 2000, 's1');
+    // Non-numeric samples still count as liveness: the path is producing.
+    expect(buf.scan('rpm', 0, 10_000)).toEqual({
+      newestTs: 2000,
+      count: 3,
+      sources: ['s1', 's2'],
+    });
+    expect(buf.scan('rpm', 0, 1200)).toEqual({ newestTs: 1000, count: 1, sources: ['s2'] });
+    expect(buf.scan('missing', 0, 10_000)).toEqual({ newestTs: null, count: 0, sources: [] });
+  });
+
+  it('holds the whole buffer under the total cap by trimming the biggest path', () => {
+    const buf = new RollingBuffer({
+      maxAgeMs: 60_000,
+      maxEntriesPerPath: 1000,
+      maxTotalEntries: 20,
+    });
+    for (let i = 0; i < 30; i += 1) buf.record('chatty', i, 1000 + i, 's1');
+    for (let i = 0; i < 5; i += 1) buf.record('quiet', i, 1000 + i, 's1');
+    const chatty = buf.scan('chatty', 0, 10_000);
+    const quiet = buf.scan('quiet', 0, 10_000);
+    expect(chatty.count + quiet.count).toBeLessThanOrEqual(20);
+    // The quiet path keeps every sample: only the biggest contributor is cut.
+    expect(quiet.count).toBe(5);
+    // Trimming drops the oldest entries, so the newest sample survives.
+    expect(chatty.newestTs).toBe(1029);
+  });
 });

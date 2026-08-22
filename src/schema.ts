@@ -296,7 +296,10 @@ function buildSchemaInner(): PluginSchema {
             title: 'Max OpenRouter calls per day',
             description: 'Hard cap on OpenRouter calls per UTC day to bound spend.',
             default: DEFAULT_OPTIONS.openrouter.maxCallsPerDay,
-            minimum: 0,
+            // Matches the runtime clamp floor in types.ts::validateOptions. A
+            // lower value would be silently rewritten to the default, so a
+            // "0 calls" entry would buy the shipped daily cap instead.
+            minimum: 1,
           },
           fallbackModels: {
             type: 'array',
@@ -463,7 +466,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
-                minimum: 0,
+                minimum: 1,
               },
               engineSilenceStopSeconds: {
                 type: 'integer',
@@ -471,7 +474,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How long the RPM feed can go fully silent before the session is treated as ended. A switched-off NMEA 2000 engine stops broadcasting entirely rather than reporting RPM 0. Default 300s.',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.engineSilenceStopSeconds,
-                minimum: 0,
+                minimum: 1,
               },
               engineStartRpmHzThreshold: {
                 type: 'number',
@@ -486,7 +489,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How long RPM must stay above the threshold before the engine is considered running.',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
-                minimum: 0,
+                minimum: 1,
               },
               minSessionSeconds: {
                 type: 'integer',
@@ -595,7 +598,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'SoC must rise above (threshold + hysteresis) before the alert clears.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
-                minimum: 0,
+                minimum: 1,
               },
               cellImbalanceV: {
                 type: 'number',
@@ -603,7 +606,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'Voltage difference between highest and lowest cell that triggers an alert.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
-                minimum: 0,
+                minimum: 0.001,
               },
               imbalanceSettleSec: {
                 type: 'integer',
@@ -611,7 +614,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'Cell imbalance must persist for this many seconds before an alert fires.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
-                minimum: 0,
+                minimum: 1,
               },
             },
           }),

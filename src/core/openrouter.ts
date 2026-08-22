@@ -261,10 +261,16 @@ function parseRetryAfter(h: string | null): number | null {
 
 const BACKOFF_LADDER = [500, 1500, 4500] as const;
 
+// Ceiling on an honored `Retry-After`. A provider is free to ask for an hour,
+// but the budget call is already recorded and the next cron fire is coming, so
+// waiting that long pins the run and delays the failure report the operator
+// needs. Past this bound the header is capped rather than obeyed.
+const MAX_RETRY_AFTER_MS = 60_000;
+
 function backoffMs(attempt: number, retryAfterMs: number | null, random: () => number): number {
   const base = BACKOFF_LADDER[Math.min(attempt, BACKOFF_LADDER.length - 1)] as number;
   const jitteredBase = base * (0.5 + random() * 0.5);
-  return Math.max(jitteredBase, retryAfterMs ?? 0);
+  return Math.max(jitteredBase, Math.min(retryAfterMs ?? 0, MAX_RETRY_AFTER_MS));
 }
 
 // Resolve after `ms`, or reject early with the caller's abort reason if the

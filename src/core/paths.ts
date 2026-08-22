@@ -2,6 +2,14 @@
 // per-bank path builders. Centralized so the convention can't drift between
 // analyzers, schema defaults, and tests.
 
+// The npm package name, which is also the Signal K plugin id. It keys the
+// saved configuration, the REST mount prefix, and the OpenAPI server URL, so
+// it lives here beside the other path constants rather than being spelled out
+// at each of those sites.
+export const PLUGIN_ID = 'signalk-openrouter-companion';
+// The plugin's HTTP mount point under the Signal K server.
+export const PLUGIN_HTTP_PREFIX = `/plugins/${PLUGIN_ID}`;
+
 const NOTIFICATION_PATH_PREFIX = 'notifications.openrouter-companion.';
 const PUT_PATH_PREFIX = 'plugins.openrouter-companion.';
 

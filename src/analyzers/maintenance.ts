@@ -244,19 +244,27 @@ function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): 
     });
 }
 
+// Scanned in order, so the specific suffixes must precede the general ones:
+// `capacity.nominal` before the bare `.capacity` a fuel tank ends with.
 const UNIT_BY_SUFFIX: ReadonlyArray<readonly [suffix: string, unit: string]> = [
   ['.revolutions', 'Hz'],
   ['.voltage', 'V'],
+  // Catches the camelCase forms, such as propulsion.<id>.alternatorVoltage.
+  ['Voltage', 'V'],
   ['.current', 'A'],
   ['.temperature', 'K'],
   ['Temperature', 'K'],
   ['.stateOfCharge', 'ratio'],
   ['capacity.nominal', 'J'],
   ['capacity.remaining', 'J'],
+  ['capacity.actual', 'J'],
   ['.runTime', 's'],
   ['.fuel.rate', 'm3/s'],
-  ['.fuel.level', 'ratio'],
   ['.fuel.used', 'm3'],
+  // Signal K tanks report currentLevel as a 0 to 1 ratio, with volumes in m3.
+  ['.currentLevel', 'ratio'],
+  ['.currentVolume', 'm3'],
+  ['.capacity', 'm3'],
   ['.oilPressure', 'Pa'],
 ];
 

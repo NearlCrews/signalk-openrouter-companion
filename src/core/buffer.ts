@@ -7,6 +7,11 @@ export interface BufferEntry {
 interface BufferOptions {
   maxAgeMs: number;
   maxEntriesPerPath: number;
+  // Ceiling across every path together. The per-path cap alone does not bound
+  // total memory: a vessel with a hundred busy electrical and propulsion paths
+  // multiplies it by a hundred, which is hundreds of megabytes on a Raspberry
+  // Pi. Omit to leave the total unbounded.
+  maxTotalEntries?: number;
 }
 
 // Numeric summary of one path over a time window. Returned by `summarize`;
@@ -19,9 +24,20 @@ export interface BufferSummary {
   sources: string[];
 }
 
+// Liveness view of one path over a window: how fresh it is, how much arrived,
+// and which sources served it. Returned by `scan`.
+export interface BufferLiveness {
+  newestTs: number | null;
+  count: number;
+  sources: string[];
+}
+
 export class RollingBuffer {
   private store = new Map<string, BufferEntry[]>();
   private readonly trimTo: number;
+  // Running total across every path, so the global cap costs no map walk on
+  // the record path.
+  private total = 0;
 
   constructor(private opts: BufferOptions) {
     // Keep at least 1: a maxEntriesPerPath of 1 would otherwise yield trimTo 0,
@@ -36,7 +52,30 @@ export class RollingBuffer {
       this.store.set(path, arr);
     }
     arr.push({ value, ts, source });
+    this.total += 1;
+    const before = arr.length;
     this.evict(arr, ts);
+    this.total -= before - arr.length;
+    this.enforceTotalCap();
+  }
+
+  // Fold one path's window in place. `liveness` needs only the newest
+  // timestamp, the sample count, and the distinct sources, and it runs over
+  // every buffered path on every fire, so materializing a filtered copy per
+  // path (up to maxEntriesPerPath entries) is pure garbage.
+  scan(path: string, fromTs: number, toTs: number): BufferLiveness {
+    const arr = this.store.get(path);
+    if (!arr) return { newestTs: null, count: 0, sources: [] };
+    const sources = new Set<string>();
+    let newestTs: number | null = null;
+    let count = 0;
+    for (const e of arr) {
+      if (e.ts < fromTs || e.ts > toTs) continue;
+      count += 1;
+      sources.add(e.source);
+      if (newestTs == null || e.ts > newestTs) newestTs = e.ts;
+    }
+    return { newestTs, count, sources: Array.from(sources).sort() };
   }
 
   // A path's entries are appended in arrival order with each delta's own
@@ -105,6 +144,26 @@ export class RollingBuffer {
     if (write < arr.length) arr.length = write;
     if (arr.length > this.opts.maxEntriesPerPath) {
       arr.splice(0, arr.length - this.trimTo);
+    }
+  }
+
+  // Hold the whole buffer under its total budget by trimming the biggest path
+  // first: one chatty path is what pushes the total over, and every consumer
+  // reads aggregates over a window rather than a fixed sample count.
+  private enforceTotalCap(): void {
+    const cap = this.opts.maxTotalEntries;
+    if (cap === undefined || this.total <= cap) return;
+    while (this.total > cap) {
+      let biggest: BufferEntry[] | null = null;
+      for (const arr of this.store.values()) {
+        if (!biggest || arr.length > biggest.length) biggest = arr;
+      }
+      // Nothing left to reclaim: a cap below the number of live paths would
+      // otherwise spin here.
+      if (!biggest || biggest.length === 0) return;
+      const drop = Math.min(biggest.length, Math.max(1, Math.ceil(biggest.length / 10)));
+      biggest.splice(0, drop);
+      this.total -= drop;
     }
   }
 }

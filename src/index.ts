@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { rename, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import type { SKVersion } from '@signalk/server-api';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
@@ -23,19 +23,23 @@ import type { HistoryProvider } from './core/history.js';
 import { InfluxDBClient } from './core/influxdb.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
-import { enginePaths, pluginPutPath } from './core/paths.js';
+import { enginePaths, PLUGIN_HTTP_PREFIX, PLUGIN_ID, pluginPutPath } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
-import { TriggerRouter } from './core/triggerRouter.js';
+import { type RunOutcome, TriggerRouter } from './core/triggerRouter.js';
 import { manualPutCtx } from './core/triggers.js';
 import { buildSchema, buildUiSchema } from './schema.js';
 import { ALERTS_SUPPORTED_EVENTS, mergeWithDefaults, type PluginOptions } from './types.js';
 
-const PLUGIN_ID = 'signalk-openrouter-companion';
 const PLUGIN_NAME = 'OpenRouter Companion';
 
 const BUFFER_MAX_AGE_MS = 26 * HOUR_MS;
 const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
+// Ceiling across every buffered path together, so a vessel with many busy
+// electrical and propulsion paths cannot multiply the per-path cap into
+// hundreds of megabytes on a Raspberry Pi. Roughly 40 MB of entries, which
+// still holds well over a day of aggregates for a realistic path count.
+const BUFFER_MAX_TOTAL_ENTRIES = 400_000;
 const ENGINE_SOURCE_WINDOW_MS = 1000;
 const BATTERY_SOURCE_WINDOW_MS = 5000;
 const MONITOR_TICK_MS = 5000;
@@ -46,13 +50,15 @@ const RESCAN_INTERVAL_MS = 60_000;
 // Sensors with a mis-set RTC commonly drift hours; anything past this is
 // treated as a clock fault rather than a legitimate sample, so it cannot
 // shift the rolling-buffer eviction cutoff or the engine watchdog math.
-const CLOCK_SKEW_GRACE_MS = 60 * 60 * 1000;
+const CLOCK_SKEW_GRACE_MS = HOUR_MS;
 // On restart, a persisted engine session whose last delta is older than this
 // is discarded rather than resumed (the engine stopped during the downtime).
 const ENGINE_STATE_MAX_RESUME_SEC = 3600;
 // How often the in-progress engine session is persisted to disk so a restart
 // mid-session can resume it.
 const DETECTOR_SAVE_INTERVAL_MS = 60_000;
+// Used when the configured report-log filename is not a plain basename.
+const DEFAULT_LOG_FILENAME = 'reports.jsonl';
 
 interface ServerApiLike {
   streambundle: {
@@ -116,11 +122,16 @@ export default function createPlugin(app: ServerApiLike): {
   // newer start()'s promise).
   let readyPromise: Promise<void> = new Promise<void>(() => {});
 
+  // Set by start() so stop() can write the in-progress engine session out once
+  // more before the periodic saver goes away. Null while the plugin is stopped.
+  let flushDetectorState: (() => Promise<void>) | null = null;
+
   // Release every resource start() registered: abort the lifecycle, stop the
   // scheduler, drain stream subscriptions, clear intervals, drop the runtime.
   // Shared by stop() and start()'s own catch, since SK does not call stop()
   // for a start() that threw partway through wiring.
   const releaseResources = (): void => {
+    flushDetectorState = null;
     if (lifecycleController) {
       lifecycleController.abort();
       lifecycleController = null;
@@ -181,13 +192,18 @@ export default function createPlugin(app: ServerApiLike): {
         // it may not exist yet; mkdir defensively so publisher.appendLog and
         // BudgetTracker.load don't trip on ENOENT.
         mkdirSync(dataDir, { recursive: true });
-        const logPath = join(dataDir, cfg.output.logFilename);
+        // logFilename is not exposed in the schema, so a value with a path
+        // separator or a parent segment can only come from a hand-edited
+        // config. Keep it a plain basename so the report log cannot be
+        // written outside the plugin's own data directory.
+        const logPath = join(dataDir, safeLogFilename(cfg.output.logFilename));
         const budgetPath = join(dataDir, 'budget.json');
         const detectorStatePath = join(dataDir, 'engine-detector.json');
 
         const buffer = new RollingBuffer({
           maxAgeMs: BUFFER_MAX_AGE_MS,
           maxEntriesPerPath: BUFFER_MAX_ENTRIES_PER_PATH,
+          maxTotalEntries: BUFFER_MAX_TOTAL_ENTRIES,
         });
         const detector = new EngineDetector(
           {
@@ -214,15 +230,33 @@ export default function createPlugin(app: ServerApiLike): {
         // Persist only when the snapshot actually changed: the engine is off
         // most of the time, so an unconditional periodic write would rewrite
         // the same empty state to the SD card every interval.
+        //
+        // The writes are serialized and atomic (temporary file plus rename).
+        // The periodic saver, the engine-start listener, and the engine-stop
+        // listener can all fire close together, and two independent truncating
+        // writes can otherwise land out of order or leave a partial file that
+        // the next start discards.
         let lastDetectorState = '';
-        const saveDetectorState = (): void => {
+        let detectorWriteChain: Promise<void> = Promise.resolve();
+        const saveDetectorState = (): Promise<void> => {
           const serialized = JSON.stringify(detector.snapshot());
-          if (serialized === lastDetectorState) return;
+          if (serialized === lastDetectorState) return detectorWriteChain;
           lastDetectorState = serialized;
-          void writeFile(detectorStatePath, serialized).catch((err) => {
-            logger.debug(`engine-detector state save failed: ${stringify(err)}`);
+          const tempPath = `${detectorStatePath}.tmp`;
+          detectorWriteChain = detectorWriteChain.then(async () => {
+            try {
+              await writeFile(tempPath, serialized);
+              await rename(tempPath, detectorStatePath);
+            } catch (err) {
+              // Clear the memo so the next save retries rather than treating
+              // this snapshot as already on disk.
+              lastDetectorState = '';
+              logger.debug(`engine-detector state save failed: ${stringify(err)}`);
+            }
           });
+          return detectorWriteChain;
         };
+        flushDetectorState = saveDetectorState;
         const monitor = new BatteryMonitor(
           {
             lowSocPercent: cfg.analyzers.alerts.lowSocPercent,
@@ -395,10 +429,14 @@ export default function createPlugin(app: ServerApiLike): {
         // engine-start and engine-stop persist detector state so a restart
         // mid-session can resume it. engine-stop additionally drives the
         // maintenance analyzer, which narrates the completed session.
-        unsubs.push(detector.on('engine-start', () => saveDetectorState()));
+        unsubs.push(
+          detector.on('engine-start', () => {
+            void saveDetectorState();
+          }),
+        );
         unsubs.push(
           detector.on('engine-stop', (e: EngineEvent) => {
-            saveDetectorState();
+            void saveDetectorState();
             // router is wired by the deferred init (probe + budget). An event
             // in that brief startup window is dropped: an engine stop right at
             // plugin start is unlikely and the next session is still captured.
@@ -546,14 +584,34 @@ export default function createPlugin(app: ServerApiLike): {
           registerAnalyzerPut(app, id, cfg.analyzers[id], () => activeRouter, PLUGIN_ID);
         }
 
-        intervalHandles.push(
-          setInterval(() => detector.tickWatchdog(Date.now()), WATCHDOG_TICK_MS),
+        // The engine and battery timers exist to raise events. With no enabled
+        // analyzer listening for either kind, they would tick for nobody, so
+        // they are registered only when something consumes them.
+        const wantsEngineEvents = analyzers.some((a) =>
+          a.triggers.some(
+            (t) =>
+              t.kind === 'engine-start' || t.kind === 'engine-stop' || t.kind === 'possible-stop',
+          ),
         );
-        // Persist the in-progress engine session periodically so the
-        // restart-resume window stays current between engine-start and the
-        // next event (see saveDetectorState and detector.restore above).
-        intervalHandles.push(setInterval(saveDetectorState, DETECTOR_SAVE_INTERVAL_MS));
-        intervalHandles.push(setInterval(() => monitor.tick(Date.now()), MONITOR_TICK_MS));
+        const wantsBatteryEvents = analyzers.some((a) =>
+          a.triggers.some((t) => t.kind === 'battery-event'),
+        );
+        if (wantsEngineEvents) {
+          intervalHandles.push(
+            setInterval(() => detector.tickWatchdog(Date.now()), WATCHDOG_TICK_MS),
+          );
+          // Persist the in-progress engine session periodically so the
+          // restart-resume window stays current between engine-start and the
+          // next event (see saveDetectorState and detector.restore above).
+          intervalHandles.push(
+            setInterval(() => {
+              void saveDetectorState();
+            }, DETECTOR_SAVE_INTERVAL_MS),
+          );
+        }
+        if (wantsBatteryEvents) {
+          intervalHandles.push(setInterval(() => monitor.tick(Date.now()), MONITOR_TICK_MS));
+        }
         intervalHandles.push(
           setInterval(() => {
             const fresh = app.streambundle.getAvailablePaths();
@@ -636,6 +694,10 @@ export default function createPlugin(app: ServerApiLike): {
     },
 
     stop: async () => {
+      // Write the in-progress engine session out one last time: the periodic
+      // saver runs every 60 seconds, so a stop mid-session would otherwise
+      // leave the resume window that stale.
+      await flushDetectorState?.();
       // The SK server sets the plugin status after stop() resolves, so an
       // explicit 'Stopped' here would only be overwritten.
       releaseResources();
@@ -649,7 +711,7 @@ export default function createPlugin(app: ServerApiLike): {
       // narrowest gate that closes the unauthenticated path; on a server
       // with security disabled (dummysecurity) it is still attached and
       // a no-op so dev setups are unaffected.
-      const prefix = `/plugins/${PLUGIN_ID}/api`;
+      const prefix = `${PLUGIN_HTTP_PREFIX}/api`;
       if (app.securityStrategy?.addAdminMiddleware) {
         app.securityStrategy.addAdminMiddleware(prefix);
       } else {
@@ -679,6 +741,13 @@ export default function createPlugin(app: ServerApiLike): {
   };
 }
 
+// Reduce a configured log filename to a plain basename, falling back to the
+// default when the configured value was not one already.
+function safeLogFilename(configured: string): string {
+  const base = basename(configured);
+  return base === configured && base !== '' ? base : DEFAULT_LOG_FILENAME;
+}
+
 function runningStatus(analyzerCount: number): string {
   const label = analyzerCount === 1 ? 'analyzer' : 'analyzers';
   return `Running with ${analyzerCount} ${label} enabled`;
@@ -687,6 +756,30 @@ function runningStatus(analyzerCount: number): string {
 interface AnalyzerSectionLike {
   enabled: boolean;
   triggers: { put: { enabled: boolean } };
+}
+
+// Map the outcomes of a PUT-triggered run onto the Signal K PUT contract. A
+// PUT that produced no report must not answer 200 COMPLETED as if it had: the
+// router resolves rather than rejects, so the outcomes are the only signal.
+function putAckFor(outcomes: readonly RunOutcome[]): {
+  state: string;
+  statusCode?: number;
+  message?: string;
+} {
+  if (outcomes.includes('failed')) {
+    return { state: 'FAILED', statusCode: 500, message: 'analyzer run failed' };
+  }
+  if (outcomes.includes('reported')) return { state: 'COMPLETED', statusCode: 200 };
+  if (outcomes.includes('budget-exhausted')) {
+    return { state: 'COMPLETED', statusCode: 429, message: 'daily call budget exhausted' };
+  }
+  if (outcomes.includes('already-running')) {
+    return { state: 'COMPLETED', statusCode: 409, message: 'a run is already in flight' };
+  }
+  if (outcomes.length === 0) {
+    return { state: 'COMPLETED', statusCode: 200, message: 'no analyzer listens on this path' };
+  }
+  return { state: 'COMPLETED', statusCode: 200, message: 'nothing to report' };
 }
 
 function registerAnalyzerPut(
@@ -726,8 +819,7 @@ function registerAnalyzerPut(
       };
       void (async () => {
         try {
-          await router.dispatch('put', manualPutCtx(value), { putPath: path });
-          ack({ state: 'COMPLETED', statusCode: 200 });
+          ack(putAckFor(await router.dispatch('put', manualPutCtx(value), { putPath: path })));
         } catch (err) {
           ack({ state: 'FAILED', statusCode: 500, message: stringify(err) });
         }

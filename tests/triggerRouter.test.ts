@@ -36,6 +36,59 @@ describe('TriggerRouter', () => {
     expect(b.collectContext).not.toHaveBeenCalled();
   });
 
+  it('reports one outcome per matched analyzer, in match order', async () => {
+    const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-stop' }] });
+    const b = makeAnalyzer({
+      id: 'b',
+      triggers: [{ kind: 'engine-stop' }],
+      collectContext: vi.fn(async () => null),
+    });
+    const { router } = makeRouter([a, b]);
+    const outcomes = await router.dispatch('engine-stop', {
+      kind: 'engine-stop',
+      firedAt: new Date(),
+    });
+    expect(outcomes).toEqual(['reported', 'no-input']);
+  });
+
+  it('reports no outcomes when nothing listens on the trigger', async () => {
+    const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-start' }] });
+    const { router } = makeRouter([a]);
+    expect(
+      await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() }),
+    ).toEqual([]);
+  });
+
+  it('skips a second run of an analyzer that is already in flight', async () => {
+    let releaseFirstRun: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    let calls = 0;
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'engine-stop' }],
+      collectContext: vi.fn(async () => {
+        calls += 1;
+        await gate;
+        return { ok: true };
+      }),
+    });
+    const { router, mocks } = makeRouter([a]);
+    const ctx: TriggerCtx = { kind: 'engine-stop', firedAt: new Date() };
+    const first = router.runById('a' as AnalyzerId, ctx);
+    const second = await router.runById('a' as AnalyzerId, ctx);
+    expect(second).toBe('already-running');
+    releaseFirstRun();
+    expect(await first).toBe('reported');
+    // One collectContext, one budget call, one report: the overlapping trigger
+    // cost nothing.
+    expect(calls).toBe(1);
+    expect(mocks.recordCall).toHaveBeenCalledTimes(1);
+    // The guard releases when the run settles, so a later trigger runs again.
+    expect(await router.runById('a' as AnalyzerId, ctx)).toBe('reported');
+  });
+
   it('skips LLM call when collectContext returns null', async () => {
     const a = makeAnalyzer({
       id: 'a',

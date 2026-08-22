@@ -4,12 +4,14 @@ import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '..
 import { ANALYZER_DEFAULT_SYSTEM_PROMPTS } from '../analyzers/registry.js';
 import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
+import { HOUR_MS } from './format.js';
 import type { HistoryProvider } from './history.js';
 import { fetchWithTimeout } from './http.js';
 import { InfluxDBClient } from './influxdb.js';
 import { stringify } from './logger.js';
 import type { OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
+import { PLUGIN_HTTP_PREFIX } from './paths.js';
 import type { JsonlEntry } from './publisher.js';
 import { QuestDBClient, stripTrailingSlashes } from './questdb.js';
 import type { TriggerRouter } from './triggerRouter.js';
@@ -138,7 +140,7 @@ const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 // modelsInFlight (and with it the admin model picker) until process restart.
 // Same magnitude as the OpenRouter completion timeout and the QuestDB ceiling.
 const MODELS_FETCH_TIMEOUT_MS = 30_000;
-const MODELS_CACHE_TTL_MS = 60 * 60 * 1000;
+const MODELS_CACHE_TTL_MS = HOUR_MS;
 let modelsCache: { fetchedAt: number; body: OpenRouterModelsResponse } | null = null;
 let modelsInFlight: Promise<OpenRouterModelsResponse> | null = null;
 
@@ -149,7 +151,11 @@ export function _resetOpenRouterModelsCache(): void {
   modelsInFlight = null;
 }
 
-async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
+// `abortSignal` is the plugin's lifecycle signal when the plugin is running,
+// so a stop releases a hung upstream fetch instead of leaving it to the
+// 30-second timeout. It is absent before the first start, which is deliberate:
+// the picker must populate then too.
+async function getOpenRouterModels(abortSignal?: AbortSignal): Promise<OpenRouterModelsResponse> {
   const now = Date.now();
   if (modelsCache && now - modelsCache.fetchedAt < MODELS_CACHE_TTL_MS) {
     return modelsCache.body;
@@ -159,7 +165,12 @@ async function getOpenRouterModels(): Promise<OpenRouterModelsResponse> {
   if (modelsInFlight) return modelsInFlight;
   modelsInFlight = (async () => {
     try {
-      const res = await fetchWithTimeout(OPENROUTER_MODELS_URL, {}, MODELS_FETCH_TIMEOUT_MS);
+      const res = await fetchWithTimeout(
+        OPENROUTER_MODELS_URL,
+        {},
+        MODELS_FETCH_TIMEOUT_MS,
+        abortSignal,
+      );
       if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
       const body = (await res.json()) as OpenRouterModelsResponse;
       // Validate the shape before caching: a malformed-but-valid-JSON
@@ -373,12 +384,13 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
     method: 'get',
     path: '/api/openrouter/models',
     summary: 'List the available OpenRouter models.',
-    handler: () => async (_req, res) => {
+    handler: (getRuntime) => async (_req, res) => {
       // No runtime gate: the model list is fetched from OpenRouter independently
       // of plugin state, so the picker populates before the plugin starts, the
-      // same way the prompt route serves its compile-time default.
+      // same way the prompt route serves its compile-time default. The runtime
+      // is read only for its lifecycle signal, which is absent then.
       try {
-        const result = await getOpenRouterModels();
+        const result = await getOpenRouterModels(getRuntime()?.signal);
         sendOk(res, result);
       } catch (err) {
         res.status(502).json({ ok: false, error: stringify(err) });
@@ -609,7 +621,7 @@ const OPENAPI_DOC = {
     version: '1.0.0',
     description: 'Admin-gated REST routes that back the OpenRouter Companion configuration panel.',
   },
-  servers: [{ url: '/plugins/signalk-openrouter-companion' }],
+  servers: [{ url: PLUGIN_HTTP_PREFIX }],
   paths: buildOpenApiPaths(),
 };
 

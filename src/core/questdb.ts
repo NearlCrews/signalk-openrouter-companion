@@ -141,7 +141,9 @@ export class QuestDBClient implements HistoryProvider {
   async query(sql: string, abortSignal?: AbortSignal): Promise<QueryResult> {
     const r = await fetchWithTimeout(
       `${this.baseUrl}/exec?query=${encodeURIComponent(sql)}`,
-      {},
+      // Same redirect rule as probe() and both InfluxDB request paths: a 3xx
+      // from the configured host must not forward this query somewhere else.
+      { redirect: 'error' },
       QUESTDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
     );

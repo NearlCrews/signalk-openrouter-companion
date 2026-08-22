@@ -67,22 +67,15 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
     const firedMs = ctx.firedAt.getTime();
     const paths: PathLiveness[] = [];
     for (const path of deps.buffer.pathKeys()) {
-      const entries = deps.buffer.slice(path, 0, firedMs);
-      let newestTs: number | null = null;
-      const sources = new Set<string>();
-      for (const e of entries) {
-        if (newestTs == null || e.ts > newestTs) newestTs = e.ts;
-        sources.add(e.source);
-      }
+      const { newestTs, count, sources } = deps.buffer.scan(path, 0, firedMs);
       const lastSeenAgeSec = newestTs == null ? null : (firedMs - newestTs) / 1000;
-      const sortedSources = Array.from(sources).sort();
       paths.push({
         path,
         lastSeenAgeSec,
         stale: lastSeenAgeSec == null || lastSeenAgeSec > this.stalenessThresholdSec,
-        sampleCount: entries.length,
-        sources: sortedSources,
-        multiSource: sortedSources.length > 1,
+        sampleCount: count,
+        sources,
+        multiSource: sources.length > 1,
       });
     }
     if (paths.length === 0) return null;

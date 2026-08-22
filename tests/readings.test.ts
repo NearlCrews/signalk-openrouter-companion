@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evictStale, evictStaleSpan, fuseMax, fuseMin } from '../src/core/readings.js';
+import { evictStaleSpan, fuseMax, fuseMin } from '../src/core/readings.js';
 
 interface Reading {
   ts: number;
@@ -11,17 +11,6 @@ function makeMap(entries: Array<[string, Reading]>): Map<string, Reading> {
 }
 
 const readingValue = (r: Reading): number => r.value;
-
-describe('evictStale', () => {
-  it('drops entries older than the cutoff and keeps the rest', () => {
-    const map = makeMap([
-      ['old', { ts: 10, value: 1 }],
-      ['live', { ts: 100, value: 2 }],
-    ]);
-    evictStale(map, 50);
-    expect([...map.keys()]).toEqual(['live']);
-  });
-});
 
 describe('fuseMin', () => {
   it('returns the minimum over live readings and evicts stale ones', () => {

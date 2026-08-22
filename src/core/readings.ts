@@ -5,14 +5,6 @@
 // pass module-level extractor constants so the per-delta scans allocate no
 // closures.
 
-// Drop every entry whose ts predates cutoff. Used where the eviction is all the
-// caller needs.
-export function evictStale<K>(map: Map<K, { ts: number }>, cutoff: number): void {
-  for (const [k, r] of map) {
-    if (r.ts < cutoff) map.delete(k);
-  }
-}
-
 // Evict stale entries and, in the same pass, fold the live readings into the
 // minimum of `value`: SoC fuses with the minimum because a single pessimistic
 // sensor must still alarm. Returns +Infinity when no live reading remains,

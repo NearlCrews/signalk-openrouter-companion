@@ -101,6 +101,16 @@ const ALL_WEATHER_PATHS: ReadonlyArray<string> = [
   ...WEATHER_EXTENSION_PATHS,
 ];
 
+// The baseline query asks the history provider for an arithmetic mean, which
+// is meaningless for an angle: a wind oscillating around north averages to
+// roughly pi, which would be presented to the model as a southerly reference
+// while it is being asked to weigh veering against backing. The hourly buckets
+// use a circular mean (see bucketMeans), but a provider cannot, so wind
+// direction simply has no long-term baseline.
+const BASELINE_PATHS: ReadonlyArray<string> = ALL_WEATHER_PATHS.filter(
+  (path) => path !== WIND_DIRECTION_PATH,
+);
+
 export interface ForecastCfg {
   triggers: AnalyzerTriggerCfg;
   severityFloor: SeverityFloor;
@@ -398,7 +408,7 @@ async function queryBaseline(
   abortSignal?: AbortSignal,
 ): Promise<Map<string, number>> {
   return history.meanPaths(
-    ALL_WEATHER_PATHS,
+    BASELINE_PATHS,
     firedMs - BASELINE_FROM_HOURS * HOUR_MS,
     firedMs - BASELINE_TO_HOURS * HOUR_MS,
     abortSignal,
