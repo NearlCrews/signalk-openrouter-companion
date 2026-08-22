@@ -1,6 +1,7 @@
 import { formatRelativeAge } from 'signalk-nearlcrews-ui';
 import { describe, expect, it } from 'vitest';
 import { fireOutcomeText, isFireSuccess } from '../src/configpanel/fireOutcome.js';
+import { RELATIVE_AGE_FORMAT } from '../src/configpanel/relativeAge.js';
 import { buildScheduleOptions } from '../src/configpanel/scheduleOptions.js';
 import { historyValidity, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
 import { CRON_PRESETS } from '../src/cronPresets.js';
@@ -132,6 +133,18 @@ describe('shared status age formatting', () => {
     expect(formatRelativeAge(0, { locale: 'en' })).toBe('0s ago');
     expect(formatRelativeAge(59_500, { locale: 'en' })).toBe('1m ago');
     expect(formatRelativeAge(undefined, { fallback: 'unknown' })).toBe('unknown');
+  });
+
+  it('renders the family format as words rather than a zero-second stamp', () => {
+    // The library default is numeric-always and narrow. RELATIVE_AGE_FORMAT is
+    // what the panel actually passes, so pin what an operator reads.
+    expect(formatRelativeAge(0, { ...RELATIVE_AGE_FORMAT, locale: 'en' })).toBe('now');
+    expect(formatRelativeAge(59_500, { ...RELATIVE_AGE_FORMAT, locale: 'en' })).toBe(
+      '1 minute ago',
+    );
+    expect(formatRelativeAge(7_200_000, { ...RELATIVE_AGE_FORMAT, locale: 'en' })).toBe(
+      '2 hours ago',
+    );
   });
 });
 

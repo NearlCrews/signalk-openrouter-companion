@@ -11,6 +11,7 @@ import {
   StatusIndicator,
   type StatusTone,
 } from 'signalk-nearlcrews-ui';
+import { RELATIVE_AGE_FORMAT } from '../relativeAge.js';
 import type { PanelStatus, TestResult } from '../types.js';
 
 interface Props {
@@ -123,7 +124,7 @@ export const StatusBlock = memo(function StatusBlock({
         ) : null}
         {stale ? (
           <StatusIndicator tone="warning">
-            Status updated {formatRelativeAge(staleAgeMs)}
+            Status updated {formatRelativeAge(staleAgeMs, RELATIVE_AGE_FORMAT)}
           </StatusIndicator>
         ) : null}
       </Cluster>

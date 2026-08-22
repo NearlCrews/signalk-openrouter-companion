@@ -1,18 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, type Locator, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import packageJson from '../../package.json' with { type: 'json' };
 
 const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui'];
-
-// Clicking a control that overlaps the docked action bar can be swallowed: the
-// shared UI scrolls a newly focused control clear of the bar, and the pointer
-// no longer sits over the control when the mouse comes back up, so no click
-// event is dispatched. Focusing first lets that scroll settle, then the click
-// lands where the test aimed it.
-async function clickClearOfActionBar(control: Locator): Promise<void> {
-  await control.focus();
-  await control.click();
-}
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -222,9 +212,7 @@ test('configures and tests InfluxDB history without exposing credentials', async
 
 test('gives repeated analyzer controls unique accessible names', async ({ page }) => {
   await page.getByRole('button', { name: 'Analyzers' }).click();
-  await clickClearOfActionBar(
-    page.getByRole('button', { name: 'Maintenance Advisor', exact: true }),
-  );
+  await page.getByRole('button', { name: 'Maintenance Advisor', exact: true }).click();
 
   await expect(page.getByRole('checkbox', { name: 'Maintenance Advisor: Enabled' })).toBeVisible();
   await expect(
@@ -240,9 +228,7 @@ test('gives repeated analyzer controls unique accessible names', async ({ page }
 
 test('edits the scheduled fields and both drawers of an analyzer', async ({ page }) => {
   await page.getByRole('button', { name: 'Analyzers' }).click();
-  await clickClearOfActionBar(
-    page.getByRole('button', { name: 'Weather Outlook Advisor', exact: true }),
-  );
+  await page.getByRole('button', { name: 'Weather Outlook Advisor', exact: true }).click();
 
   const frequency = page.getByRole('combobox', { name: 'Frequency' });
   await expect(frequency).toHaveValue('0 */3 * * *');
