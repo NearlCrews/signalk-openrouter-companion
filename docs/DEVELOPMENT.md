@@ -178,7 +178,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.8.0 component library and shares React 19 and React
+`signalk-nearlcrews-ui` 0.8.1 component library and shares React 19 and React
 DOM as Module Federation singletons supplied by the Signal K admin host.
 `PanelRoot` owns the theme tokens. A profile without a valid shared preference
 starts in Auto, follows an explicit host theme, otherwise stays Light, and does
@@ -272,12 +272,14 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` 0.8.0 migration keeps the complete panel near
-37.9 kB gzip. This documented exception retains the shared accessibility,
+The `signalk-nearlcrews-ui` 0.8.1 migration keeps the complete panel near
+38.2 kB gzip, measured at 38,089 bytes by summing the three emitted files at
+gzip -9. This documented exception retains the shared accessibility,
 validation, responsive layout, and theme contracts. The 40 kB gzip gate leaves
-about 5 percent headroom and keeps future growth visible. The 0.8.0 library
-itself accounts for roughly 1.3 kB of that growth over 0.7.1, and the inline
-discard confirmation plus the shared empty states for most of the rest.
+about 5 percent headroom and keeps future growth visible. Of the growth over
+0.7.1, roughly 1.3 kB is the library itself, the inline discard confirmation
+and the shared empty states account for most of the rest, and 0.8.1's ActionBar
+and SegmentedControl fixes added about 300 bytes.
 
 ## Local development against a real Signal K server
 
@@ -399,9 +401,36 @@ release.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
 - Webpack 5, esbuild-loader 4, React 19, React DOM 19, and
-  `signalk-nearlcrews-ui` 0.8.0
+  `signalk-nearlcrews-ui` 0.8.1
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
+
+## Third-party notices
+
+The configuration panel is a Module Federation remote, so its dependency tree
+is bundled into `public/*.mjs`, and esbuild inlines every runtime dependency
+into `dist/index.js`. The published package therefore redistributes both trees:
+MIT requires the copyright and permission notice to travel with a copy, and
+Apache-2.0 section 4(a) requires giving recipients the license. Terser's
+sidecar extracts only comments marked `@license` or `@preserve`, which here
+covers the React JSX runtime alone, so it discharges neither obligation.
+
+`THIRD_PARTY_NOTICES.md` is therefore GENERATED, not hand-maintained. Run
+`npm run licenses` after any change to either bundle's dependency tree, and
+`npm run package:check` re-verifies the committed copy with `--check`: it
+fails when the file is missing, was generated for a different shared UI
+version, names a package that is no longer installed, no longer matches a
+package's declared license, or omits a runtime dependency that reaches
+`dist/index.js`.
+
+The panel package list comes from the webpack statistics the panel build
+already writes to `.tmp/panel-stats.json`, walked recursively. The recursion is
+load-bearing: module concatenation nests the interesting records under a parent
+module and reports an empty chunk list for them, so a shallow read, or a read
+that filters on chunk membership, reports neither `react-aria` nor anything
+else reached through the shared UI. `react-aria` is bundled by every panel that
+renders `PanelRoot`, because `PanelRoot` installs React Aria's portal provider,
+whether or not the panel imports a focused entry point.
 
 ## License
 

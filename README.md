@@ -18,23 +18,25 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.4
+## What's new in 0.7.5
 
-0.7.4 adds selectable history providers, strengthens configuration safety, and
-refreshes the shared panel and release checks.
+0.7.5 refreshes the shared configuration panel, corrects the bundled-code
+attribution, and tightens the packaging checks.
 
-- **QuestDB or InfluxDB history** lets aging, drift, and forecast analyzers use
-  QuestDB, InfluxDB 1.x, or InfluxDB 2.x through its InfluxQL API.
-- **Credential-safe connection tests** reject embedded credentials and
-  redirects, keep authentication in headers, and return sanitized errors.
-- **Compatible configuration migration** moves legacy QuestDB settings into
-  the history block while preserving fields introduced by newer versions.
-- **Shared UI 0.7.1** supplies the secret input, viewport-aware action bar,
-  theme behavior, and strict host React and React DOM singleton contract.
-- **Stronger release validation** checks documentation, package provenance
-  metadata, App Store inputs, dependency boundaries, and current toolchains.
+- **Shared UI 0.8.1** fixes a docked action bar that could swallow the first
+  click on a control it overlaps, and a segmented control that could submit a
+  value it did not display after a native form reset.
+- **Generated third-party notices** are built from the packages the panel and
+  backend bundles actually carry, with each license text embedded, and are
+  re-verified by the packaging check on every release.
+- **Corrected attribution** adds `react-aria`, which every panel bundles
+  through the shared panel root and the previous notices omitted.
+- **Runtime-matched Node types** keep `@types/node` on the same major version
+  as the supported Node 22.18 floor, enforced by the packaging check.
+- **Friendlier status ages** read as words, so a status that just refreshed
+  shows "now" instead of "0 sec. ago".
 
-See the [v0.7.4 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v074) and the
+See the [v0.7.5 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v075) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
@@ -101,7 +103,7 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React and React DOM are supplied by the Signal K admin host. Version 0.8.0
+  React and React DOM are supplied by the Signal K admin host. Version 0.8.1
   starts fresh profiles in Auto, follows an explicit host theme, and otherwise
   stays Light. System follows the operating-system preference, and all explicit
   choices persist under the shared key.
