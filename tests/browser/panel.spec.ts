@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import packageJson from '../../package.json' with { type: 'json' };
 
 const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui'];
@@ -387,23 +387,26 @@ test('responds to a 320-pixel embedded panel inside a wide host', async ({ page 
   expect(page.viewportSize()).toMatchObject({ width: 1280 });
 });
 
-// Every interactive control in the panel, not a sample of three. Two things
-// are checked together because either alone gives a false reading: SIZE,
-// because a control can be too small to hit reliably, and REACHABILITY,
-// because a control can measure the full floor and still sit under the docked
-// action bar. The hit target is the wrapping label when there is one, which is
-// how a 20-pixel painted checkbox still offers a 44-pixel target.
-test('gives every interactive control a reachable pointer target', async ({ page }) => {
-  test.setTimeout(120_000);
-  // Controls that only exist while a section or drawer is open count too.
-  await page.getByRole('button', { name: 'OpenRouter' }).click();
-  await page.getByRole('button', { name: 'History source' }).click();
-  await page.getByRole('button', { name: 'Analyzers' }).click();
-  await page.getByRole('button', { name: 'Weather Outlook Advisor', exact: true }).click();
-  await page.getByRole('button', { name: /View reports for Weather/ }).click();
-  await page.getByRole('button', { name: /Edit prompt for Weather/ }).click();
-
-  const measurement = await page.evaluate(() => {
+// Measures every interactive control on screen: SIZE against the pointer floor
+// and REACHABILITY at the target's center. Either alone gives a false reading.
+// A control can measure the full floor and still be covered by the docked
+// action bar, and a 20-pixel painted checkbox can be fine because its wrapping
+// label carries the target. Exported as a helper so every panel state gets the
+// same treatment.
+async function measurePointerTargets(
+  page: Page,
+  // Limits the sweep to one subtree. Used for the discard confirmation, where
+  // the rest of the page is legitimately covered by the grown action bar.
+  rootSelector = 'body',
+): Promise<{
+  floor: number;
+  measured: number;
+  undersized: string[];
+  blocked: string[];
+}> {
+  return page.evaluate(async (scope: string) => {
+    const root = document.querySelector(scope);
+    if (root === null) throw new Error(`No element matched ${scope}.`);
     const SELECTOR =
       'button, a[href], input:not([type="hidden"]), select, textarea, [role="checkbox"], [role="radio"], [role="switch"]';
     // WCAG 2.5.8 asks 24 pixels; the shared UI promises 40 on a fine pointer
@@ -413,7 +416,7 @@ test('gives every interactive control a reachable pointer target', async ({ page
     const blocked: string[] = [];
     let measured = 0;
 
-    for (const element of Array.from(document.querySelectorAll(SELECTOR))) {
+    for (const element of Array.from(root.querySelectorAll(SELECTOR))) {
       if (!(element instanceof HTMLElement)) continue;
       // A user scrolls a control into view before pressing it, so measure it
       // the same way rather than judging whatever happens to be on screen.
@@ -434,26 +437,106 @@ test('gives every interactive control a reachable pointer target', async ({ page
       if (target.width < floor || target.height < floor) {
         undersized.push(`${name} (${size}, floor ${floor})`);
       }
-      const hit = document.elementFromPoint(
-        target.x + target.width / 2,
-        target.y + target.height / 2,
-      );
-      const reachable =
-        hit !== null &&
-        (hit === element ||
-          element.contains(hit) ||
-          hit.contains(element) ||
-          (label !== null && (label === hit || label.contains(hit))));
-      if (!reachable) {
-        const blocker = (hit?.className || hit?.tagName || 'nothing').toString().slice(0, 48);
+      const hitTest = () => {
+        const box = label?.getBoundingClientRect() ?? element.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        const reached =
+          hit !== null &&
+          (hit === element ||
+            element.contains(hit) ||
+            hit.contains(element) ||
+            (label !== null && (label === hit || label.contains(hit))));
+        return { hit, reached };
+      };
+      let probe = hitTest();
+      if (!probe.reached) {
+        // The viewport-bottom action bar re-measures and re-docks in a
+        // deferred frame, so a hit test in the same task as the scroll can
+        // catch it still covering content it is about to release. Settle and
+        // ask once more before calling anything blocked; a control that is
+        // genuinely covered stays covered.
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        probe = hitTest();
+      }
+      if (!probe.reached) {
+        const blocker = (probe.hit?.className || probe.hit?.tagName || 'nothing')
+          .toString()
+          .slice(0, 48);
         blocked.push(`${name} covered by ${blocker}`);
       }
     }
     return { floor, measured, undersized, blocked };
-  });
+  }, rootSelector);
+}
+
+test('gives every interactive control a reachable pointer target', async ({ page }) => {
+  test.setTimeout(120_000);
+  // Controls that only exist while a section or drawer is open count too.
+  await page.getByRole('button', { name: 'OpenRouter' }).click();
+  await page.getByRole('button', { name: 'History source' }).click();
+  await page.getByRole('button', { name: 'Analyzers' }).click();
+  await page.getByRole('button', { name: 'Weather Outlook Advisor', exact: true }).click();
+  await page.getByRole('button', { name: /View reports for Weather/ }).click();
+  await page.getByRole('button', { name: /Edit prompt for Weather/ }).click();
+  // The InfluxDB branch renders five more fields than the QuestDB default.
+  await page.getByRole('combobox', { name: 'History provider' }).selectOption('influxdb');
+  await expect(page.getByRole('textbox', { name: 'InfluxDB URL', exact: true })).toBeVisible();
+
+  const measurement = await measurePointerTargets(page);
 
   // A selector that stops matching would otherwise pass this test silently.
-  expect(measurement.measured).toBeGreaterThan(20);
+  expect(measurement.measured).toBeGreaterThan(25);
+  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
+  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
+});
+
+// The discard confirmation renders inside the action bar, so it gets its own
+// page rather than being stacked onto the sweep above: opening it grows the
+// docked bar (105 to 356 pixels on a coarse viewport), which legitimately
+// covers page content beneath it and would make a combined measurement report
+// a layout consequence as if it were a defect.
+test('gives the discard confirmation a reachable pointer target', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.getByRole('button', { name: 'Add API key' }).click();
+  await page.getByRole('textbox', { name: 'API key', exact: true }).fill('fixture-key');
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(page.getByText('Discard unsaved changes?')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Keep editing' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Discard changes' })).toBeVisible();
+
+  // Scoped to the action bar: page controls behind the open confirmation are
+  // covered by design, so sweeping the whole document here would report a
+  // layout consequence as a defect. What must hold is that the confirmation's
+  // own controls, and the bar's, are sized and reachable.
+  const measurement = await measurePointerTargets(page, '[data-panel-action-bar]');
+
+  expect(measurement.measured).toBeGreaterThan(3);
+  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
+  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
+});
+
+test('gives failure-state controls a reachable pointer target', async ({ page }) => {
+  test.setTimeout(120_000);
+  // The retry banner and the prompt drawer's error branch each own a control
+  // the happy path never renders, which is exactly where an undersized target
+  // hides from every other gate.
+  await page.goto('/?models-error&prompt-error');
+  await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
+
+  await page.getByRole('button', { name: 'OpenRouter' }).click();
+  await page.getByRole('combobox', { name: 'Model', exact: true }).focus();
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Analyzers' }).click();
+  await page.getByRole('button', { name: 'Maintenance Advisor', exact: true }).click();
+  await page.getByRole('button', { name: /Edit prompt for Maintenance/ }).click();
+  await expect(page.getByText(/Failed to load prompt/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
+
+  const measurement = await measurePointerTargets(page);
+
+  expect(measurement.measured).toBeGreaterThan(10);
   expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
   expect(measurement.blocked, 'controls covered by another element').toEqual([]);
 });

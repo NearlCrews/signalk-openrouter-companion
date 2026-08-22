@@ -41,6 +41,11 @@ interface ShareScope {
 const parameters = new URLSearchParams(window.location.search);
 const screenshotMode = parameters.has('screenshots');
 const statusRaceMode = parameters.has('status-race');
+// Failure modes for surfaces the happy path never renders: the model-list
+// retry banner and the prompt drawer's error branch each own a control that
+// would otherwise be unmeasurable and untested.
+const modelsErrorMode = parameters.has('models-error');
+const promptErrorMode = parameters.has('prompt-error');
 if (parameters.has('unsupported-css-scope')) {
   Object.defineProperty(window, 'CSSScopeRule', {
     configurable: true,
@@ -154,6 +159,7 @@ window.fetch = async (input, init): Promise<Response> => {
   if (path.endsWith('/openrouter/models')) {
     const requestCount = Number(document.body.dataset.modelRequestCount ?? 0) + 1;
     document.body.dataset.modelRequestCount = String(requestCount);
+    if (modelsErrorMode) return jsonResponse({ error: 'model list unavailable' }, 502);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 150));
     return jsonResponse({
       data: [
@@ -178,6 +184,7 @@ window.fetch = async (input, init): Promise<Response> => {
   }
   if (path.endsWith('/reports')) return jsonResponse({ reports: [] });
   if (path.endsWith('/prompt')) {
+    if (promptErrorMode) return jsonResponse({ error: 'prompt unavailable' }, 502);
     return jsonResponse({ default: 'Summarize the vessel data.', current: null });
   }
   if (path.endsWith('/fire') && init?.method === 'POST') {
