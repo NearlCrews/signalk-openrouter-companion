@@ -68,7 +68,10 @@ function bundledBackendPackages() {
 function licenseTextFor(name) {
   for (const candidate of ['LICENSE', 'license', 'LICENSE.md', 'LICENSE.txt']) {
     const url = new URL(`node_modules/${name}/${candidate}`, repositoryDir);
-    if (existsSync(url)) return readFileSync(url, 'utf8').trim();
+    // Normalize to LF: croner ships CRLF, and .gitattributes checks this file
+    // out as LF, so keeping the source endings would leave a freshly generated
+    // file permanently dirty against the committed one.
+    if (existsSync(url)) return readFileSync(url, 'utf8').replace(/\r\n/g, '\n').trim();
   }
   return null;
 }
