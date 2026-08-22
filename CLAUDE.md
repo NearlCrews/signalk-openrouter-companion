@@ -49,6 +49,12 @@ Project memory for Claude Code. Read at the start of every session.
 - The panel list is derived by walking `.tmp/panel-stats.json` RECURSIVELY. Do not filter on chunk membership and do not read only the top level: module concatenation nests records under a parent and reports an empty chunk list for them, which is exactly how `react-aria` was missed before. `react-aria` ships in every panel that renders `PanelRoot`, because `PanelRoot` installs React Aria's portal provider.
 - Never answer "what does the bundle ship" from a dependency list, or from a module graph read only at its top level. Grep the emitted output, or walk the statistics the way the generator does.
 
+## Pointer targets
+
+- `tests/browser/panel.spec.ts` sweeps EVERY interactive control, not a sample, and runs on all four Playwright projects: 40px floor on a fine pointer, 44px on a coarse one, chosen from the pointer media query.
+- It asserts SIZE and REACHABILITY together, because either alone gives a false reading. A control can measure the full floor and still be covered by the docked action bar, and a 20px painted checkbox can be fine because its wrapping label carries a 44px target. The sweep scrolls each control to viewport center first, the way a real user reaches it, then checks the control, its label, or a descendant is topmost at the target's center.
+- The family's root cause for undersized targets was a repo-local hardcoded control height that cannot carry the coarse-pointer media query. This panel declares none: every control takes its size from the shared library. Keep it that way, and if a local size is ever unavoidable, point it at `--snui-control-min-height` rather than a literal.
+
 ## Standardized triggers contract
 
 - Every analyzer's config has `triggers: AnalyzerTriggerCfg`. The plugin lifecycle in `src/index.ts` registers triggers from the analyzer's `.triggers` array dynamically, driven by config.

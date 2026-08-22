@@ -387,13 +387,73 @@ test('responds to a 320-pixel embedded panel inside a wide host', async ({ page 
   expect(page.viewportSize()).toMatchObject({ width: 1280 });
 });
 
-test('provides coarse-pointer controls with 44-pixel targets @coarse', async ({ page }) => {
-  for (const control of [
-    page.getByRole('radio', { name: 'Auto' }),
-    page.getByRole('button', { name: 'OpenRouter' }),
-    page.getByRole('button', { name: 'Save configuration' }),
-  ]) {
-    const box = await control.boundingBox();
-    expect(box?.height).toBeGreaterThanOrEqual(44);
-  }
+// Every interactive control in the panel, not a sample of three. Two things
+// are checked together because either alone gives a false reading: SIZE,
+// because a control can be too small to hit reliably, and REACHABILITY,
+// because a control can measure the full floor and still sit under the docked
+// action bar. The hit target is the wrapping label when there is one, which is
+// how a 20-pixel painted checkbox still offers a 44-pixel target.
+test('gives every interactive control a reachable pointer target', async ({ page }) => {
+  test.setTimeout(120_000);
+  // Controls that only exist while a section or drawer is open count too.
+  await page.getByRole('button', { name: 'OpenRouter' }).click();
+  await page.getByRole('button', { name: 'History source' }).click();
+  await page.getByRole('button', { name: 'Analyzers' }).click();
+  await page.getByRole('button', { name: 'Weather Outlook Advisor', exact: true }).click();
+  await page.getByRole('button', { name: /View reports for Weather/ }).click();
+  await page.getByRole('button', { name: /Edit prompt for Weather/ }).click();
+
+  const measurement = await page.evaluate(() => {
+    const SELECTOR =
+      'button, a[href], input:not([type="hidden"]), select, textarea, [role="checkbox"], [role="radio"], [role="switch"]';
+    // WCAG 2.5.8 asks 24 pixels; the shared UI promises 40 on a fine pointer
+    // and 44 on a coarse one, so assert the stronger contract we ship.
+    const floor = window.matchMedia('(pointer: coarse)').matches ? 44 : 40;
+    const undersized: string[] = [];
+    const blocked: string[] = [];
+    let measured = 0;
+
+    for (const element of Array.from(document.querySelectorAll(SELECTOR))) {
+      if (!(element instanceof HTMLElement)) continue;
+      // A user scrolls a control into view before pressing it, so measure it
+      // the same way rather than judging whatever happens to be on screen.
+      element.scrollIntoView({ block: 'center', behavior: 'instant' });
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      const style = getComputedStyle(element);
+      if (style.visibility === 'hidden' || style.display === 'none') continue;
+      measured += 1;
+
+      const label = element.closest('label');
+      const target = label?.getBoundingClientRect() ?? rect;
+      const name =
+        element.getAttribute('aria-label') ??
+        element.textContent?.trim().slice(0, 32) ??
+        element.tagName.toLowerCase();
+      const size = `${Math.round(target.width)}x${Math.round(target.height)}`;
+      if (target.width < floor || target.height < floor) {
+        undersized.push(`${name} (${size}, floor ${floor})`);
+      }
+      const hit = document.elementFromPoint(
+        target.x + target.width / 2,
+        target.y + target.height / 2,
+      );
+      const reachable =
+        hit !== null &&
+        (hit === element ||
+          element.contains(hit) ||
+          hit.contains(element) ||
+          (label !== null && (label === hit || label.contains(hit))));
+      if (!reachable) {
+        const blocker = (hit?.className || hit?.tagName || 'nothing').toString().slice(0, 48);
+        blocked.push(`${name} covered by ${blocker}`);
+      }
+    }
+    return { floor, measured, undersized, blocked };
+  });
+
+  // A selector that stops matching would otherwise pass this test silently.
+  expect(measurement.measured).toBeGreaterThan(20);
+  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
+  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
 });
