@@ -29,6 +29,7 @@ if (packageJson.signalk?.displayName !== 'OpenRouter Companion') {
   throw new Error('signalk.displayName must remain OpenRouter Companion.');
 }
 for (const recommendation of [
+  'signalk-binnacle',
   'signalk-nmea2000-emitter-cannon',
   'signalk-questdb',
   'signalk-to-influxdb',
@@ -138,7 +139,7 @@ if (packageJson.exports?.['.'] !== './dist/index.js') {
 if (packageJson.dependencies?.['signalk-nearlcrews-ui']) {
   throw new Error('signalk-nearlcrews-ui must be a bundled development dependency.');
 }
-for (const lifecycleScript of ['prepare', 'preinstall', 'install', 'postinstall']) {
+for (const lifecycleScript of ['prepare', 'prepack', 'preinstall', 'install', 'postinstall']) {
   if (packageJson.scripts?.[lifecycleScript]) {
     throw new Error(`Signal K plugins must not define an ${lifecycleScript} lifecycle script.`);
   }
@@ -146,8 +147,8 @@ for (const lifecycleScript of ['prepare', 'preinstall', 'install', 'postinstall'
 if (packageJson.gitHead !== undefined && !/^[0-9a-f]{40}$/.test(packageJson.gitHead)) {
   throw new Error('gitHead must be a full lowercase Git commit SHA when it is present.');
 }
-if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.7.1') {
-  throw new Error('The UI package must be pinned to exact version 0.7.1 during its 0.x series.');
+if (packageJson.devDependencies?.['signalk-nearlcrews-ui'] !== '0.8.0') {
+  throw new Error('The UI package must be pinned to exact version 0.8.0 during its 0.x series.');
 }
 
 console.log(`Packed package passed: ${files.size} files in ${packResult.filename}.`);

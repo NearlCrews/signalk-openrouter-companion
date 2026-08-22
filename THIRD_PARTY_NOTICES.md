@@ -7,8 +7,8 @@ following packages:
 - `react` 19.2.8, MIT License, Copyright (c) Meta Platforms, Inc. and affiliates
 - `css-loader` 7.1.4, MIT License, Copyright JS Foundation and other contributors
 - `style-loader` 4.0.0, MIT License, Copyright JS Foundation and other contributors
-- `webpack` 5.109.0, MIT License, Copyright JS Foundation and other contributors
-- `signalk-nearlcrews-ui` 0.7.1, Apache License 2.0, Nearl Crews
+- `webpack` 5.109.2, MIT License, Copyright JS Foundation and other contributors
+- `signalk-nearlcrews-ui` 0.8.0, Apache License 2.0, Nearl Crews
 
 The Apache License 2.0 text applicable to `signalk-nearlcrews-ui` is included
 in [LICENSE](LICENSE).
