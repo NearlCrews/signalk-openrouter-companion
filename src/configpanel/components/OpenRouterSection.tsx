@@ -1,5 +1,5 @@
 import type { ReactElement, RefObject } from 'react';
-import { memo } from 'react';
+import { memo, useId } from 'react';
 import { Banner, Button, LabeledField, Select, Stack, TextInput } from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
 import type { ModelOption, ModelsState, PanelConfig } from '../types.js';
@@ -12,6 +12,9 @@ interface Props {
   modelsState: ModelsState;
   loadModels: () => Promise<void>;
   apiKeyRef: RefObject<HTMLInputElement | null>;
+  // True once a save attempt was blocked here, which is the only moment a field
+  // error is newly relevant and worth announcing.
+  submitted: boolean;
 }
 
 export const OpenRouterSection = memo(function OpenRouterSection({
@@ -21,9 +24,12 @@ export const OpenRouterSection = memo(function OpenRouterSection({
   modelsState,
   loadModels,
   apiKeyRef,
+  submitted,
 }: Props): ReactElement {
   const openRouter: NonNullable<PanelConfig['openrouter']> = cfg.openrouter ?? {};
   const noApiKey = !openRouter.apiKey?.trim();
+  // Two panels mounted in one document must not share a datalist id.
+  const modelListId = useId();
   const modelHint =
     modelsState === 'loading'
       ? 'Loading available models...'
@@ -37,6 +43,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         label="API key"
         description="Required to call the LLM. The value remains in Signal K plugin configuration."
         error={noApiKey ? 'Enter an OpenRouter API key.' : undefined}
+        errorLive={submitted ? 'polite' : 'off'}
         layout="inline"
         required
       >
@@ -60,7 +67,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
 
       <LabeledField label="Model" description={modelHint} layout="inline">
         <TextInput
-          list="openrouter-models"
+          list={modelListId}
           spellCheck={false}
           value={openRouter.model ?? ''}
           placeholder="provider/model-name"
@@ -68,7 +75,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
           onChange={(event) => set({ openrouter: { ...openRouter, model: event.target.value } })}
         />
       </LabeledField>
-      <datalist id="openrouter-models">
+      <datalist id={modelListId}>
         {models.map((model) => (
           <option key={model.id} value={model.id}>
             {model.name ?? model.id}
@@ -97,7 +104,6 @@ export const OpenRouterSection = memo(function OpenRouterSection({
       >
         <IntegerInput
           value={openRouter.maxCallsPerDay}
-          allowEmpty
           min={1}
           placeholder="50"
           onValueChange={(value) => set({ openrouter: { ...openRouter, maxCallsPerDay: value } })}

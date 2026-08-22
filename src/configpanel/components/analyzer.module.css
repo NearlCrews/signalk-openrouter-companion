@@ -1,7 +1,22 @@
 .title {
   min-width: 0;
-  font-weight: 700;
+  font-weight: var(--snui-font-weight-bold);
   overflow-wrap: anywhere;
+}
+
+/* Local copy of the visually-hidden pattern. The shared library ships one too,
+   but its class is internal, so relying on it would break silently on a
+   compatible library release. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .drawer {
@@ -27,11 +42,13 @@
 .reportTimestamp,
 .reportMetadata {
   color: var(--snui-color-text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--snui-font-size-xs);
   overflow-wrap: anywhere;
 }
 
+/* Timestamps, model slugs, and prompt text are fixed-width content. */
 .reportTimestamp,
+.reportMetadata,
 .textarea {
   font-family: var(--snui-font-family-mono);
 }
@@ -39,14 +56,14 @@
 .reportBody,
 .reportFailure {
   margin-block-start: var(--snui-space-2);
-  font-size: 0.875rem;
+  font-size: var(--snui-font-size-sm);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .reportFailure {
   color: var(--snui-color-danger);
-  font-weight: 650;
+  font-weight: var(--snui-font-weight-semibold);
 }
 
 .textarea {

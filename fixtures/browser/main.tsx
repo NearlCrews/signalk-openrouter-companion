@@ -1,6 +1,9 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { createRoot } from 'react-dom/client';
+// The framework-neutral token sheet. It runs no JavaScript and imports no
+// React: it only gives this host page the same palette the panel uses.
+import 'signalk-nearlcrews-ui/tokens.css';
 
 declare const __REMOTE_URL__: string;
 
@@ -266,6 +269,23 @@ try {
       <HostFixture />
     </React.StrictMode>,
   );
+
+  // Mirror the panel's resolved theme onto the token-bearing host page, the way
+  // a real admin host would follow its own theme. Absence means Auto, which the
+  // token sheet resolves on its own.
+  const syncHostTheme = (): void => {
+    const theme = document.querySelector('[data-snui-root]')?.getAttribute('data-snui-theme');
+    if (theme === null || theme === undefined) delete document.body.dataset.snuiTheme;
+    else document.body.dataset.snuiTheme = theme;
+  };
+  new MutationObserver(syncHostTheme).observe(rootElement, {
+    attributeFilter: ['data-snui-theme'],
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+  syncHostTheme();
+
   document.body.dataset.fixtureReady = 'true';
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

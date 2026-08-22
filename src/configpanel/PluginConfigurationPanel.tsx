@@ -6,6 +6,7 @@ import {
   Button,
   Cluster,
   CollapsibleSection,
+  InlineConfirm,
   PanelRoot,
   Section,
   Stack,
@@ -15,7 +16,8 @@ import {
   ThemeToggle,
   UnsupportedBrowserNotice,
 } from 'signalk-nearlcrews-ui';
-import { DEFAULT_SEVERITY_FLOOR_VALUE } from '../severityFloors.js';
+import { EmptyState } from 'signalk-nearlcrews-ui/composites';
+import { DEFAULT_SEVERITY_FLOOR_VALUE, isSeverityFloor } from '../severityFloors.js';
 import { errText, fetchJson, REPORT_LIMIT } from './api.js';
 import { AnalyzerRow } from './components/AnalyzerRow.js';
 import { HistorySection } from './components/HistorySection.js';
@@ -26,7 +28,7 @@ import { useOpenRouterModels } from './hooks/useOpenRouterModels.js';
 import { useSaveLifecycle } from './hooks/useSaveLifecycle.js';
 import { useStatus } from './hooks/useStatus.js';
 import type { AnalyzerUiState, HistoryTestResult, PanelConfig, TestResult } from './types.js';
-import { isHttpUrl, isPromptOverride } from './utils.js';
+import { HISTORY_URL_RULE, historyValidity, isPromptOverride } from './utils.js';
 
 interface Props {
   configuration: PanelConfig | undefined;
@@ -41,6 +43,13 @@ const SECTION_ANALYZERS = 'orc-section-analyzers';
 // One shared empty-ui object so an analyzer with no UI state yet passes a stable
 // reference to its (memoized) row instead of a fresh `{}` every render.
 const EMPTY_UI: AnalyzerUiState = Object.freeze({});
+
+// The forecast analyzer coerces a saved severity floor that is off the preset
+// scale back to the default (see analyzers/forecast.ts), so the dropdown shows
+// the same value the plugin is actually running with.
+function severityFloorFor(saved: string | undefined): string {
+  return isSeverityFloor(saved) ? saved : DEFAULT_SEVERITY_FLOOR_VALUE;
+}
 
 export default function PluginConfigurationPanel(props: Props): ReactElement {
   if (!supportsNativeCssScope(window)) {
@@ -80,7 +89,9 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   const [validationTarget, setValidationTarget] = useState<
     'api-key' | 'history-url' | 'history-database' | null
   >(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const apiKeyRef = useRef<HTMLInputElement>(null);
+  const discardButtonRef = useRef<HTMLButtonElement>(null);
   const historyUrlRef = useRef<HTMLInputElement>(null);
   const historyDatabaseRef = useRef<HTMLInputElement>(null);
   const setHistorySection = useCallback(
@@ -118,12 +129,16 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   const openSection = useCallback((id: string): void => {
     setOpenSections((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
   }, []);
-  // Post-fire report refresh timer, tracked so it is cleared on unmount.
-  const reportRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Post-fire report refresh timers, one per analyzer so firing a second
+  // analyzer cannot cancel the first one's pending refresh. Tracked so every
+  // pending timer is cleared on unmount.
+  const reportRefreshTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   useEffect(() => {
+    const timers = reportRefreshTimersRef.current;
     return () => {
-      if (reportRefreshTimerRef.current) clearTimeout(reportRefreshTimerRef.current);
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
     };
   }, []);
 
@@ -258,20 +273,27 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
       // drawer state via the ref: the multi-second fire means the closed-over
       // analyzerUi is stale by the time it resolves.
       if (analyzerUiRef.current[id]?.reportsOpen) {
-        if (reportRefreshTimerRef.current) clearTimeout(reportRefreshTimerRef.current);
-        reportRefreshTimerRef.current = setTimeout(() => loadReports(id), 800);
+        const timers = reportRefreshTimersRef.current;
+        const pending = timers.get(id);
+        if (pending) clearTimeout(pending);
+        timers.set(
+          id,
+          setTimeout(() => {
+            timers.delete(id);
+            void loadReports(id);
+          }, 800),
+        );
       }
     },
     [patchUi, loadReports],
   );
 
-  // A pure expand/collapse toggle with no side effect, so it funnels through
-  // patchUi like every other per-id mutation. Reads the live value off the ref
-  // (kept in sync above) so a rapid double-click toggles from the committed
-  // state, not a stale closure.
-  const toggleExpand = useCallback(
-    (id: string): void => {
-      patchUi(id, { expanded: !analyzerUiRef.current[id]?.expanded });
+  // A pure expand/collapse write with no side effect, so it funnels through
+  // patchUi like every other per-id mutation. The section reports the state it
+  // is moving to, so nothing has to be re-derived here.
+  const setExpanded = useCallback(
+    (id: string, expanded: boolean): void => {
+      patchUi(id, { expanded });
     },
     [patchUi],
   );
@@ -362,9 +384,10 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   };
 
   const noApiKey = !(cfg.openrouter?.apiKey ?? '').trim();
-  const historyUrl = historySource === 'influxdb' ? influxdbUrl : questdbUrl;
-  const invalidHistoryUrl = historySource !== 'none' && !isHttpUrl(historyUrl);
-  const missingHistoryDatabase = historySource === 'influxdb' && !(influxdbDatabase ?? '').trim();
+  // One derivation of the history validation state, shared with HistorySection
+  // so the save gate and the marked field can never disagree.
+  const history = historyValidity(cfg.history);
+  const badHistoryUrl = history.noUrl || history.invalidUrl;
 
   // Open the OpenRouter section and move focus to the API key field, so the
   // first-run callout's button lands the user exactly where they need to type.
@@ -395,12 +418,12 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
       focusApiKey();
       return;
     }
-    if (invalidHistoryUrl) {
+    if (badHistoryUrl) {
       setValidationTarget('history-url');
       focusHistoryUrl();
       return;
     }
-    if (missingHistoryDatabase) {
+    if (history.missingDatabase) {
       setValidationTarget('history-database');
       focusHistoryDatabase();
       return;
@@ -410,6 +433,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   };
 
   const handleDiscard = (): void => {
+    setDiscardConfirmOpen(false);
     setValidationTarget(null);
     discardConfiguration();
   };
@@ -420,9 +444,9 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   const validationText =
     validationTarget === 'api-key' && noApiKey
       ? 'Enter an OpenRouter API key before saving.'
-      : validationTarget === 'history-url' && invalidHistoryUrl
-        ? 'Enter a valid history-provider HTTP or HTTPS base URL without credentials, a query, or a fragment before saving.'
-        : validationTarget === 'history-database' && missingHistoryDatabase
+      : validationTarget === 'history-url' && badHistoryUrl
+        ? `Enter a valid history-provider ${HISTORY_URL_RULE} before saving.`
+        : validationTarget === 'history-database' && history.missingDatabase
           ? 'Enter the InfluxDB database or DBRP database name before saving.'
           : '';
   const saveStatusTone: StatusTone = validationText
@@ -485,6 +509,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
             modelsState={modelsState}
             loadModels={loadModels}
             apiKeyRef={apiKeyRef}
+            submitted={validationTarget === 'api-key'}
           />
         </CollapsibleSection>
 
@@ -502,6 +527,9 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
             testing={historyTesting}
             urlRef={historyUrlRef}
             databaseRef={historyDatabaseRef}
+            submitted={
+              validationTarget === 'history-url' || validationTarget === 'history-database'
+            }
           />
         </CollapsibleSection>
 
@@ -514,11 +542,14 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
         >
           <Stack gap={2}>
             {analyzersList.length === 0 ? (
-              <StatusIndicator tone="neutral">
-                {status
-                  ? 'No analyzers reported by the plugin yet.'
-                  : 'Analyzer list loads once the plugin is running.'}
-              </StatusIndicator>
+              <EmptyState
+                title={status ? 'No analyzers reported' : 'Waiting for the plugin'}
+                description={
+                  status
+                    ? 'The plugin is running but reported no analyzers.'
+                    : 'The analyzer list loads once the plugin is running.'
+                }
+              />
             ) : null}
             {analyzersList.map((analyzer) => (
               <AnalyzerRow
@@ -527,7 +558,7 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
                 enabled={cfg.analyzers?.[analyzer.id]?.enabled ?? analyzer.enabled}
                 setEnabled={handleSetEnabled}
                 ui={analyzerUi[analyzer.id] ?? EMPTY_UI}
-                onToggleExpand={toggleExpand}
+                onToggleExpand={setExpanded}
                 onFire={fireAnalyzer}
                 onToggleReports={toggleReports}
                 onTogglePrompt={togglePrompt}
@@ -535,14 +566,15 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
                 onPromptChange={onPromptChange}
                 onPromptReset={onPromptReset}
                 schedule={
-                  cfg.analyzers?.[analyzer.id]?.triggers?.cron?.pattern ??
-                  analyzer.cron?.pattern ??
-                  ''
+                  cfg.analyzers?.[analyzer.id]?.triggers?.cron?.pattern ?? analyzer.cron.pattern
                 }
                 onScheduleChange={setSchedule}
+                // A saved value off the preset scale is coerced to the default
+                // by the analyzer, so the dropdown shows the default too rather
+                // than blanking on a value the plugin is not using.
                 severityFloor={
                   analyzer.hasSeverityFloor
-                    ? (cfg.analyzers?.[analyzer.id]?.severityFloor ?? DEFAULT_SEVERITY_FLOOR_VALUE)
+                    ? severityFloorFor(cfg.analyzers?.[analyzer.id]?.severityFloor)
                     : undefined
                 }
                 onSeverityFloorChange={handleSeverityFloorChange}
@@ -556,16 +588,32 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
           data-panel-action-bar=""
           statusRef={savedNoticeRef}
           status={
-            <StatusIndicator tone={saveStatusTone} role="status" aria-live="polite">
+            <StatusIndicator tone={saveStatusTone} live="polite">
               {saveStatusText}
             </StatusIndicator>
           }
           actions={
             <>
+              <InlineConfirm
+                // Closes itself if the buffer goes clean while it is open, so
+                // it cannot ask about edits that no longer exist.
+                open={discardConfirmOpen && dirty}
+                title="Discard unsaved changes?"
+                message="Every unsaved edit in this panel is reverted, including prompt overrides."
+                confirmLabel="Discard changes"
+                cancelLabel="Keep editing"
+                returnFocusRef={discardButtonRef}
+                onCancel={() => setDiscardConfirmOpen(false)}
+                onConfirm={handleDiscard}
+              />
               <Button
-                disabled={!dirty || saving}
-                title={dirty ? 'Revert all unsaved edits' : undefined}
-                onClick={handleDiscard}
+                ref={discardButtonRef}
+                // aria-disabled rather than disabled: the button self-disables
+                // the moment the buffer goes clean, and keeping it focusable
+                // means focus does not drop to <body> when that happens.
+                ariaDisabled={!dirty || saving}
+                title={dirty ? 'Revert all unsaved edits' : 'No unsaved changes to revert'}
+                onClick={() => setDiscardConfirmOpen(true)}
               >
                 Discard
               </Button>

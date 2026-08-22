@@ -12,6 +12,7 @@ const FIRE_OUTCOME_TEXT: Record<string, string> = {
   'budget-exhausted': 'Daily call budget exhausted',
   failed: 'Analysis failed (check notifications)',
   unknown: 'Analyzer not registered',
+  'already-running': 'Already running',
 };
 
 // Outcomes that read as a failure (danger color); everything else is a normal

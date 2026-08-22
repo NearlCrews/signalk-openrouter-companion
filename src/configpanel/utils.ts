@@ -1,3 +1,5 @@
+import type { PanelConfig } from './types.js';
+
 // Structural equality used to detect a dirty edit buffer and to skip
 // redundant status-state updates. Order-insensitive on object keys: the panel
 // edit buffer and the saved JSON can be structurally equal but key-ordered
@@ -42,14 +44,6 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return aDefined === bDefined;
 }
 
-// Bound n to [min, max]. Shared by IntegerInput's commit step so a clamped,
-// truncated integer is the only value that reaches the config.
-export function clamp(n: number, min: number, max: number): number {
-  if (n < min) return min;
-  if (n > max) return max;
-  return n;
-}
-
 // Whether the prompt text differs from the analyzer's built-in default. A
 // missing default (the prompt fetch failed) counts as an override so the edit
 // buffer is not silently discarded. Single-sources the "is this a custom
@@ -57,6 +51,34 @@ export function clamp(n: number, min: number, max: number): number {
 // typed-back-to-default detection.
 export function isPromptOverride(value: string, promptDefault: string | undefined): boolean {
   return value !== promptDefault;
+}
+
+// The base-URL rule, written once. Both the history field error and the
+// save-blocked notice quote it, so a wording change cannot leave the two
+// describing different rules.
+export const HISTORY_URL_RULE =
+  'HTTP or HTTPS base URL without credentials, a query, or a fragment';
+
+export interface HistoryValidity {
+  source: NonNullable<PanelConfig['history']>['source'];
+  noUrl: boolean;
+  invalidUrl: boolean;
+  missingDatabase: boolean;
+}
+
+// Single derivation of the history-provider validation state. The panel gates
+// Save on it and HistorySection marks the offending field from it, so the two
+// can never disagree about which value is wrong or which message to show.
+export function historyValidity(history: PanelConfig['history']): HistoryValidity {
+  const source = history?.source ?? 'questdb';
+  const url = source === 'influxdb' ? history?.influxdb?.url : history?.questdb?.url;
+  const noUrl = source !== 'none' && !url?.trim();
+  return {
+    source,
+    noUrl,
+    invalidUrl: source !== 'none' && !noUrl && !isHttpUrl(url),
+    missingDatabase: source === 'influxdb' && !history?.influxdb?.database?.trim(),
+  };
 }
 
 // History providers only support HTTP and HTTPS base URLs. Credentials, query

@@ -48,7 +48,7 @@ export const StatusBlock = memo(function StatusBlock({
   }
   if (!status) {
     return (
-      <StatusIndicator tone="info" role="status" aria-live="polite">
+      <StatusIndicator tone="info" live="polite">
         Loading status...
       </StatusIndicator>
     );
@@ -117,11 +117,7 @@ export const StatusBlock = memo(function StatusBlock({
           <StatusIndicator tone="neutral">Save an API key to enable this test.</StatusIndicator>
         ) : null}
         {testResult ? (
-          <StatusIndicator
-            tone={testResult.ok ? 'success' : 'danger'}
-            role="status"
-            aria-live="polite"
-          >
+          <StatusIndicator tone={testResult.ok ? 'success' : 'danger'} live="polite">
             {testResult.text}
           </StatusIndicator>
         ) : null}

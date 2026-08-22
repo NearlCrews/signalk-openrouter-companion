@@ -11,7 +11,7 @@ import {
 } from 'signalk-nearlcrews-ui';
 import type { AnalyzerUiState } from '../types.js';
 import { isPromptOverride } from '../utils.js';
-import styles from './AnalyzerRow.module.css';
+import styles from './analyzer.module.css';
 
 interface Props {
   analyzerId: string;
@@ -33,7 +33,7 @@ export function PromptDrawer({
   if (!ui.promptLoaded) {
     return (
       <Card>
-        <StatusIndicator tone="info" role="status" aria-live="polite">
+        <StatusIndicator tone="info" live="polite">
           Loading prompt...
         </StatusIndicator>
       </Card>
@@ -74,7 +74,9 @@ export function PromptDrawer({
         </LabeledField>
         <Cluster gap={2} justify="end">
           <Button
-            disabled={!isOverride}
+            // aria-disabled rather than disabled: the control keeps focus and
+            // its title, so the reason it is inert reaches keyboard users.
+            ariaDisabled={!isOverride}
             title={isOverride ? undefined : 'Already using the built-in default'}
             onClick={() => onReset(analyzerId)}
           >

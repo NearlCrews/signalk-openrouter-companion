@@ -11,9 +11,9 @@
 
     body {
       margin: 0;
-      background: #e9eef4;
-      color: #18202c;
-      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      background: var(--snui-color-background);
+      color: var(--snui-color-text);
+      font-family: var(--snui-font-family);
     }
 
     main {
@@ -28,7 +28,9 @@
     }
     </style>
   </head>
-  <body>
+  <!-- snui-tokens carries the shared palette into this non-React host page, so
+       the mock admin chrome follows the panel theme instead of a fixed color. -->
+  <body class="snui-tokens">
     <main>
       <h1>OpenRouter Companion configuration</h1>
       <div id="root"></div>

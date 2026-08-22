@@ -2,7 +2,7 @@ import { formatRelativeAge } from 'signalk-nearlcrews-ui';
 import { describe, expect, it } from 'vitest';
 import { fireOutcomeText, isFireSuccess } from '../src/configpanel/fireOutcome.js';
 import { buildScheduleOptions } from '../src/configpanel/scheduleOptions.js';
-import { clamp, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
+import { historyValidity, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
 import { CRON_PRESETS } from '../src/cronPresets.js';
 
 describe('jsonEqual', () => {
@@ -57,18 +57,54 @@ describe('jsonEqual', () => {
   });
 });
 
-describe('clamp', () => {
-  it('bounds below the minimum', () => {
-    expect(clamp(-5, 0, 10)).toBe(0);
+describe('historyValidity', () => {
+  it('defaults an unset source to QuestDB and reports the missing URL', () => {
+    expect(historyValidity(undefined)).toEqual({
+      source: 'questdb',
+      noUrl: true,
+      invalidUrl: false,
+      missingDatabase: false,
+    });
   });
-  it('bounds above the maximum', () => {
-    expect(clamp(42, 0, 10)).toBe(10);
+
+  it('reports nothing wrong while history is disabled', () => {
+    expect(historyValidity({ source: 'none' })).toEqual({
+      source: 'none',
+      noUrl: false,
+      invalidUrl: false,
+      missingDatabase: false,
+    });
   });
-  it('passes a value already in range', () => {
-    expect(clamp(7, 0, 10)).toBe(7);
+
+  it('separates an empty URL from an unusable one', () => {
+    expect(historyValidity({ source: 'questdb', questdb: { url: '   ' } })).toMatchObject({
+      noUrl: true,
+      invalidUrl: false,
+    });
+    expect(
+      historyValidity({ source: 'questdb', questdb: { url: 'ftp://questdb.local' } }),
+    ).toMatchObject({ noUrl: false, invalidUrl: true });
   });
-  it('returns the shared bound when min equals max', () => {
-    expect(clamp(7, 3, 3)).toBe(3);
+
+  it('reads the URL of the selected provider and requires an InfluxDB database', () => {
+    expect(
+      historyValidity({
+        source: 'influxdb',
+        questdb: { url: 'http://localhost:9000' },
+        influxdb: { url: 'http://influx.local:8086' },
+      }),
+    ).toEqual({
+      source: 'influxdb',
+      noUrl: false,
+      invalidUrl: false,
+      missingDatabase: true,
+    });
+    expect(
+      historyValidity({
+        source: 'influxdb',
+        influxdb: { url: 'http://influx.local:8086', database: 'signalk' },
+      }),
+    ).toMatchObject({ missingDatabase: false });
   });
 });
 

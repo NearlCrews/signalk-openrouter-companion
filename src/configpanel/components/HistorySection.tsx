@@ -11,7 +11,7 @@ import {
 } from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
 import type { HistoryTestResult, PanelConfig } from '../types.js';
-import { isHttpUrl } from '../utils.js';
+import { HISTORY_URL_RULE, historyValidity } from '../utils.js';
 
 interface Props {
   cfg: PanelConfig;
@@ -21,6 +21,9 @@ interface Props {
   testing: boolean;
   urlRef: RefObject<HTMLInputElement | null>;
   databaseRef: RefObject<HTMLInputElement | null>;
+  // True once a save attempt was blocked here, which is the only moment a field
+  // error is newly relevant and worth announcing.
+  submitted: boolean;
 }
 
 export const HistorySection = memo(function HistorySection({
@@ -31,15 +34,13 @@ export const HistorySection = memo(function HistorySection({
   testing,
   urlRef,
   databaseRef,
+  submitted,
 }: Props): ReactElement {
   const history: NonNullable<PanelConfig['history']> = cfg.history ?? {};
-  const source = history.source ?? 'questdb';
   const questdb = history.questdb ?? {};
   const influxdb = history.influxdb ?? {};
-  const activeUrl = source === 'influxdb' ? influxdb.url : questdb.url;
-  const noUrl = source !== 'none' && !activeUrl?.trim();
-  const invalidUrl = source !== 'none' && !noUrl && !isHttpUrl(activeUrl);
-  const missingDatabase = source === 'influxdb' && !influxdb.database?.trim();
+  const { source, noUrl, invalidUrl, missingDatabase } = historyValidity(cfg.history);
+  const errorLive = submitted ? 'polite' : 'off';
 
   return (
     <Stack gap={3}>
@@ -73,9 +74,10 @@ export const HistorySection = memo(function HistorySection({
             noUrl
               ? 'Enter the QuestDB REST URL.'
               : invalidUrl
-                ? 'Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment.'
+                ? `Enter an ${HISTORY_URL_RULE}.`
                 : undefined
           }
+          errorLive={errorLive}
           layout="inline"
           required
         >
@@ -120,9 +122,10 @@ export const HistorySection = memo(function HistorySection({
               noUrl
                 ? 'Enter the InfluxDB URL.'
                 : invalidUrl
-                  ? 'Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment.'
+                  ? `Enter an ${HISTORY_URL_RULE}.`
                   : undefined
             }
+            errorLive={errorLive}
             layout="inline"
             required
           >
@@ -142,6 +145,7 @@ export const HistorySection = memo(function HistorySection({
             label="Database"
             description="For version 2, enter the DBRP database name."
             error={missingDatabase ? 'Enter the database or DBRP database name.' : undefined}
+            errorLive={errorLive}
             layout="inline"
             required
           >
@@ -182,18 +186,28 @@ export const HistorySection = memo(function HistorySection({
             description="InfluxDB 2 uses an API token here."
             layout="inline"
           >
-            <SecretInput
-              autoComplete="new-password"
-              value={influxdb.password ?? ''}
-              onChange={(event) =>
-                set({
-                  history: {
-                    ...history,
-                    influxdb: { ...influxdb, password: event.target.value },
-                  },
-                })
-              }
-            />
+            {(controlProps) => (
+              <SecretInput
+                id={controlProps.id}
+                aria-describedby={controlProps['aria-describedby']}
+                aria-errormessage={controlProps['aria-errormessage']}
+                aria-invalid={controlProps['aria-invalid']}
+                disabled={controlProps.disabled}
+                name={controlProps.name}
+                required={controlProps.required}
+                autoComplete="new-password"
+                spellCheck={false}
+                value={influxdb.password ?? ''}
+                onChange={(event) =>
+                  set({
+                    history: {
+                      ...history,
+                      influxdb: { ...influxdb, password: event.target.value },
+                    },
+                  })
+                }
+              />
+            )}
           </LabeledField>
         </>
       ) : null}
@@ -210,7 +224,7 @@ export const HistorySection = memo(function HistorySection({
             Test connection
           </Button>
           {testResult ? (
-            <StatusIndicator tone={testResult.ok ? 'success' : 'danger'} role="status">
+            <StatusIndicator tone={testResult.ok ? 'success' : 'danger'} live="polite">
               {testResult.ok ? `Reachable at ${testResult.url}` : testResult.text}
             </StatusIndicator>
           ) : null}

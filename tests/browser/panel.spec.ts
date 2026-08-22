@@ -1,8 +1,18 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, type Locator, test } from '@playwright/test';
 import packageJson from '../../package.json' with { type: 'json' };
 
 const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui'];
+
+// Clicking a control that overlaps the docked action bar can be swallowed: the
+// shared UI scrolls a newly focused control clear of the bar, and the pointer
+// no longer sits over the control when the mouse comes back up, so no click
+// event is dispatched. Focusing first lets that scroll settle, then the click
+// lands where the test aimed it.
+async function clickClearOfActionBar(control: Locator): Promise<void> {
+  await control.focus();
+  await control.click();
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -212,7 +222,9 @@ test('configures and tests InfluxDB history without exposing credentials', async
 
 test('gives repeated analyzer controls unique accessible names', async ({ page }) => {
   await page.getByRole('button', { name: 'Analyzers' }).click();
-  await page.getByRole('button', { name: /Maintenance Advisor/ }).click();
+  await clickClearOfActionBar(
+    page.getByRole('button', { name: 'Maintenance Advisor', exact: true }),
+  );
 
   await expect(page.getByRole('checkbox', { name: 'Maintenance Advisor: Enabled' })).toBeVisible();
   await expect(
@@ -224,6 +236,60 @@ test('gives repeated analyzer controls unique accessible names', async ({ page }
   await expect(
     page.getByRole('button', { name: 'Edit prompt for Maintenance Advisor' }),
   ).toBeVisible();
+});
+
+test('edits the scheduled fields and both drawers of an analyzer', async ({ page }) => {
+  await page.getByRole('button', { name: 'Analyzers' }).click();
+  await clickClearOfActionBar(
+    page.getByRole('button', { name: 'Weather Outlook Advisor', exact: true }),
+  );
+
+  const frequency = page.getByRole('combobox', { name: 'Frequency' });
+  await expect(frequency).toHaveValue('0 */3 * * *');
+  await frequency.selectOption('0 8 * * *');
+  await expect(frequency).toHaveValue('0 8 * * *');
+
+  const severityFloor = page.getByRole('combobox', { name: 'Severity floor' });
+  await expect(severityFloor).toHaveValue('moderate');
+  await severityFloor.selectOption('severe');
+  await expect(severityFloor).toHaveValue('severe');
+
+  const reportsToggle = page.getByRole('button', {
+    name: 'View reports for Weather Outlook Advisor',
+  });
+  await reportsToggle.click();
+  await expect(page.getByText('No reports yet')).toBeVisible();
+  await page.getByRole('button', { name: 'Hide reports for Weather Outlook Advisor' }).click();
+  await expect(reportsToggle).toBeFocused();
+
+  await page.getByRole('button', { name: 'Edit prompt for Weather Outlook Advisor' }).click();
+  const prompt = page.getByRole('textbox', { name: 'System prompt' });
+  await expect(prompt).toHaveValue('Summarize the vessel data.');
+  const reset = page.getByRole('button', { name: 'Reset to default' });
+  await expect(reset).toHaveAttribute('aria-disabled', 'true');
+  await prompt.fill('Fixture prompt override.');
+  await expect(reset).not.toHaveAttribute('aria-disabled', 'true');
+  await reset.click();
+  await expect(prompt).toHaveValue('Summarize the vessel data.');
+});
+
+test('confirms before discarding unsaved edits', async ({ page }) => {
+  await page.getByRole('button', { name: 'Add API key' }).click();
+  const apiKey = page.getByRole('textbox', { name: 'API key', exact: true });
+  await apiKey.fill('fixture-key');
+
+  const discard = page.getByRole('button', { name: 'Discard', exact: true });
+  await discard.click();
+  await expect(page.getByText('Discard unsaved changes?')).toBeVisible();
+  await page.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(apiKey).toHaveValue('fixture-key');
+  await expect(discard).toBeFocused();
+
+  await discard.click();
+  await page.getByRole('button', { name: 'Discard changes' }).click();
+  await expect(page.getByText('Discard unsaved changes?')).toBeHidden();
+  await expect(apiKey).toHaveValue('');
+  await expect(page.getByText('No unsaved changes')).toBeVisible();
 });
 
 test('ignores an older status response that resolves after a newer poll', async ({ page }) => {
