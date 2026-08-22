@@ -23,9 +23,10 @@ results back as plain-prose Signal K notifications. Requires an
 0.7.5 refreshes the shared configuration panel, corrects the bundled-code
 attribution, and tightens the packaging checks.
 
-- **Shared UI 0.8.1** fixes a docked action bar that could swallow the first
-  click on a control it overlaps, and a segmented control that could submit a
-  value it did not display after a native form reset.
+- **Shared UI 0.8.2** lets a control the docked action bar overlaps activate on
+  the first press without the panel scrolling under your finger, keeps keyboard
+  focus scrolling a covered control clear, and fixes a segmented control that
+  could submit a value it did not display after a native form reset.
 - **Generated third-party notices** are built from the packages the panel and
   backend bundles actually carry, with each license text embedded, and are
   re-verified by the packaging check on every release.
@@ -103,9 +104,9 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React and React DOM are supplied by the Signal K admin host. Version 0.8.1
-  starts fresh profiles in Auto, follows an explicit host theme, and otherwise
-  stays Light. System follows the operating-system preference, and all explicit
+  React and React DOM are supplied by the Signal K admin host. Fresh profiles
+  start in Auto, which follows an explicit host theme and otherwise stays
+  Light. System follows the operating-system preference, and all explicit
   choices persist under the shared key.
 - **Binnacle-aligned verification.** TypeScript, Biome, ESLint, dependency
   boundaries, dead-code checks, Vitest, Playwright, package validation, size

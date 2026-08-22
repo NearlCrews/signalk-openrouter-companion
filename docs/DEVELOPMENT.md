@@ -178,7 +178,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.8.1 component library and shares React 19 and React
+`signalk-nearlcrews-ui` 0.8.2 component library and shares React 19 and React
 DOM as Module Federation singletons supplied by the Signal K admin host.
 `PanelRoot` owns the theme tokens. A profile without a valid shared preference
 starts in Auto, follows an explicit host theme, otherwise stays Light, and does
@@ -272,14 +272,14 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` 0.8.1 migration keeps the complete panel near
-38.2 kB gzip, measured at 38,089 bytes by summing the three emitted files at
-gzip -9. This documented exception retains the shared accessibility,
-validation, responsive layout, and theme contracts. The 40 kB gzip gate leaves
-about 5 percent headroom and keeps future growth visible. Of the growth over
-0.7.1, roughly 1.3 kB is the library itself, the inline discard confirmation
-and the shared empty states account for most of the rest, and 0.8.1's ActionBar
-and SegmentedControl fixes added about 300 bytes.
+The `signalk-nearlcrews-ui` migration keeps the complete panel near 38.2 kB
+gzip, measured at 38,222 bytes by summing the three emitted files at gzip -9.
+This documented exception retains the shared accessibility, validation,
+responsive layout, and theme contracts. The 40 kB gzip gate keeps future growth
+visible, and `npm run size` prints the current figure. Of the growth over
+0.7.1, roughly 1.3 kB is the library itself, and the inline discard
+confirmation and the shared empty states account for most of the rest.
+Per-release byte attribution belongs in the changelog rather than here.
 
 ## Local development against a real Signal K server
 
@@ -401,7 +401,7 @@ release.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
 - Webpack 5, esbuild-loader 4, React 19, React DOM 19, and
-  `signalk-nearlcrews-ui` 0.8.1
+  `signalk-nearlcrews-ui` 0.8.2
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 

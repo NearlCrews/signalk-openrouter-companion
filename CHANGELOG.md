@@ -24,10 +24,15 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ### Changed
 
-- Updated the exact bundled `signalk-nearlcrews-ui` dependency to 0.8.1, which
-  fixes a docked action bar swallowing the first click on a control it overlaps
-  and a segmented control that could submit a value it did not display after a
-  native form reset. The test workaround for the first-click defect is removed.
+- Updated the exact bundled `signalk-nearlcrews-ui` dependency to 0.8.2. A
+  pointer press on a control the docked action bar overlaps now activates it in
+  place, with no clearance scroll before or after the press, while keyboard and
+  programmatic focus still scroll a covered control clear immediately. The
+  action bar also settles its geometry in one pass, compact buttons carry a
+  minimum width from the control token, and a segmented control no longer
+  submits a value it did not display after a native form reset. Both test
+  workarounds for the docked bar are removed: the focus-before-click helper and
+  the pointer-target sweep's settle-and-retry.
 - Relative ages in the live status now read as words, so a status that just
   refreshed shows "now" rather than "0 sec. ago".
 - `@types/node` moved from 26.x to 22.x to match the supported Node 22.18

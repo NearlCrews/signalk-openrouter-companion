@@ -393,7 +393,7 @@ test('responds to a 320-pixel embedded panel inside a wide host', async ({ page 
 // action bar, and a 20-pixel painted checkbox can be fine because its wrapping
 // label carries the target. Exported as a helper so every panel state gets the
 // same treatment.
-async function measurePointerTargets(
+function measurePointerTargets(
   page: Page,
   // Limits the sweep to one subtree. Used for the discard confirmation, where
   // the rest of the page is legitimately covered by the grown action bar.
@@ -404,7 +404,7 @@ async function measurePointerTargets(
   undersized: string[];
   blocked: string[];
 }> {
-  return page.evaluate(async (scope: string) => {
+  return page.evaluate((scope: string) => {
     const root = document.querySelector(scope);
     if (root === null) throw new Error(`No element matched ${scope}.`);
     const SELECTOR =
@@ -416,7 +416,14 @@ async function measurePointerTargets(
     const blocked: string[] = [];
     let measured = 0;
 
-    for (const element of Array.from(root.querySelectorAll(SELECTOR))) {
+    // Only the two failure branches need a control's name, and building one
+    // walks its text subtree, so it stays off the happy path.
+    const describe = (element: Element): string =>
+      element.getAttribute('aria-label') ??
+      element.textContent?.trim().slice(0, 32) ??
+      element.tagName.toLowerCase();
+
+    for (const element of root.querySelectorAll(SELECTOR)) {
       if (!(element instanceof HTMLElement)) continue;
       // A user scrolls a control into view before pressing it, so measure it
       // the same way rather than judging whatever happens to be on screen.
@@ -429,45 +436,40 @@ async function measurePointerTargets(
 
       const label = element.closest('label');
       const target = label?.getBoundingClientRect() ?? rect;
-      const name =
-        element.getAttribute('aria-label') ??
-        element.textContent?.trim().slice(0, 32) ??
-        element.tagName.toLowerCase();
-      const size = `${Math.round(target.width)}x${Math.round(target.height)}`;
       if (target.width < floor || target.height < floor) {
-        undersized.push(`${name} (${size}, floor ${floor})`);
+        const size = `${Math.round(target.width)}x${Math.round(target.height)}`;
+        undersized.push(`${describe(element)} (${size}, floor ${floor})`);
       }
-      const hitTest = () => {
-        const box = label?.getBoundingClientRect() ?? element.getBoundingClientRect();
-        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-        const reached =
-          hit !== null &&
-          (hit === element ||
-            element.contains(hit) ||
-            hit.contains(element) ||
-            (label !== null && (label === hit || label.contains(hit))));
-        return { hit, reached };
-      };
-      let probe = hitTest();
-      if (!probe.reached) {
-        // The viewport-bottom action bar re-measures and re-docks in a
-        // deferred frame, so a hit test in the same task as the scroll can
-        // catch it still covering content it is about to release. Settle and
-        // ask once more before calling anything blocked; a control that is
-        // genuinely covered stays covered.
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        probe = hitTest();
-      }
-      if (!probe.reached) {
-        const blocker = (probe.hit?.className || probe.hit?.tagName || 'nothing')
-          .toString()
-          .slice(0, 48);
-        blocked.push(`${name} covered by ${blocker}`);
+      const hit = document.elementFromPoint(
+        target.x + target.width / 2,
+        target.y + target.height / 2,
+      );
+      const reached =
+        hit !== null &&
+        (hit === element ||
+          element.contains(hit) ||
+          hit.contains(element) ||
+          (label !== null && (label === hit || label.contains(hit))));
+      if (!reached) {
+        const blocker = (hit?.className || hit?.tagName || 'nothing').toString().slice(0, 48);
+        blocked.push(`${describe(element)} covered by ${blocker}`);
       }
     }
     return { floor, measured, undersized, blocked };
   }, rootSelector);
+}
+
+// Every sweep asserts the same three things and varies only how many controls
+// its panel state should render, so the trio lives here rather than in three
+// near-identical copies. The count guard is load-bearing: a selector that
+// stopped matching would otherwise let an empty sweep pass silently.
+function expectReachableTargets(
+  measurement: Awaited<ReturnType<typeof measurePointerTargets>>,
+  atLeast: number,
+): void {
+  expect(measurement.measured).toBeGreaterThan(atLeast);
+  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
+  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
 }
 
 test('gives every interactive control a reachable pointer target', async ({ page }) => {
@@ -483,12 +485,7 @@ test('gives every interactive control a reachable pointer target', async ({ page
   await page.getByRole('combobox', { name: 'History provider' }).selectOption('influxdb');
   await expect(page.getByRole('textbox', { name: 'InfluxDB URL', exact: true })).toBeVisible();
 
-  const measurement = await measurePointerTargets(page);
-
-  // A selector that stops matching would otherwise pass this test silently.
-  expect(measurement.measured).toBeGreaterThan(25);
-  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
-  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
+  expectReachableTargets(await measurePointerTargets(page), 25);
 });
 
 // The discard confirmation renders inside the action bar, so it gets its own
@@ -509,11 +506,7 @@ test('gives the discard confirmation a reachable pointer target', async ({ page 
   // covered by design, so sweeping the whole document here would report a
   // layout consequence as a defect. What must hold is that the confirmation's
   // own controls, and the bar's, are sized and reachable.
-  const measurement = await measurePointerTargets(page, '[data-panel-action-bar]');
-
-  expect(measurement.measured).toBeGreaterThan(3);
-  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
-  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
+  expectReachableTargets(await measurePointerTargets(page, '[data-panel-action-bar]'), 3);
 });
 
 test('gives failure-state controls a reachable pointer target', async ({ page }) => {
@@ -534,9 +527,5 @@ test('gives failure-state controls a reachable pointer target', async ({ page })
   await expect(page.getByText(/Failed to load prompt/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
 
-  const measurement = await measurePointerTargets(page);
-
-  expect(measurement.measured).toBeGreaterThan(10);
-  expect(measurement.undersized, 'controls below the pointer target floor').toEqual([]);
-  expect(measurement.blocked, 'controls covered by another element').toEqual([]);
+  expectReachableTargets(await measurePointerTargets(page), 10);
 });
