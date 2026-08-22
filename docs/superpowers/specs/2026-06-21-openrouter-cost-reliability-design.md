@@ -1,4 +1,4 @@
-# OpenRouter Cost & Reliability Layer
+# OpenRouter Cost and Reliability Layer
 
 Design spec. Status: approved for planning. Date: 2026-06-21.
 

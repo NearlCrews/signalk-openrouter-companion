@@ -18,6 +18,8 @@ jobs:
   validate:
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@ede45a7abfcdfa3b31f369333a12dcf8b450b8ad
     with:
+      build-command: npm run build
+      test-command: npm run test:run
       format-check-command: npm run format:check
       coverage-command: npm run test:coverage
       node-versions: '["22", "24", "26"]'

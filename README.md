@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/signalk-openrouter-companion.svg)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![npm downloads](https://img.shields.io/npm/dm/signalk-openrouter-companion.svg)](https://www.npmjs.com/package/signalk-openrouter-companion)
 [![CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/ci.yml)
+[![Signal K Plugin CI](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml/badge.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/actions/workflows/plugin-ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D22.18-brightgreen.svg)](https://nodejs.org)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/nearlcrews)
@@ -81,10 +82,10 @@ in the Signal K admin UI.
 
 | View | Preview |
 | --- | --- |
-| Light theme | [![The configuration panel's live status grid and OpenRouter settings in the Light theme](assets/screenshots/panel-overview.png)](assets/screenshots/panel-overview.png) |
-| Dark theme | [![The configuration panel's live status grid and OpenRouter settings in the Dark theme](assets/screenshots/panel-overview-dark.png)](assets/screenshots/panel-overview-dark.png) |
-| Night theme | [![The configuration panel's live status grid and OpenRouter settings in the Night theme](assets/screenshots/panel-overview-night.png)](assets/screenshots/panel-overview-night.png) |
-| Analyzer cards | [![The Analyzers section of the configuration panel, with one collapsible card per analyzer and Fire now, View reports, and Edit prompt controls](assets/screenshots/panel-analyzers.png)](assets/screenshots/panel-analyzers.png) |
+| Light theme | ![The configuration panel's live status grid and OpenRouter settings in the Light theme](assets/screenshots/panel-overview.png) |
+| Dark theme | ![The configuration panel's live status grid and OpenRouter settings in the Dark theme](assets/screenshots/panel-overview-dark.png) |
+| Night theme | ![The configuration panel's live status grid and OpenRouter settings in the Night theme](assets/screenshots/panel-overview-night.png) |
+| Analyzer cards | ![The Analyzers section of the configuration panel, with one collapsible card per analyzer and Fire now, View reports, and Edit prompt controls](assets/screenshots/panel-analyzers.png) |
 
 ## Architecture
 
@@ -100,7 +101,7 @@ OpenRouter Companion is one plugin built from focused modules:
   admin UI loads.
 - **Shared panel foundations.** `signalk-nearlcrews-ui` supplies the layout,
   fields, status components, action bar, and light, dark, and night themes.
-  React and React DOM are supplied by the Signal K admin host. Version 0.7.1
+  React and React DOM are supplied by the Signal K admin host. Version 0.8.0
   starts fresh profiles in Auto, follows an explicit host theme, and otherwise
   stays Light. System follows the operating-system preference, and all explicit
   choices persist under the shared key.

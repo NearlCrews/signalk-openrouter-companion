@@ -48,7 +48,7 @@
 ## Adding a new analyzer (only if applicable)
 
 - [ ] Implements `Analyzer<I>` interface (`id`, `title`, `triggers`, `collectContext`, `buildPrompt`, optional `publishOutput`).
-- [ ] Constructor uses `buildTriggers(cfg.triggers, eventMapper?)`.
+- [ ] Constructor uses `buildTriggers(this.id, cfg.triggers, eventMapper?)`.
 - [ ] `publishOutput` uses `publisher.publishReport(this.id, ctx, text)` unless the analyzer publishes on a per-event path (like `alerts`).
 - [ ] Config block added to `src/types.ts::PluginOptions['analyzers']` and `DEFAULT_OPTIONS` (use `pluginPutPath('<id>')` for the default PUT path).
 - [ ] Schema section added to `src/schema.ts` with sensible field bounds and admin-UI titles.

@@ -1,6 +1,4 @@
-# OpenRouter Cost & Reliability Layer Implementation Plan
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+# OpenRouter Cost and Reliability Layer Implementation Plan
 
 **Goal:** Make OpenRouter token use and cost visible per-run and per-day, and add prompt caching, model fallback, provider routing, and an outbound-privacy control to the OpenRouter request path.
 

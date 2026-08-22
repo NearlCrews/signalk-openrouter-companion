@@ -178,7 +178,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.7.1 component library and shares React 19 and React
+`signalk-nearlcrews-ui` 0.8.0 component library and shares React 19 and React
 DOM as Module Federation singletons supplied by the Signal K admin host.
 `PanelRoot` owns the theme tokens. A profile without a valid shared preference
 starts in Auto, follows an explicit host theme, otherwise stays Light, and does
@@ -246,7 +246,7 @@ npm run type-check     # backend, tests, panel, and tooling configs
 
 Biome owns formatting and its recommended lint rules. ESLint adds typed promise
 checks and React Hooks rules. The documentation gate uses exact-pinned
-markdownlint-cli2 0.23.2, cspell 10.0.1, and Linkinator 8.0.3. Local files and
+markdownlint-cli2 0.23.2, cspell 10.0.1, and Linkinator 8.0.4. Local files and
 fragments block the commit gate. External links run in a scheduled workflow
 with bounded concurrency, retries, and rate-limit warnings because remote rate
 limits and bot protection make them unsuitable for the merge gate. The repo
@@ -272,10 +272,12 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` 0.7.1 migration keeps the complete panel near
-35.1 kB gzip. This documented exception retains the shared accessibility,
-validation, responsive layout, and theme contracts. The 36 kB gzip gate leaves
-about 2.5 percent headroom and keeps future growth visible.
+The `signalk-nearlcrews-ui` 0.8.0 migration keeps the complete panel near
+37.9 kB gzip. This documented exception retains the shared accessibility,
+validation, responsive layout, and theme contracts. The 40 kB gzip gate leaves
+about 5 percent headroom and keeps future growth visible. The 0.8.0 library
+itself accounts for roughly 1.3 kB of that growth over 0.7.1, and the inline
+discard confirmation plus the shared empty states for most of the rest.
 
 ## Local development against a real Signal K server
 
@@ -397,7 +399,7 @@ release.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
 - Webpack 5, esbuild-loader 4, React 19, React DOM 19, and
-  `signalk-nearlcrews-ui` 0.7.1
+  `signalk-nearlcrews-ui` 0.8.0
 - Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
 - Vitest 4 with v8 coverage and Playwright cross-browser checks
 
