@@ -20,20 +20,23 @@ results back as plain-prose Signal K notifications. Requires an
 
 ## What's new in 0.7.5
 
-0.7.5 refreshes the shared configuration panel, corrects the bundled-code
-attribution, and tightens the packaging checks.
+0.7.5 refreshes the configuration panel on shared UI 0.8.2, makes analyzer
+fires report what really happened, bounds the plugin's memory and state
+writes, and corrects the bundled-code attribution.
 
 - **Shared UI 0.8.2** lets a control the docked action bar overlaps activate on
-  the first press without the panel scrolling under your finger, keeps keyboard
-  focus scrolling a covered control clear, and fixes a segmented control that
-  could submit a value it did not display after a native form reset.
+  the first press without the panel scrolling under your finger, asks before
+  discarding unsaved changes, and fixes a segmented control that could submit a
+  value it did not display after a native form reset.
+- **Real fire outcomes** mean a Signal K PUT that fires an analyzer reports
+  what actually happened, and a trigger that lands while the same analyzer is
+  already running is skipped instead of double-spending the daily budget.
+- **Bounded runtime state** puts a total ceiling on the telemetry buffer
+  across every path and makes budget state writes atomic and serialized, so
+  the daily spend cap survives overlapping runs and power loss.
 - **Generated third-party notices** are built from the packages the panel and
-  backend bundles actually carry, with each license text embedded, and are
-  re-verified by the packaging check on every release.
-- **Corrected attribution** adds `react-aria`, which every panel bundles
-  through the shared panel root and the previous notices omitted.
-- **Runtime-matched Node types** keep `@types/node` on the same major version
-  as the supported Node 22.18 floor, enforced by the packaging check.
+  backend bundles actually carry, with each license text embedded, and now
+  credit `react-aria`, which the previous hand-maintained file omitted.
 - **Friendlier status ages** read as words, so a status that just refreshed
   shows "now" instead of "0 sec. ago".
 

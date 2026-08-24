@@ -21,6 +21,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 - The packaging check now requires `@types/node` to track the major version in
   `engines.node`, so the types cannot advertise APIs the supported runtime
   floor does not have, and Dependabot no longer proposes a major bump for it.
+- The browser suite now sweeps every interactive control for a reachable
+  pointer target, a 40 px floor on a fine pointer and 44 px on a coarse one,
+  including the controls the panel only renders conditionally.
 
 ### Changed
 
@@ -33,6 +36,15 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   submits a value it did not display after a native form reset. Both test
   workarounds for the docked bar are removed: the focus-before-click helper and
   the pointer-target sweep's settle-and-retry.
+- The configuration panel adopts the shared UI 0.8.0 surfaces. Discarding
+  unsaved changes now asks through an inline confirmation instead of reverting
+  on a bare button press, an empty analyzer or report list renders the shared
+  empty state, and the reports and prompt drawers share one focus-managing
+  toggle. The shipped screenshots are refreshed to match.
+- The panel size ceiling moved from 36 kB to 40 kB gzip, with the measured
+  panel near 38.2 kB. Of the growth over the 0.7.1 shared UI, roughly 1.3 kB
+  is the library itself, and the inline discard confirmation and the shared
+  empty states account for most of the rest.
 - Relative ages in the live status now read as words, so a status that just
   refreshed shows "now" rather than "0 sec. ago".
 - `@types/node` moved from 26.x to 22.x to match the supported Node 22.18
@@ -47,6 +59,28 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 - The third-party notices now include `react-aria`, which every panel bundles
   through the shared UI package's panel root. The previous hand-maintained file
   omitted it.
+- A Signal K PUT that fires an analyzer now answers with the run's real
+  outcome, distinguishing a published report from no input, an exhausted
+  budget, a run already in flight, and a failure, instead of reporting blanket
+  success.
+- Overlapping triggers for the same analyzer no longer run twice. While a run
+  is in flight a second trigger is skipped, so a cron fire that lands on top
+  of a manual or event fire cannot spend two budget calls and publish two
+  reports for one event.
+- Budget state writes are serialized and atomic, a temporary file renamed into
+  place, so overlapping analyzer runs or a power loss mid-write can no longer
+  leave an unparsable state file that silently reset the daily spend cap.
+- The rolling telemetry buffer now enforces a total-entry ceiling across every
+  path together. The per-path cap alone left total memory unbounded on a
+  vessel with many busy paths.
+- Firing a second analyzer in the panel no longer cancels the first one's
+  pending report refresh: each analyzer keeps its own refresh timer.
+- Settings form minimums for the daily call cap and the settle and hysteresis
+  fields now match the runtime clamp floors, so the form can no longer accept
+  a value the runtime silently rewrites to the default.
+- The packaged README's screenshots are plain images again rather than
+  relative repository links, which the Signal K App Store renders as dead
+  links.
 
 <a id="v074"></a>
 
