@@ -179,7 +179,11 @@ Outputs:
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
 `signalk-nearlcrews-ui` 0.8.2 component library and shares React 19 and React
-DOM as Module Federation singletons supplied by the Signal K admin host.
+DOM as Module Federation singletons supplied by the Signal K admin host. The
+shares carry no strict version check: the Admin registers them with a version
+that understates the React it actually ships, so a strict check would reject
+compatible hosts, and with `import: false` the panel would never mount there.
+A mismatched registration warns and continues.
 `PanelRoot` owns the theme tokens. A profile without a valid shared preference
 starts in Auto, follows an explicit host theme, otherwise stays Light, and does
 not persist an implicit choice. System follows the operating-system preference.

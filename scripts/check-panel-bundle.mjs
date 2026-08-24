@@ -45,14 +45,17 @@ if (sharedPackages.join(',') !== 'react,react-dom') {
 }
 for (const sharedPackage of ['react', 'react-dom']) {
   const share = federationOptions.shared[sharedPackage];
+  // No strictVersion: the Admin registers its shares with a version that
+  // understates the React it ships, so a strict check rejects compatible
+  // hosts and, with import: false, the panel never mounts there.
   if (
     share?.singleton !== true ||
-    share.strictVersion !== true ||
+    share.strictVersion !== undefined ||
     share.requiredVersion !== '^19.2.0' ||
     share.import !== false
   ) {
     throw new Error(
-      `webpack.config.cjs must consume host-provided ${sharedPackage} as a strict singleton.`,
+      `webpack.config.cjs must consume host-provided ${sharedPackage} as a non-strict singleton.`,
     );
   }
 }

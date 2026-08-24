@@ -90,17 +90,20 @@ module.exports = {
       },
       // Signal K Admin owns both stateful React runtimes. The shared UI can use
       // React DOM for portals, so consuming both host singletons prevents a
-      // second renderer from crossing the host/component boundary.
+      // second renderer from crossing the host/component boundary. No
+      // strictVersion: the Admin registers its shares with a hardcoded version
+      // that understates the React it actually ships (2.24.0 registers 19.0.0
+      // while bundling 19.2.4), and with import: false a strict rejection
+      // leaves the panel unable to mount at all. A mismatch warns and
+      // continues instead.
       shared: {
         react: {
           singleton: true,
-          strictVersion: true,
           requiredVersion: '^19.2.0',
           import: false,
         },
         'react-dom': {
           singleton: true,
-          strictVersion: true,
           requiredVersion: '^19.2.0',
           import: false,
         },

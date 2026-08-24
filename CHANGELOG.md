@@ -56,6 +56,13 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ### Fixed
 
+- The configuration panel loads again on Signal K 2.24.x, where the 0.7.4
+  panel does not load at all. 0.7.4 shipped a strict version check on the
+  React and React DOM singleton shares, and the 2.24.x Admin registers those
+  shares as React 19.0.0 while actually bundling 19.2.4, so the strict check
+  rejected a fully compatible host and left the panel blank. The shares keep
+  their singleton and `^19.2.0` requirements, and a mismatched registration
+  now warns and continues.
 - The third-party notices now include `react-aria`, which every panel bundles
   through the shared UI package's panel root. The previous hand-maintained file
   omitted it.

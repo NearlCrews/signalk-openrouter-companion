@@ -20,10 +20,15 @@ results back as plain-prose Signal K notifications. Requires an
 
 ## What's new in 0.7.5
 
-0.7.5 refreshes the configuration panel on shared UI 0.8.2, makes analyzer
+0.7.5 restores the configuration panel on Signal K 2.24 hosts, where the
+0.7.4 panel does not load, refreshes it on shared UI 0.8.2, makes analyzer
 fires report what really happened, bounds the plugin's memory and state
 writes, and corrects the bundled-code attribution.
 
+- **The panel loads again on Signal K 2.24 hosts.** 0.7.4 checked the host's
+  shared React version strictly, and the 2.24.x Admin registers its shares
+  with an older number than the React it actually ships, which left the panel
+  blank. A mismatched registration now warns and continues.
 - **Shared UI 0.8.2** lets a control the docked action bar overlaps activate on
   the first press without the panel scrolling under your finger, asks before
   discarding unsaved changes, and fixes a segmented control that could submit a
@@ -37,8 +42,6 @@ writes, and corrects the bundled-code attribution.
 - **Generated third-party notices** are built from the packages the panel and
   backend bundles actually carry, with each license text embedded, and now
   credit `react-aria`, which the previous hand-maintained file omitted.
-- **Friendlier status ages** read as words, so a status that just refreshed
-  shows "now" instead of "0 sec. ago".
 
 See the [v0.7.5 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v075) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
