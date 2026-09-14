@@ -42,7 +42,6 @@
       "signalk-binnacle",
       "signalk-virtual-weather-sensors",
       "signalk-nmea2000-emitter-cannon",
-      "signalk-synthetic-values",
       "signalk-questdb",
       "signalk-to-influxdb",
       "signalk-to-influxdb2"
