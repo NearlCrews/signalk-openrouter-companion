@@ -1,3 +1,5 @@
+import type { RunOutcome } from '../core/triggerContext.js';
+
 // Maps the /fire endpoint's run outcome to the message shown beside the Fire
 // button, so a no-op fire reads as "Nothing to report" rather than a misleading
 // success. `unknown` covers the runById path where the analyzer id is not
@@ -5,12 +7,11 @@
 // it too so any future code path that bypasses the pre-guard reads correctly.
 // Kept in a plain module (no JSX) so it is unit-testable on its own. The map is
 // module-private; callers go through fireOutcomeText so the fallback is never
-// bypassed. It carries one entry per member of RunOutcome in
-// core/triggerRouter.ts, and a case in tests/configpanel.test.ts reads that
-// union out of the source and fails when one has no entry here: an unmapped
-// outcome reaches the operator as the neutral "Dispatched" fallback, which
-// reads as a run that went out fine.
-const FIRE_OUTCOME_TEXT: Record<string, string> = {
+// bypassed. Keying it on RunOutcome is what makes a new outcome a compile
+// error here rather than something the operator reads as the neutral
+// "Dispatched" fallback, which looks like a run that went out fine. That is how
+// `aborted` once shipped as "Dispatched" for a run a shutdown had interrupted.
+const FIRE_OUTCOME_TEXT: Record<RunOutcome, string> = {
   reported: 'Report generated',
   'no-input': 'Nothing to report',
   'budget-exhausted': 'Daily call budget exhausted',
@@ -36,7 +37,9 @@ const FIRE_FAILURE_OUTCOMES: ReadonlySet<string> = new Set(['failed', 'unknown',
 // Text shown beside the Fire button. An unmapped or missing outcome falls back
 // to a neutral "Dispatched" so a new server outcome never renders blank.
 export function fireOutcomeText(outcome: string | undefined): string {
-  return (outcome && FIRE_OUTCOME_TEXT[outcome]) ?? 'Dispatched';
+  return outcome !== undefined && Object.hasOwn(FIRE_OUTCOME_TEXT, outcome)
+    ? FIRE_OUTCOME_TEXT[outcome as RunOutcome]
+    : 'Dispatched';
 }
 
 // Whether a fire outcome should read as success (vs the danger color). A missing
