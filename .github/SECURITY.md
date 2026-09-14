@@ -67,8 +67,19 @@ When using this plugin:
 
 1. **Use a dedicated API key**: give this plugin its own OpenRouter API
    key so you can revoke it without impacting other tools.
-2. **Cap the spend**: set "Max calls per day" to a hard cap so a stuck
-   loop cannot burn through credit.
+2. **Cap the spend**: set "Max calls per day" to a hard cap on analyzer
+   runs, so a stuck loop cannot burn through credit. It accepts 1 to 1000,
+   and the runtime clamps anything outside that range, so the bound cannot
+   be edited away. Read it as a cap on analyzer runs only. The panel's
+   "Test API key" button is deliberately outside it: a test makes a billed
+   OpenRouter call that the cap neither counts nor stops, so an operator
+   debugging connectivity cannot run themselves out of analyzer calls. That
+   route carries its own limits instead. Presses that overlap an in-flight
+   test share the one call, and for five seconds after a test finishes the
+   next press is refused, so a held or repeated button cannot spend in a
+   loop. Each test that does run carries the same 2000-token completion
+   bound as every other call, so a model that ignores the one-word
+   instruction can bill for a full completion.
 3. **Access Control**: keep the Signal K server's admin UI behind
    authentication. The plugin's REST routes are admin-gated, and its PUT
    triggers go through `app.registerPutHandler`, so anyone who can write

@@ -11,7 +11,7 @@ Spawn **agent teammates** (not subagents) so they can communicate directly via t
 
 ## Teammates and lenses
 
-**Lens A: Signal K semantics (uses `signalk-plugin-expert` agent)**
+**Lens A: Signal K semantics (loads the `signalk-development` skill)**
 - Reviews any proposed or applied changes against Signal K conventions: path naming, delta shapes (`{ context, updates: [{ source, timestamp, values: [{ path, value }] }] }`), unit conventions (SI), source identification.
 - Verifies plugin lifecycle hygiene: `start`/`stop` symmetry, unsubscribe-on-stop, no leaked timers/intervals, idempotent restart.
 - Confirms app-store readiness for any user-facing surface (schema, README hints, capabilities, no console.log noise in hot paths).
