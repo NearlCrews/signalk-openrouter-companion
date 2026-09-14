@@ -1,24 +1,3 @@
-.title {
-  min-width: 0;
-  font-weight: var(--snui-font-weight-bold);
-  overflow-wrap: anywhere;
-}
-
-/* Local copy of the visually-hidden pattern. The shared library ships one too,
-   but its class is internal, so relying on it would break silently on a
-   compatible library release. */
-.visuallyHidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .drawer {
   min-width: 0;
 }
@@ -39,33 +18,14 @@
   border-block-end: 0;
 }
 
-.reportTimestamp,
-.reportMetadata {
-  color: var(--snui-color-text-muted);
-  font-size: var(--snui-font-size-xs);
-  overflow-wrap: anywhere;
-}
-
-/* Timestamps, model slugs, and prompt text are fixed-width content. */
-.reportTimestamp,
-.reportMetadata,
-.textarea {
-  font-family: var(--snui-font-family-mono);
-}
-
-.reportBody,
-.reportFailure {
+/*
+ * Report prose keeps the line breaks the model wrote. The class name is
+ * doubled because it lands on the shared UI Text component, whose own rules
+ * ship inside a native CSS scope: at equal specificity the cascade prefers the
+ * scoped rule, so a single-class override would lose whatever the stylesheet
+ * order.
+ */
+.reportText.reportText {
   margin-block-start: var(--snui-space-2);
-  font-size: var(--snui-font-size-sm);
-  overflow-wrap: anywhere;
   white-space: pre-wrap;
-}
-
-.reportFailure {
-  color: var(--snui-color-danger);
-  font-weight: var(--snui-font-weight-semibold);
-}
-
-.textarea {
-  min-height: 11.25rem;
 }

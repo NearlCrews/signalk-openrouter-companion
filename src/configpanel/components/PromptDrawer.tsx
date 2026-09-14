@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { useId } from 'react';
 import {
   Banner,
   Button,
@@ -7,11 +8,11 @@ import {
   LabeledField,
   Stack,
   StatusIndicator,
+  Text,
   Textarea,
 } from 'signalk-nearlcrews-ui';
 import type { AnalyzerUiState } from '../types.js';
 import { isPromptOverride } from '../utils.js';
-import styles from './analyzer.module.css';
 
 interface Props {
   analyzerId: string;
@@ -30,12 +31,15 @@ export function PromptDrawer({
   onReset,
   onClose,
 }: Props): ReactElement {
+  // The drawer announces its own load and failure through the stable region
+  // AnalyzerDrawerBody keeps outside this subtree, so nothing here is a live
+  // region: every element below mounts together with the text it carries.
+  const resetHintId = useId();
+
   if (!ui.promptLoaded) {
     return (
       <Card>
-        <StatusIndicator tone="info" live="polite">
-          Loading prompt...
-        </StatusIndicator>
+        <StatusIndicator tone="info">Loading prompt…</StatusIndicator>
       </Card>
     );
   }
@@ -44,9 +48,7 @@ export function PromptDrawer({
     return (
       <Card>
         <Stack gap={3}>
-          <Banner tone="danger" live="assertive">
-            Failed to load prompt: {ui.promptError}
-          </Banner>
+          <Banner tone="danger">Failed to load prompt: {ui.promptError}</Banner>
           <Cluster justify="end">
             <Button onClick={onClose}>Close</Button>
           </Cluster>
@@ -66,18 +68,27 @@ export function PromptDrawer({
           }`}
         >
           <Textarea
-            className={styles.textarea}
+            monospace
+            minRows={8}
             spellCheck={false}
             value={value}
             onChange={(event) => onChange(analyzerId, event.target.value)}
           />
         </LabeledField>
+        {!isOverride ? (
+          // The reason the reset is inert, as text rather than a `title`:
+          // a title renders on pointer hover only, so a keyboard or touch
+          // user never sees one.
+          <Text id={resetHintId} as="p" tone="muted" size="sm">
+            This analyzer is already using the built-in default, so there is nothing to reset.
+          </Text>
+        ) : null}
         <Cluster gap={2} justify="end">
           <Button
-            // aria-disabled rather than disabled: the control keeps focus and
-            // its title, so the reason it is inert reaches keyboard users.
+            // aria-disabled rather than disabled: the control keeps focus, so
+            // the description above reaches a keyboard user who lands on it.
             ariaDisabled={!isOverride}
-            title={isOverride ? undefined : 'Already using the built-in default'}
+            aria-describedby={isOverride ? undefined : resetHintId}
             onClick={() => onReset(analyzerId)}
           >
             Reset to default

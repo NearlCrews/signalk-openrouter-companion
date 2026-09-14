@@ -1,0 +1,5 @@
+{
+  "description": "Configuration panel remote (JavaScript and CSS assets beside remoteEntry.js) on signalk-nearlcrews-ui 0.11.1, measured at gzip level 9 the way snui-check-consumer measures it. Re-recorded from the 0.9.0 figure of 39,859 bytes: 0.11.1 ships the panel announcer, the label bundle, and the rest of the primitives added in that line, which is 9,010 gzip bytes the panel now carries whether or not it calls them. The gate catches unexpected growth rather than the upgrade itself.",
+  "gzipBytes": 48869,
+  "maximumIncreasePercent": 5
+}
