@@ -13,8 +13,13 @@ updates:
       prefix: "chore"
       include: "scope"
     groups:
+      # A 0.x minor of the shared UI is a breaking release that needs the
+      # migration guide open, so it arrives as its own pull request.
+      signalk-nearlcrews-ui:
+        patterns: ["signalk-nearlcrews-ui"]
       dev-deps:
         dependency-type: "development"
+        exclude-patterns: ["signalk-nearlcrews-ui"]
     ignore:
       # @types/node tracks the engines.node runtime floor, not the newest Node.
       # scripts/check-package.mjs fails the build when the majors diverge, so a

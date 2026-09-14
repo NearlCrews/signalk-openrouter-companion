@@ -136,6 +136,10 @@ if (packageJson.main !== 'dist/index.js') {
 if (packageJson.exports?.['.'] !== './dist/index.js') {
   throw new Error('Expected the package root export to resolve to ./dist/index.js.');
 }
+// The exact 0.x pin and its match with the installed tree are asserted by
+// `snui-check-consumer` in `check:panel`; that bin accepts either dependency
+// block, and this package bundles the library, so it must stay a development
+// dependency.
 if (packageJson.dependencies?.['signalk-nearlcrews-ui']) {
   throw new Error('signalk-nearlcrews-ui must be a bundled development dependency.');
 }
@@ -152,23 +156,6 @@ for (const lifecycleScript of ['prepare', 'preinstall', 'install', 'postinstall'
 if (packageJson.gitHead !== undefined && !/^[0-9a-f]{40}$/.test(packageJson.gitHead)) {
   throw new Error('gitHead must be a full lowercase Git commit SHA when it is present.');
 }
-// Two invariants with different lifetimes, so they get two checks. The shape is
-// permanent: any range prefix would admit a minor bump, and this library ships
-// breaking changes in minor releases. The version is the deliberate-bump
-// tripwire, so a bump has to be reviewed here rather than arriving with an
-// install. Asserting only the version leaves the shape enforced by coincidence,
-// and pasting a failing `^0.9.0` into the literal would satisfy it.
-const UI_PIN = '0.8.2';
-const uiSpec = packageJson.devDependencies?.['signalk-nearlcrews-ui'];
-if (typeof uiSpec !== 'string' || !/^0\.\d+\.\d+$/.test(uiSpec)) {
-  throw new Error(
-    `The UI package must be pinned to an exact 0.x version during its 0.x series. Received ${String(uiSpec)}.`,
-  );
-}
-if (uiSpec !== UI_PIN) {
-  throw new Error(`The UI package must be pinned to exact version ${UI_PIN}. Received ${uiSpec}.`);
-}
-
 // D2: @types/node must track the advertised runtime floor. Typing against a
 // newer Node than `engines.node` admits lets a later-Node API type-check here
 // and then fail on the oldest lane the plugin advertises.
