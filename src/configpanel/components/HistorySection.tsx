@@ -4,9 +4,11 @@ import {
   Button,
   Cluster,
   LabeledField,
+  LiveRegion,
   Select,
   Stack,
   StatusIndicator,
+  splitLabeledFieldControlProps,
   TextInput,
 } from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
@@ -21,8 +23,9 @@ interface Props {
   testing: boolean;
   urlRef: RefObject<HTMLInputElement | null>;
   databaseRef: RefObject<HTMLInputElement | null>;
-  // True once a save attempt was blocked here, which is the only moment a field
-  // error is newly relevant and worth announcing.
+  // True once a save attempt was blocked here, which is the only moment these
+  // fields are genuinely in error: a pristine panel must not accuse the
+  // operator of fields they have not reached yet.
   submitted: boolean;
 }
 
@@ -40,7 +43,12 @@ export const HistorySection = memo(function HistorySection({
   const questdb = history.questdb ?? {};
   const influxdb = history.influxdb ?? {};
   const { source, noUrl, invalidUrl, missingDatabase } = historyValidity(cfg.history);
-  const errorLive = submitted ? 'polite' : 'off';
+  const testText = testResult
+    ? testResult.ok
+      ? `Reachable at ${testResult.url}`
+      : testResult.text
+    : '';
+  const testAnnouncement = testResult ? `History provider test: ${testText}` : '';
 
   return (
     <Stack gap={3}>
@@ -71,13 +79,14 @@ export const HistorySection = memo(function HistorySection({
           label="QuestDB REST URL"
           description="The HTTP endpoint reachable from the Signal K server."
           error={
-            noUrl
-              ? 'Enter the QuestDB REST URL.'
-              : invalidUrl
-                ? `Enter an ${HISTORY_URL_RULE}.`
-                : undefined
+            !submitted
+              ? undefined
+              : noUrl
+                ? 'Enter the QuestDB REST URL.'
+                : invalidUrl
+                  ? `Enter an ${HISTORY_URL_RULE}.`
+                  : undefined
           }
-          errorLive={errorLive}
           layout="inline"
           required
         >
@@ -119,13 +128,14 @@ export const HistorySection = memo(function HistorySection({
             label="InfluxDB URL"
             description="The v1-compatible HTTP endpoint reachable from Signal K."
             error={
-              noUrl
-                ? 'Enter the InfluxDB URL.'
-                : invalidUrl
-                  ? `Enter an ${HISTORY_URL_RULE}.`
-                  : undefined
+              !submitted
+                ? undefined
+                : noUrl
+                  ? 'Enter the InfluxDB URL.'
+                  : invalidUrl
+                    ? `Enter an ${HISTORY_URL_RULE}.`
+                    : undefined
             }
-            errorLive={errorLive}
             layout="inline"
             required
           >
@@ -144,8 +154,9 @@ export const HistorySection = memo(function HistorySection({
           <LabeledField
             label="Database"
             description="For version 2, enter the DBRP database name."
-            error={missingDatabase ? 'Enter the database or DBRP database name.' : undefined}
-            errorLive={errorLive}
+            error={
+              submitted && missingDatabase ? 'Enter the database or DBRP database name.' : undefined
+            }
             layout="inline"
             required
           >
@@ -169,7 +180,13 @@ export const HistorySection = memo(function HistorySection({
             layout="inline"
           >
             <TextInput
-              autoComplete="username"
+              // A database credential the operator enters on the vessel's
+              // behalf, not their own login for this origin. `username` would
+              // opt it into identity autofill and, above the password field,
+              // invite a password manager to store the pair as a login for the
+              // Signal K server, which is what SecretInput beside it defaults
+              // away from.
+              autoComplete="off"
               value={influxdb.username ?? ''}
               onChange={(event) =>
                 set({
@@ -186,17 +203,9 @@ export const HistorySection = memo(function HistorySection({
             description="InfluxDB 2 uses an API token here."
             layout="inline"
           >
-            {(controlProps) => (
+            {(controlContract) => (
               <SecretInput
-                id={controlProps.id}
-                aria-describedby={controlProps['aria-describedby']}
-                aria-errormessage={controlProps['aria-errormessage']}
-                aria-invalid={controlProps['aria-invalid']}
-                disabled={controlProps.disabled}
-                name={controlProps.name}
-                required={controlProps.required}
-                autoComplete="new-password"
-                spellCheck={false}
+                {...splitLabeledFieldControlProps(controlContract).controlProps}
                 value={influxdb.password ?? ''}
                 onChange={(event) =>
                   set({
@@ -212,6 +221,13 @@ export const HistorySection = memo(function HistorySection({
         </>
       ) : null}
 
+      {/*
+       * The chip below is created together with its text, which a screen
+       * reader may never observe, so the probe result announces from this
+       * region instead: it is mounted from the section's first render and
+       * only its message changes.
+       */}
+      <LiveRegion message={testAnnouncement} />
       {source !== 'none' ? (
         <Cluster gap={3}>
           <Button
@@ -224,8 +240,8 @@ export const HistorySection = memo(function HistorySection({
             Test connection
           </Button>
           {testResult ? (
-            <StatusIndicator tone={testResult.ok ? 'success' : 'danger'} live="polite">
-              {testResult.ok ? `Reachable at ${testResult.url}` : testResult.text}
+            <StatusIndicator tone={testResult.ok ? 'success' : 'danger'}>
+              {testText}
             </StatusIndicator>
           ) : null}
         </Cluster>

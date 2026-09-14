@@ -6,6 +6,7 @@ import {
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
   MAINTENANCE_SUPPORTED_EVENTS,
+  MAX_CALLS_PER_DAY_CEILING,
   type MaintenanceEventKind,
   NO_EVENTS,
 } from './types.js';
@@ -294,12 +295,19 @@ function buildSchemaInner(): PluginSchema {
           maxCallsPerDay: {
             type: 'integer',
             title: 'Max OpenRouter calls per day',
-            description: 'Hard cap on OpenRouter calls per UTC day to bound spend.',
+            // "analyzer calls": POST /api/openrouter/test deliberately runs
+            // outside this cap so an operator debugging connectivity does not
+            // spend the day's analyzer budget. That route carries its own
+            // coalescing and cooldown instead; see core/api.ts.
+            description: 'Hard cap on analyzer OpenRouter calls per UTC day, to bound spend.',
             default: DEFAULT_OPTIONS.openrouter.maxCallsPerDay,
             // Matches the runtime clamp floor in types.ts::validateOptions. A
             // lower value would be silently rewritten to the default, so a
             // "0 calls" entry would buy the shipped daily cap instead.
             minimum: 1,
+            // Matches the runtime ceiling, from the same constant. The cap is
+            // the only hard spend bound in the plugin, so it needs a top.
+            maximum: MAX_CALLS_PER_DAY_CEILING,
           },
           fallbackModels: {
             type: 'array',
@@ -313,7 +321,7 @@ function buildSchemaInner(): PluginSchema {
             type: 'object',
             title: 'Provider routing (advanced)',
             description:
-              'Optional OpenRouter provider controls. Tight routing can leave no eligible provider and fail a run.',
+              'Optional OpenRouter provider controls. Left unset, your OpenRouter account settings govern where prompts are routed and how long providers retain them. Tight routing can leave no eligible provider and fail a run.',
             properties: {
               sort: {
                 type: 'string',

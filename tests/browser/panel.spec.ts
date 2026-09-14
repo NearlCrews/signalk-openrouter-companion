@@ -10,16 +10,15 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Live status' })).toBeVisible();
 });
 
-test('shows a standalone compatibility alert when native CSS scope is unavailable', async ({
+test('shows a standalone compatibility notice when native CSS scope is unavailable', async ({
   page,
 }) => {
   await page.goto('/?unsupported-css-scope');
   await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
 
-  const notice = page.getByRole('alert');
+  const notice = page.getByRole('region', { name: 'Browser update required' });
   await expect(notice).toHaveAttribute('data-browser-compatibility-message', '');
-  await expect(notice).toContainText('Browser update required');
-  await expect(notice).toContainText('This panel requires native CSS @scope.');
+  await expect(notice).toContainText('This panel needs a newer browser');
   await expect(page.locator('[data-snui-root]')).toHaveCount(0);
 });
 
@@ -48,7 +47,10 @@ test('loads the production remote and completes the save flow', async ({ page })
   await page.getByRole('button', { name: 'Add API key' }).click();
   const apiKey = page.getByRole('textbox', { name: 'API key', exact: true });
   await expect(apiKey).toBeFocused();
-  await expect(apiKey).toHaveAttribute('aria-invalid', 'true');
+  // A pristine required field is not accused of an error: the mark and its
+  // message appear only once a save is actually blocked on it.
+  await expect(apiKey).not.toHaveAttribute('aria-invalid');
+  await expect(page.getByText('Enter an OpenRouter API key.')).toBeHidden();
   await expect(apiKey).toHaveAttribute('type', 'password');
   await page.getByRole('button', { name: 'Show' }).click();
   await expect(apiKey).toHaveAttribute('type', 'text');
@@ -56,7 +58,6 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(apiKey).toHaveAttribute('type', 'password');
   await expect(apiKey).not.toHaveAttribute('descriptionid');
   await expect(apiKey).not.toHaveAttribute('errorid');
-  await expect(page.getByText('Enter an OpenRouter API key.')).toBeVisible();
   await apiKey.fill('   ');
 
   const saveButton = page
@@ -64,6 +65,8 @@ test('loads the production remote and completes the save flow', async ({ page })
     .locator('button', { hasText: 'Save configuration' });
   await saveButton.click();
   await expect(apiKey).toBeFocused();
+  await expect(apiKey).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByText('Enter an OpenRouter API key.')).toBeVisible();
   await expect(page.getByText('Enter an OpenRouter API key before saving.')).toBeVisible();
   await expect(page.locator('body')).not.toHaveAttribute('data-save-count', /\d/);
 
@@ -85,13 +88,14 @@ test('loads the production remote and completes the save flow', async ({ page })
   await page.getByRole('button', { name: 'History source' }).click();
   const questdbUrl = page.getByRole('textbox', { name: 'QuestDB REST URL', exact: true });
   await questdbUrl.fill('ftp://questdb.local');
+  await expect(questdbUrl).not.toHaveAttribute('aria-invalid');
+  await saveButton.click();
+  await expect(questdbUrl).toBeFocused();
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
   await questdbUrl.fill('http://operator:secret@questdb.local:9000');
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
   await questdbUrl.fill('http://questdb.local:9000?token=secret');
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
-  await saveButton.click();
-  await expect(questdbUrl).toBeFocused();
   await expect(
     page.getByText('Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment.'),
   ).toBeVisible();
@@ -134,11 +138,10 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(saveButton).toHaveAttribute('aria-disabled', 'true');
   await expect(saveButton).toHaveAttribute('aria-busy', 'true');
   await expect(saveButton).toHaveAccessibleName('Save configuration');
-  await expect(saveButton).toHaveAccessibleDescription('Saving');
+  await expect(saveButton).toHaveAccessibleDescription('Saving changes');
   const saveStatus = page.locator('[data-panel-action-bar] [tabindex="-1"]');
   await expect(saveStatus).toBeFocused();
-  await expect(saveStatus).toContainText('Save requested at');
-  await expect(saveStatus).toContainText('Plugin restarting');
+  await expect(saveStatus).toContainText('Saving changes');
 
   await saveButton.dispatchEvent('click');
   await expect(page.locator('body')).toHaveAttribute('data-save-count', '1');
@@ -149,6 +152,7 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(saveButton).not.toHaveAttribute('aria-busy');
   await expect(page.getByText(/Plugin restarted\./)).toBeVisible();
   await expect(saveStatus).toBeFocused();
+  await expect(saveStatus).toContainText('Saved at');
   await expect(saveStatus).toContainText('Plugin restarted');
 });
 
@@ -161,15 +165,19 @@ test('configures and tests InfluxDB history without exposing credentials', async
   await provider.selectOption('influxdb');
   const influxUrl = page.getByRole('textbox', { name: 'InfluxDB URL', exact: true });
   const database = page.getByRole('textbox', { name: 'Database', exact: true });
-  await influxUrl.fill('http://operator:secret@influx.local:8086');
-  await expect(influxUrl).toHaveAttribute('aria-invalid', 'true');
-  await influxUrl.fill('http://influx.local:8086');
-
   const saveButton = page
     .locator('[data-panel-action-bar]')
     .locator('button', { hasText: 'Save configuration' });
+  await influxUrl.fill('http://operator:secret@influx.local:8086');
+  await expect(influxUrl).not.toHaveAttribute('aria-invalid');
+  await saveButton.click();
+  await expect(influxUrl).toBeFocused();
+  await expect(influxUrl).toHaveAttribute('aria-invalid', 'true');
+  await influxUrl.fill('http://influx.local:8086');
+
   await saveButton.click();
   await expect(database).toBeFocused();
+  await expect(database).toHaveAttribute('aria-invalid', 'true');
   await expect(
     page.getByText('Enter the InfluxDB database or DBRP database name before saving.'),
   ).toBeVisible();
@@ -183,7 +191,9 @@ test('configures and tests InfluxDB history without exposing credentials', async
     'password',
   );
   await page.getByRole('button', { name: 'Test connection' }).click();
-  await expect(page.getByText('Reachable at http://influx.local:8086')).toBeVisible();
+  await expect(
+    page.getByText('Reachable at http://influx.local:8086', { exact: true }),
+  ).toBeVisible();
 
   await saveButton.click();
   const saved = JSON.parse(
@@ -244,7 +254,7 @@ test('edits the scheduled fields and both drawers of an analyzer', async ({ page
     name: 'View reports for Weather Outlook Advisor',
   });
   await reportsToggle.click();
-  await expect(page.getByText('No reports yet')).toBeVisible();
+  await expect(page.getByText('No reports yet', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Hide reports for Weather Outlook Advisor' }).click();
   await expect(reportsToggle).toBeFocused();
 
@@ -253,10 +263,23 @@ test('edits the scheduled fields and both drawers of an analyzer', async ({ page
   await expect(prompt).toHaveValue('Summarize the vessel data.');
   const reset = page.getByRole('button', { name: 'Reset to default' });
   await expect(reset).toHaveAttribute('aria-disabled', 'true');
+  // An inert control explains itself in text, not in a `title` that only a
+  // pointer hover reveals.
+  await expect(reset).toHaveAccessibleDescription(
+    'This analyzer is already using the built-in default, so there is nothing to reset.',
+  );
   await prompt.fill('Fixture prompt override.');
   await expect(reset).not.toHaveAttribute('aria-disabled', 'true');
   await reset.click();
   await expect(prompt).toHaveValue('Summarize the vessel data.');
+
+  // The in-panel Close closes through the disclosure, so focus returns to the
+  // toggle. Closing by flipping the consumer's own open state moves no focus,
+  // and this panel unmounts its children, which would drop focus to the body.
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Edit prompt for Weather Outlook Advisor' }),
+  ).toBeFocused();
 });
 
 test('confirms before discarding unsaved edits', async ({ page }) => {
@@ -269,13 +292,15 @@ test('confirms before discarding unsaved edits', async ({ page }) => {
   await expect(page.getByText('Discard unsaved changes?')).toBeVisible();
   await page.getByRole('button', { name: 'Keep editing' }).click();
   await expect(apiKey).toHaveValue('fixture-key');
-  await expect(discard).toBeFocused();
+  // The save bar moves focus to its status before Discard runs, so the
+  // confirmation hands focus back there when it closes.
+  await expect(page.locator('[data-panel-action-bar] [tabindex="-1"]')).toBeFocused();
 
   await discard.click();
   await page.getByRole('button', { name: 'Discard changes' }).click();
   await expect(page.getByText('Discard unsaved changes?')).toBeHidden();
   await expect(apiKey).toHaveValue('');
-  await expect(page.getByText('No unsaved changes')).toBeVisible();
+  await expect(page.getByText('All changes saved')).toBeVisible();
 });
 
 test('ignores an older status response that resolves after a newer poll', async ({ page }) => {
@@ -298,7 +323,9 @@ test('ignores an older status response that resolves after a newer poll', async 
   await expect(page.getByText('9 / 50', { exact: true })).toBeVisible();
 });
 
-test('defaults a fresh profile to Auto without persisting an implicit choice', async ({ page }) => {
+test('defaults a fresh profile to Match Admin without persisting an implicit choice', async ({
+  page,
+}) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.evaluate(() => {
     localStorage.removeItem('signalk-nearlcrews-ui.theme.v1');
@@ -315,7 +342,7 @@ test('defaults a fresh profile to Auto without persisting an implicit choice', a
   await expect(root).not.toHaveAttribute('data-snui-theme');
   await expect(root).toHaveCSS('background-color', 'rgb(244, 246, 248)');
   await expect(root).toHaveCSS('color', 'rgb(24, 32, 44)');
-  await expect(themeGroup.getByRole('radio', { name: 'Auto' })).toBeChecked();
+  await expect(themeGroup.getByRole('radio', { name: 'Match Admin' })).toBeChecked();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
     .toBeNull();
@@ -347,13 +374,13 @@ test('ignores the retired legacy preference and supports every theme', async ({ 
     ['Light', 'light'],
     ['Dark', 'dark'],
     ['Night', 'night'],
-    ['System', 'system'],
+    ['Match device', 'system'],
   ] as const) {
     await themeGroup.getByRole('radio', { name: label }).click();
     await expect(page.locator('[data-snui-root]')).toHaveAttribute('data-snui-theme', value);
   }
   await expect(page.locator('[data-snui-root]')).toHaveCSS('background-color', 'rgb(16, 19, 28)');
-  await themeGroup.getByRole('radio', { name: 'Auto' }).click();
+  await themeGroup.getByRole('radio', { name: 'Match Admin' }).click();
   await expect(page.locator('[data-snui-root]')).not.toHaveAttribute('data-snui-theme');
   await expect(page.locator('[data-snui-root]')).toHaveCSS(
     'background-color',
@@ -393,20 +420,14 @@ test('responds to a 320-pixel embedded panel inside a wide host', async ({ page 
 // action bar, and a 20-pixel painted checkbox can be fine because its wrapping
 // label carries the target. Exported as a helper so every panel state gets the
 // same treatment.
-function measurePointerTargets(
-  page: Page,
-  // Limits the sweep to one subtree. Used for the discard confirmation, where
-  // the rest of the page is legitimately covered by the grown action bar.
-  rootSelector = 'body',
-): Promise<{
+function measurePointerTargets(page: Page): Promise<{
   floor: number;
   measured: number;
   undersized: string[];
   blocked: string[];
 }> {
-  return page.evaluate((scope: string) => {
-    const root = document.querySelector(scope);
-    if (root === null) throw new Error(`No element matched ${scope}.`);
+  return page.evaluate(() => {
+    const root = document.body;
     const SELECTOR =
       'button, a[href], input:not([type="hidden"]), select, textarea, [role="checkbox"], [role="radio"], [role="switch"]';
     // WCAG 2.5.8 asks 24 pixels; the shared UI promises 40 on a fine pointer
@@ -456,7 +477,7 @@ function measurePointerTargets(
       }
     }
     return { floor, measured, undersized, blocked };
-  }, rootSelector);
+  });
 }
 
 // Every sweep asserts the same three things and varies only how many controls
@@ -488,11 +509,8 @@ test('gives every interactive control a reachable pointer target', async ({ page
   expectReachableTargets(await measurePointerTargets(page), 25);
 });
 
-// The discard confirmation renders inside the action bar, so it gets its own
-// page rather than being stacked onto the sweep above: opening it grows the
-// docked bar (105 to 356 pixels on a coarse viewport), which legitimately
-// covers page content beneath it and would make a combined measurement report
-// a layout consequence as if it were a defect.
+// The discard confirmation renders in flow above the docked save bar, and its
+// controls exist only while it is open, so it gets its own sweep.
 test('gives the discard confirmation a reachable pointer target', async ({ page }) => {
   test.setTimeout(120_000);
   await page.getByRole('button', { name: 'Add API key' }).click();
@@ -502,11 +520,7 @@ test('gives the discard confirmation a reachable pointer target', async ({ page 
   await expect(page.getByRole('button', { name: 'Keep editing' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Discard changes' })).toBeVisible();
 
-  // Scoped to the action bar: page controls behind the open confirmation are
-  // covered by design, so sweeping the whole document here would report a
-  // layout consequence as a defect. What must hold is that the confirmation's
-  // own controls, and the bar's, are sized and reachable.
-  expectReachableTargets(await measurePointerTargets(page, '[data-panel-action-bar]'), 3);
+  expectReachableTargets(await measurePointerTargets(page), 3);
 });
 
 test('gives failure-state controls a reachable pointer target', async ({ page }) => {
@@ -528,4 +542,77 @@ test('gives failure-state controls a reachable pointer target', async ({ page })
   await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
 
   expectReachableTargets(await measurePointerTargets(page), 10);
+
+  // The error branch owns a second Close button, wired the same way.
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Edit prompt for Maintenance Advisor' }),
+  ).toBeFocused();
+});
+
+test('announces a fire outcome from a region that already existed', async ({ page }) => {
+  await page.getByRole('button', { name: 'Analyzers' }).click();
+  await page.getByRole('button', { name: 'Maintenance Advisor', exact: true }).click();
+
+  // The region is in the document, and empty, before the run: a live region
+  // created in the same commit as its message is not announced reliably. Every
+  // row keeps one, so it is read through the row that owns it.
+  const row = page.getByRole('region', { name: 'Maintenance Advisor', exact: true });
+  const announcer = row.locator('[data-fire-announcement]');
+  await expect(announcer).toHaveText('');
+  await expect(announcer).toHaveAttribute('role', 'status');
+  await announcer.evaluate((element) => element.setAttribute('data-marked', ''));
+
+  const fire = page.getByRole('button', { name: 'Fire now for Maintenance Advisor' });
+  // The cost of pressing it is stated beside the button, not in a section the
+  // operator may never open.
+  await expect(fire).toHaveAccessibleDescription(
+    'Running an analyzer now makes one paid OpenRouter call that counts against the daily cap.',
+  );
+  await fire.click();
+
+  // The same node carries the text, rather than a fresh node appearing with it.
+  const marked = row.locator('[data-fire-announcement][data-marked]');
+  await expect(marked).toHaveText(/^Maintenance Advisor: Report generated at .+\.$/);
+  const first = await marked.textContent();
+
+  // A second identical outcome still announces, because the completion time
+  // gives the region a content change to speak.
+  await page.waitForTimeout(1100);
+  await fire.click();
+  await expect.poll(() => marked.textContent()).not.toBe(first);
+  await expect(marked).toHaveText(/^Maintenance Advisor: Report generated at .+\.$/);
+});
+
+test('renders a populated report list without Axe findings or overflow', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/?reports');
+  await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
+  await page.getByRole('button', { name: 'Analyzers' }).click();
+  await page.getByRole('button', { name: 'Battery Health Advisor', exact: true }).click();
+  await page.getByRole('button', { name: /View reports for Battery Health/ }).click();
+
+  const reports = page.getByRole('region', { name: 'Reports for Battery Health Advisor' });
+  await expect(reports.getByText('No reports yet')).toBeHidden();
+  // The timestamp reads as words and still carries a machine-readable value,
+  // and the trigger reads as interface copy rather than a log field.
+  await expect(reports.getByText('2 hours ago')).toBeVisible();
+  await expect(reports.locator('time').first()).toHaveAttribute('datetime', /^\d{4}-\d{2}-\d{2}T/);
+  await expect(reports.getByText('Scheduled')).toBeVisible();
+  await expect(reports.getByText('Engine stop')).toBeVisible();
+  await expect(reports.getByText('Manual run')).toBeVisible();
+  await expect(reports.getByText('1,842 tokens')).toBeVisible();
+  await expect(reports.getByText('$0.0123')).toBeVisible();
+  await expect(
+    reports.getByText('Failure: OpenRouter returned 502 after three attempts.'),
+  ).toBeVisible();
+  await expect(reports.getByText('House bank held 12.9 V overnight.')).toBeVisible();
+
+  expectReachableTargets(await measurePointerTargets(page), 15);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
 });

@@ -20,8 +20,8 @@ request envelope:
   provider routing, and no privacy controls. A single provider 502 exhausts the
   retry ladder and fails the report (and for `alerts`, sounds the alarm).
 
-This was the convergent finding of a four-agent code review: three of the four
-agents independently flagged the missing cost/token observability.
+Missing cost and token observability was the most consistently reported
+weakness in the code review that preceded this design.
 
 ## Goals
 

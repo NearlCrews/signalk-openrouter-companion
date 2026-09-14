@@ -1,9 +1,22 @@
 import type { ReactElement, RefObject } from 'react';
 import { memo, useId } from 'react';
-import { Banner, Button, LabeledField, Select, Stack, TextInput } from 'signalk-nearlcrews-ui';
+import {
+  Banner,
+  Button,
+  LabeledField,
+  LiveRegion,
+  NumberField,
+  Select,
+  Stack,
+  splitLabeledFieldControlProps,
+  TextInput,
+} from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
 import type { ModelOption, ModelsState, PanelConfig } from '../types.js';
-import { IntegerInput } from './IntegerInput.js';
+import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY } from '../utils.js';
+
+// Written once so the banner and its announcement cannot drift apart.
+const MODELS_ERROR = 'Could not load the model list. Type a model slug manually, or retry.';
 
 interface Props {
   cfg: PanelConfig;
@@ -12,8 +25,9 @@ interface Props {
   modelsState: ModelsState;
   loadModels: () => Promise<void>;
   apiKeyRef: RefObject<HTMLInputElement | null>;
-  // True once a save attempt was blocked here, which is the only moment a field
-  // error is newly relevant and worth announcing.
+  // True once a save attempt was blocked here, which is the only moment the
+  // field is genuinely in error: a pristine first-run panel must not accuse
+  // the operator of an empty field they have not reached yet.
   submitted: boolean;
 }
 
@@ -32,7 +46,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
   const modelListId = useId();
   const modelHint =
     modelsState === 'loading'
-      ? 'Loading available models...'
+      ? 'Loading available models…'
       : modelsState === 'ready'
         ? `${models.length} models available`
         : 'OpenRouter model slug';
@@ -42,23 +56,14 @@ export const OpenRouterSection = memo(function OpenRouterSection({
       <LabeledField
         label="API key"
         description="Required to call the LLM. The value remains in Signal K plugin configuration."
-        error={noApiKey ? 'Enter an OpenRouter API key.' : undefined}
-        errorLive={submitted ? 'polite' : 'off'}
+        error={submitted && noApiKey ? 'Enter an OpenRouter API key.' : undefined}
         layout="inline"
         required
       >
-        {(controlProps) => (
+        {(controlContract) => (
           <SecretInput
-            id={controlProps.id}
-            aria-describedby={controlProps['aria-describedby']}
-            aria-errormessage={controlProps['aria-errormessage']}
-            aria-invalid={controlProps['aria-invalid']}
-            disabled={controlProps.disabled}
-            name={controlProps.name}
-            required={controlProps.required}
+            {...splitLabeledFieldControlProps(controlContract).controlProps}
             ref={apiKeyRef}
-            autoComplete="new-password"
-            spellCheck={false}
             value={openRouter.apiKey ?? ''}
             onChange={(event) => set({ openrouter: { ...openRouter, apiKey: event.target.value } })}
           />
@@ -83,32 +88,43 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         ))}
       </datalist>
 
+      {/*
+       * The banner below is created together with its text, which a screen
+       * reader may never observe, so the announcement rides on this region
+       * instead: it is mounted from the section's first render and only its
+       * message changes.
+       */}
+      <LiveRegion message={modelsState === 'error' ? MODELS_ERROR : ''} />
       {modelsState === 'error' ? (
         <Banner
           tone="danger"
-          live="polite"
           actions={
             <Button size="compact" onClick={() => void loadModels()}>
               Retry
             </Button>
           }
         >
-          Could not load the model list. Type a model slug manually, or retry.
+          {MODELS_ERROR}
         </Banner>
       ) : null}
 
-      <LabeledField
+      <NumberField
         label="Maximum calls per day"
-        description="UTC daily hard cap on OpenRouter calls. The Test button is exempt."
+        description="UTC daily cap on analyzer OpenRouter calls, from 1 to 1000. The Test button is exempt."
         layout="inline"
-      >
-        <IntegerInput
-          value={openRouter.maxCallsPerDay}
-          min={1}
-          placeholder="50"
-          onValueChange={(value) => set({ openrouter: { ...openRouter, maxCallsPerDay: value } })}
-        />
-      </LabeledField>
+        // Clamp mode with an empty field allowed: a cleared field means "use the
+        // plugin default", anything unparsable or outside the range commits the
+        // nearest bound, and fractions truncate. Both bounds match the runtime
+        // clamp, so the panel cannot save a number the plugin would rewrite.
+        allowEmpty
+        integer
+        min={1}
+        max={MAX_CALLS_PER_DAY}
+        fallback={1}
+        inputProps={{ placeholder: String(DEFAULT_MAX_CALLS_PER_DAY) }}
+        value={openRouter.maxCallsPerDay}
+        onValueChange={(value) => set({ openrouter: { ...openRouter, maxCallsPerDay: value } })}
+      />
 
       <LabeledField
         label="Provider data"

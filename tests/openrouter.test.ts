@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OpenRouterClient } from '../src/core/openrouter.js';
+import { OpenRouterClient, OpenRouterError } from '../src/core/openrouter.js';
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -569,10 +569,12 @@ describe('OpenRouterClient', () => {
     });
   });
 
-  it('drops blank fallback entries and dedupes the models array', async () => {
+  it('trims and dedupes fallback slugs and drops blank entries', async () => {
     // A cleared admin-UI row leaves a blank string; a copy-pasted slug can
-    // duplicate the primary or another fallback. Both are cleaned: blanks are
-    // dropped, and the Set leaves each slug once in first-seen order.
+    // duplicate the primary or another fallback, and can arrive wearing the
+    // spaces it was pasted with. All three are cleaned: blanks are dropped,
+    // each slug is trimmed before it reaches the request body, and the Set
+    // leaves each one once in first-seen order.
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, { choices: [{ message: { content: 'x' } }], usage: {} }),
     );
@@ -581,7 +583,7 @@ describe('OpenRouterClient', () => {
       fallbackModels: [
         '',
         '   ',
-        'openai/gpt-5-mini',
+        '  openai/gpt-5-mini  ',
         'anthropic/claude-haiku-4.5',
         'openai/gpt-5-mini',
       ],
@@ -592,19 +594,198 @@ describe('OpenRouterClient', () => {
     expect(body.model).toBeUndefined();
   });
 
+  it('tells beforeRetry that a request timeout may already have been billed', async () => {
+    // A client-side timeout abandons a request the provider may still be
+    // generating, and billing for. The caller counts that retry as a call of
+    // its own; a 429 or gateway fault produced no generation and is free.
+    // Real timers: the request timeout is AbortSignal.timeout, which fake
+    // timers do not drive.
+    fetchMock
+      .mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, { choices: [{ message: { content: 'recovered' } }], usage: {} }),
+      );
+    const seen: Array<{ timedOut: boolean }> = [];
+    const c = makeClient({ requestTimeoutMs: 10, random: () => 0 });
+    const r = await c.complete({
+      system: 's',
+      user: 'u',
+      beforeRetry: async (previous) => {
+        seen.push(previous);
+        return true;
+      },
+    });
+    expect(r.text).toBe('recovered');
+    expect(seen).toEqual([{ timedOut: true }]);
+  });
+
+  it('does not mark a retryable HTTP status as timed out', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(429, { error: { message: 'slow down' } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { choices: [{ message: { content: 'ok' } }], usage: {} }),
+      );
+    const seen: Array<{ timedOut: boolean }> = [];
+    const c = makeClient({ random: () => 0 });
+    await c.complete({
+      system: 's',
+      user: 'u',
+      beforeRetry: async (previous) => {
+        seen.push(previous);
+        return true;
+      },
+    });
+    expect(seen).toEqual([{ timedOut: false }]);
+  });
+
+  it('stops the retry ladder and throws when beforeRetry refuses', async () => {
+    // What keeps a timing-out run from billing four generations against one
+    // recorded budget call: the caller can end the ladder once its cap is spent.
+    fetchMock.mockResolvedValue(jsonResponse(502, { error: { message: 'bad gateway' } }));
+    const c = makeClient({ random: () => 0 });
+    await expect(
+      c.complete({ system: 's', user: 'u', beforeRetry: async () => false }),
+    ).rejects.toMatchObject({ status: 502, message: 'bad gateway' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces the descriptive routing message from a terminal 503 to the caller', async () => {
-    // 503 is terminal (no retry); its descriptive routing message must reach the
-    // caller so the failure report explains the config problem rather than an
-    // opaque "HTTP 503".
+    // A 503 whose body carries no provider_overloaded marker is the routing
+    // form (no provider meets max_price / data_collection / zdr /
+    // allow_fallbacks). It is terminal, and its message must reach the caller
+    // with OpenRouter's text first and a pointer at the provider preferences
+    // after it, so the failure report explains the config problem rather than
+    // an opaque "HTTP 503".
     const routingMessage = 'No allowed providers are available for the selected model.';
     fetchMock.mockResolvedValue(
       jsonResponse(503, { error: { code: 503, message: routingMessage } }),
     );
     const c = makeClient();
-    await expect(c.complete({ system: 's', user: 'u' })).rejects.toMatchObject({
+    const err = await c.complete({ system: 's', user: 'u' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OpenRouterError);
+    expect(err).toMatchObject({ status: 503 });
+    const message = (err as OpenRouterError).message;
+    expect(message.startsWith(routingMessage)).toBe(true);
+    expect(message).toContain('Check the OpenRouter provider preferences');
+    expect(message).toContain('allowFallbacks');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a 503 marked provider_overloaded, honoring Retry-After', async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(
+          503,
+          {
+            error: {
+              code: 503,
+              message: 'Provider overloaded',
+              metadata: { error_type: 'provider_overloaded' },
+            },
+          },
+          { 'retry-after': '2' },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'after-overload' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    // random()=1 pins the first ladder rung at its full 500ms, well under the
+    // 2000ms Retry-After, so the header is what gates the retry.
+    const c = makeClient({ random: () => 1 });
+    const p = c.complete({ system: 's', user: 'u' });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const r = await p;
+    expect(r.text).toBe('after-overload');
+    vi.useRealTimers();
+  });
+
+  it('caps the Retry-After of an overloaded 503 at the 60 second ceiling', async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(
+          503,
+          {
+            error: {
+              code: 503,
+              message: 'Provider overloaded',
+              metadata: { error_type: 'provider_overloaded' },
+            },
+          },
+          { 'retry-after': '3600' },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          choices: [{ message: { content: 'after-cap' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    // An hour-long Retry-After is capped, not obeyed: the retry fires at the
+    // 60s ceiling instead of pinning the run for the full hour.
+    const c = makeClient({ random: () => 1 });
+    const p = c.complete({ system: 's', user: 'u' });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const r = await p;
+    expect(r.text).toBe('after-cap');
+    vi.useRealTimers();
+  });
+
+  it('gives up after 3 retries on a 503 that stays provider_overloaded', async () => {
+    vi.useFakeTimers();
+    // A fresh Response per attempt: a body reads once, and the classification
+    // needs the error_type from every attempt's body, not just the first.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(503, {
+        error: {
+          code: 503,
+          message: 'Provider overloaded',
+          metadata: { error_type: 'provider_overloaded' },
+        },
+      }),
+    );
+    const c = makeClient();
+    const p = c.complete({ system: 's', user: 'u' });
+    // The exhausted-retry error keeps OpenRouter's own message: an overload is
+    // not a routing problem, so the provider-preferences hint does not apply.
+    const assertion = expect(p).rejects.toMatchObject({
+      name: 'OpenRouterError',
       status: 503,
-      message: routingMessage,
+      message: 'Provider overloaded',
     });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
+  });
+
+  it('treats a 503 without a body as terminal and points at the provider preferences', async () => {
+    // No body means no error_type to read, so the client cannot tell an
+    // overload from a routing failure and must not spend the retry budget on
+    // a guess. The bare status becomes the message, with the hint after it.
+    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+    const c = makeClient();
+    const err = await c.complete({ system: 's', user: 'u' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OpenRouterError);
+    expect(err).toMatchObject({ status: 503 });
+    const message = (err as OpenRouterError).message;
+    expect(message.startsWith('HTTP 503.')).toBe(true);
+    expect(message).toContain('Check the OpenRouter provider preferences');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -657,10 +838,16 @@ describe('OpenRouterClient', () => {
     expect(body.provider).toBeUndefined();
   });
 
-  it('does not retry a 503 (no provider meets routing)', async () => {
+  it('does not retry a 503 whose error_type is not provider_overloaded', async () => {
+    // Only the overloaded marker earns a retry. Any other error_type on a 503
+    // is read as the routing form and fails fast on the first attempt.
     fetchMock.mockResolvedValue(
       jsonResponse(503, {
-        error: { code: 503, message: 'No allowed providers are available for the selected model.' },
+        error: {
+          code: 503,
+          message: 'No allowed providers are available for the selected model.',
+          metadata: { error_type: 'provider_unavailable' },
+        },
       }),
     );
     const c = makeClient();

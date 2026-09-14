@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { MaintenanceAnalyzer } from '../src/analyzers/maintenance.js';
+import type { BufferSummary } from '../src/core/buffer.js';
 import { RollingBuffer } from '../src/core/buffer.js';
+import { MAX_PROMPT_PATH_ROWS } from '../src/core/cfg.js';
 import {
   cleanupTmpDir,
   type MockApp,
@@ -212,6 +214,71 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     expect(out.user).toContain('cycles: 120');
     expect(out.user).toContain('voltage (session): min=13.400 max=13.700 mean=13.600 count=12');
     expect(out.user).not.toContain('"voltageSession"');
+  });
+
+  it('keeps the notification state when a long message would have pushed it past the clamp', () => {
+    // The slot value used to be serialized whole and clamped as one blob, so a
+    // long `message` ahead of `state` in key order carried the state past the
+    // cut. The prompt then asked the model to surface a non-normal slot it
+    // could not see. Each field is clamped on its own now, and a cut message
+    // says it was cut.
+    const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: false },
+        events: ['engine-stop'],
+      },
+      minSessionSeconds: 60,
+    });
+    const out = a.buildPrompt({
+      session: { engineId: 'port', start: 'a', end: 'b', durationSec: 0 },
+      telemetry: {},
+      engineNotifications: {
+        overTemperature: {
+          message: 'x'.repeat(600),
+          state: 'alarm',
+          method: ['visual', 'sound'],
+        },
+      },
+      batteries: [],
+    });
+    expect(out.user).toContain('state=alarm');
+    expect(out.user).toContain('method=[visual, sound]');
+    expect(out.user).toContain('...(truncated)');
+  });
+
+  it('bounds the telemetry rows and says how many it left out', () => {
+    // Nothing else caps the assembled user turn: the path list grows with
+    // discovery plus the operator's unbounded extraWatchedPaths, and an
+    // oversized prompt is a terminal 400 that burns the budget call already
+    // recorded for the run.
+    const a = new MaintenanceAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: false },
+        events: ['engine-stop'],
+      },
+      minSessionSeconds: 60,
+    });
+    const telemetry: Record<string, BufferSummary> = {};
+    for (let i = 0; i < MAX_PROMPT_PATH_ROWS + 7; i += 1) {
+      telemetry[`electrical.extra.p${String(i).padStart(4, '0')}`] = {
+        min: 1,
+        max: 2,
+        mean: 1.5,
+        count: 3,
+        sources: ['n2k'],
+      };
+    }
+    const out = a.buildPrompt({
+      session: { engineId: 'port', start: 'a', end: 'b', durationSec: 0 },
+      telemetry,
+      engineNotifications: {},
+      batteries: [],
+    });
+    const rows = out.user.split('\n').filter((l) => l.startsWith('- electrical.extra.'));
+    expect(rows).toHaveLength(MAX_PROMPT_PATH_ROWS);
+    expect(out.user).toContain('- 7 further paths omitted from this list.');
   });
 
   it('uses customSystemPrompt when provided', () => {

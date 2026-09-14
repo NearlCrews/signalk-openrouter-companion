@@ -17,6 +17,14 @@ interface CompleteArgs {
   system: string;
   user: string;
   abortSignal?: AbortSignal;
+  // Asked before each retry, with `timedOut` set when the attempt that just
+  // failed was the client's own request timeout rather than an HTTP status.
+  // That distinction matters to the caller's spend accounting: a timeout
+  // abandons a request the provider may already have billed, while a 429 or a
+  // gateway fault produced no generation at all. Returning false ends the
+  // ladder and throws the failure that prompted the retry. Absent, every
+  // attempt up to MAX_RETRIES runs.
+  beforeRetry?(previous: { timedOut: boolean }): Promise<boolean>;
 }
 
 export interface CompleteResult {
@@ -54,18 +62,39 @@ interface ApiResponse {
   };
 }
 
-interface ApiErrorBody {
-  error?: { code?: number; message?: string; metadata?: unknown };
+// OpenRouter's error envelope. `metadata.error_type` is its canonical
+// classification (`provider_overloaded`, `rate_limit_exceeded`, ...); the
+// other metadata keys vary by failure and are passed through untyped.
+interface ApiErrorMetadata {
+  error_type?: unknown;
+  [key: string]: unknown;
 }
 
-// Statuses worth a retry: rate limiting and gateway/server faults. Every other
-// non-200 status is terminal and throws without a retry.
-// 503 is excluded on purpose: OpenRouter returns it for "no provider meets
-// routing requirements" (a config problem from max_price / data_collection /
-// zdr / allow_fallbacks), which retrying cannot fix. It throws terminally so
-// the descriptive routing message reaches the failure report. 502 (chosen
-// provider down) stays retryable.
+interface ApiErrorBody {
+  error?: { code?: number; message?: string; metadata?: ApiErrorMetadata };
+}
+
+// Statuses worth a retry on the status alone: rate limiting and gateway/server
+// faults. 502 (chosen provider down) stays retryable. 503 is classified by
+// the error body instead, see isTransient. Every other non-200 status is
+// terminal and throws without a retry.
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 504]);
+
+// OpenRouter answers 503 for two different things. An overloaded provider is
+// transient and carries Retry-After; the body marks it with this error_type.
+// "No provider meets the routing requirements" (a config problem from
+// max_price / data_collection / zdr / allow_fallbacks) is the other 503, and
+// retrying cannot fix it. Only the overloaded form is retried; a 503 without
+// that marker, including one with no body at all, throws terminally so the
+// descriptive routing message reaches the failure report.
+const SERVICE_UNAVAILABLE_STATUS = 503;
+const PROVIDER_OVERLOADED_ERROR_TYPE = 'provider_overloaded';
+
+// Second sentence of a terminal 503 message, so the failure notification, the
+// JSONL log, and the server log all point the operator at the settings that
+// can leave no eligible provider.
+const ROUTING_HINT =
+  'Check the OpenRouter provider preferences (maxPrice, dataCollection, zdr, allowFallbacks) and the model list.';
 
 const MAX_RETRIES = 3;
 
@@ -75,11 +104,24 @@ const MAX_RETRIES = 3;
 // per-day call cap in BudgetTracker bounds total spend; this bounds one call.
 const MAX_COMPLETION_TOKENS = 2000;
 
+// AbortSignal.timeout rejects with a DOMException named TimeoutError, which is
+// how a request the client gave up on is told apart from a transport fault that
+// never reached the provider (a TypeError from fetch). Only the former can have
+// left a generation running, and billing, upstream.
+const TIMEOUT_ERROR_NAME = 'TimeoutError';
+
 // One attempt's terminal outcome: either a usable result, or a retry signal
-// carrying the error to throw once the retry budget is exhausted.
+// carrying the error to throw once the retry budget is exhausted. `timedOut`
+// marks the client's own request timeout, the one retry the caller may have to
+// pay for; see CompleteArgs.beforeRetry.
 type Attempt =
   | { kind: 'result'; result: CompleteResult }
-  | { kind: 'retry'; error: OpenRouterError; retryAfterMs: number | null };
+  | {
+      kind: 'retry';
+      error: OpenRouterError;
+      retryAfterMs: number | null;
+      timedOut: boolean;
+    };
 
 export class OpenRouterClient {
   private readonly random: () => number;
@@ -126,6 +168,10 @@ export class OpenRouterClient {
       const outcome = await this.attempt(args);
       if (outcome.kind === 'result') return outcome.result;
       if (attempt >= MAX_RETRIES) throw outcome.error;
+      // The caller gets the last word on whether another attempt is affordable.
+      if (args.beforeRetry && !(await args.beforeRetry({ timedOut: outcome.timedOut }))) {
+        throw outcome.error;
+      }
       // delay() rejects with the caller's abort reason if the signal trips
       // mid-backoff, so a shutdown does not wait out the full delay first.
       await delay(backoffMs(attempt, outcome.retryAfterMs, this.random), args.abortSignal);
@@ -158,9 +204,12 @@ export class OpenRouterClient {
                 { role: 'user', content: args.user },
               ],
             };
-            // Drop blank entries (a cleared admin-UI row) and dedupe against
-            // the primary so a copy-pasted slug does not appear twice.
-            const fallbacks = (this.cfg.fallbackModels ?? []).filter((m) => m.trim() !== '');
+            // Trim first, then drop blank entries (a cleared admin-UI row) and
+            // dedupe against the primary so a copy-pasted slug does not appear
+            // twice, nor reach the request body wearing its stray spaces.
+            const fallbacks = (this.cfg.fallbackModels ?? [])
+              .map((m) => m.trim())
+              .filter((m) => m !== '');
             if (fallbacks.length > 0) {
               payload.models = [...new Set([this.cfg.model, ...fallbacks])];
             } else {
@@ -215,15 +264,33 @@ export class OpenRouterClient {
     const errBody = await safeJson(res);
     const message = errBody?.error?.message ?? `HTTP ${res.status}`;
     const metadata = errBody?.error?.metadata;
-    if (TRANSIENT_STATUSES.has(res.status)) {
+    const errorType = typeof metadata?.error_type === 'string' ? metadata.error_type : undefined;
+    if (isTransient(res.status, errorType)) {
       return {
         kind: 'retry',
         error: new OpenRouterError(res.status, message, metadata),
         retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
+        timedOut: false,
       };
     }
-    throw new OpenRouterError(res.status, message, metadata);
+    throw new OpenRouterError(res.status, terminalMessage(res.status, message), metadata);
   }
+}
+
+// Whether a non-200 status is worth another attempt. 503 depends on the body:
+// only an overloaded provider is transient, and a missing or different
+// error_type means a routing problem that retrying cannot fix.
+function isTransient(status: number, errorType: string | undefined): boolean {
+  if (status === SERVICE_UNAVAILABLE_STATUS) return errorType === PROVIDER_OVERLOADED_ERROR_TYPE;
+  return TRANSIENT_STATUSES.has(status);
+}
+
+// A terminal 503 gets the routing hint appended as its own sentence, after
+// OpenRouter's message (or the bare `HTTP 503` when the body carried none).
+function terminalMessage(status: number, message: string): string {
+  if (status !== SERVICE_UNAVAILABLE_STATUS) return message;
+  const sentence = /[.!?]$/.test(message) ? message : `${message}.`;
+  return `${sentence} ${ROUTING_HINT}`;
 }
 
 // Classify a thrown fetch or body-read error. A caller-requested abort
@@ -236,6 +303,9 @@ function transportRetry(args: CompleteArgs, err: unknown): Attempt {
     kind: 'retry',
     error: new OpenRouterError(0, message),
     retryAfterMs: null,
+    // The request timeout, or that timeout firing mid-body-read: both abandon
+    // a generation the provider may have finished and billed.
+    timedOut: err instanceof Error && err.name === TIMEOUT_ERROR_NAME,
   };
 }
 

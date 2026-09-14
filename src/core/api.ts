@@ -9,7 +9,7 @@ import type { HistoryProvider } from './history.js';
 import { fetchWithTimeout } from './http.js';
 import { InfluxDBClient } from './influxdb.js';
 import { stringify } from './logger.js';
-import type { OpenRouterClient } from './openrouter.js';
+import type { CompleteResult, OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
 import { PLUGIN_HTTP_PREFIX } from './paths.js';
 import type { JsonlEntry } from './publisher.js';
@@ -144,17 +144,34 @@ const MODELS_CACHE_TTL_MS = HOUR_MS;
 let modelsCache: { fetchedAt: number; body: OpenRouterModelsResponse } | null = null;
 let modelsInFlight: Promise<OpenRouterModelsResponse> | null = null;
 
-// Exposed so tests can wipe the cache between cases. Not part of the public
-// HTTP surface.
+// The /api/openrouter/test route is deliberately outside the daily budget: an
+// admin debugging connectivity should not run themselves out of analyzer calls.
+// That makes it the one route where a real, billable completion is unmetered,
+// so it carries its own guards instead. Concurrent presses coalesce onto one
+// upstream call the way the model catalog does, and a cooldown bounds how often
+// a held button can bill. Short enough that a human retry cycle (read the
+// failure, fix the key, press again) never meets it.
+const OPENROUTER_TEST_COOLDOWN_MS = 5_000;
+let openRouterTestInFlight: Promise<CompleteResult> | null = null;
+let openRouterTestLastFinishedAt = 0;
+
+// Exposed so tests can wipe the module-level caches between cases. Not part of
+// the public HTTP surface.
 export function _resetOpenRouterModelsCache(): void {
   modelsCache = null;
   modelsInFlight = null;
+  openRouterTestInFlight = null;
+  openRouterTestLastFinishedAt = 0;
 }
 
-// `abortSignal` is the plugin's lifecycle signal when the plugin is running,
-// so a stop releases a hung upstream fetch instead of leaving it to the
-// 30-second timeout. It is absent before the first start, which is deliberate:
-// the picker must populate then too.
+// `abortSignal` is the caller's own: the plugin lifecycle signal while the
+// plugin is running, absent before the first start (the picker must populate
+// then too). It cancels this caller's wait, never the shared fetch, which is
+// bounded by its own timeout instead. Binding the coalesced fetch to whichever
+// caller happened to arrive first would let a stop() that aborts caller 1
+// reject caller 2 as a 502 in a second admin tab, for a request caller 2 never
+// cancelled. The cost is an upstream socket that can outlive a stop by up to
+// the fetch timeout, with nothing to write to but a module cache.
 async function getOpenRouterModels(abortSignal?: AbortSignal): Promise<OpenRouterModelsResponse> {
   const now = Date.now();
   if (modelsCache && now - modelsCache.fetchedAt < MODELS_CACHE_TTL_MS) {
@@ -162,15 +179,10 @@ async function getOpenRouterModels(abortSignal?: AbortSignal): Promise<OpenRoute
   }
   // Coalesce concurrent fetches: a second poll while the first is in flight
   // (admin opens two tabs) awaits the same upstream call.
-  if (modelsInFlight) return modelsInFlight;
+  if (modelsInFlight) return raceAbort(modelsInFlight, abortSignal);
   modelsInFlight = (async () => {
     try {
-      const res = await fetchWithTimeout(
-        OPENROUTER_MODELS_URL,
-        {},
-        MODELS_FETCH_TIMEOUT_MS,
-        abortSignal,
-      );
+      const res = await fetchWithTimeout(OPENROUTER_MODELS_URL, {}, MODELS_FETCH_TIMEOUT_MS);
       if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
       const body = (await res.json()) as OpenRouterModelsResponse;
       // Validate the shape before caching: a malformed-but-valid-JSON
@@ -189,13 +201,32 @@ async function getOpenRouterModels(abortSignal?: AbortSignal): Promise<OpenRoute
       modelsInFlight = null;
     }
   })();
-  return modelsInFlight;
+  // Every waiter gets its own copy of the settlement, so a shared fetch that
+  // rejects after its last waiter walked away cannot surface as an unhandled
+  // rejection.
+  const shared = modelsInFlight;
+  shared.catch(() => {});
+  return raceAbort(shared, abortSignal);
+}
+
+// Resolve with `work`, or reject as soon as the caller's signal aborts. The
+// underlying work is left to finish or time out on its own; only this caller's
+// wait ends.
+function raceAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 // Read the trailing N lines of the JSONL log filtered by analyzer. Loads the
-// whole file: reports.jsonl on a real boat reaches a few KB/day, so even a
-// 1-year-old file fits in memory comfortably. If usage ever calls for it,
-// switch to a chunked tail-read; not worth the complexity today.
+// whole file, which is bounded: ReportPublisher rotates the log past a fixed
+// size, so this read is capped no matter how long the plugin has been running.
+// Entries older than the last rotation live in `<log>.1` and are deliberately
+// not read here; the panel shows recent history, not the archive.
 async function tailReports(
   logPath: string,
   analyzerId: string,
@@ -219,6 +250,18 @@ async function tailReports(
     }
   }
   return out.slice(-limit).reverse();
+}
+
+// Whether a normalized request URL names the same InfluxDB the saved settings
+// do. The saved value is a raw config string, so an unparseable one simply
+// matches nothing.
+function sameInfluxTarget(savedUrl: string | undefined, normalized: string): boolean {
+  if (!savedUrl) return false;
+  try {
+    return stripTrailingSlashes(new URL(savedUrl.trim()).href) === normalized;
+  } catch {
+    return false;
+  }
 }
 
 function requireRuntime(
@@ -293,7 +336,13 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
   {
     method: 'post',
     path: '/api/openrouter/test',
-    summary: 'Send a one-token ping to verify the OpenRouter API key.',
+    // Not a one-token ping: only the prompt asks for one word. The client
+    // bounds every completion with its own max_tokens (2000) and offers no
+    // per-call override, so a model that ignores the instruction bills up to
+    // that. A small per-call cap is not the fix: it returns an empty completion
+    // with finish_reason 'length' on a reasoning model, breaking the button for
+    // exactly the models an operator is most likely to be testing.
+    summary: 'Send a minimal completion request to verify the saved key.',
     handler: (getRuntime) => async (_req, res) => {
       const rt = requireRuntime(getRuntime, res);
       if (!rt) return;
@@ -301,18 +350,32 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         res.status(400).json({ ok: false, error: 'API key not configured' });
         return;
       }
+      if (
+        !openRouterTestInFlight &&
+        Date.now() - openRouterTestLastFinishedAt < OPENROUTER_TEST_COOLDOWN_MS
+      ) {
+        res.status(429).json({ ok: false, error: 'a test just ran; wait a few seconds' });
+        return;
+      }
       try {
         // The lifecycle signal aborts the request if stop() runs (admin
         // disables or saves config); without it, an in-flight ping holds a
-        // socket open for the full requestTimeoutMs. The Test button is
-        // operator-driven and explicitly does NOT consume the daily budget:
-        // an admin debugging connectivity should not run themselves out of
-        // analyzer calls.
-        const result = await rt.llm.complete({
-          system: 'Reply with the single word OK.',
-          user: 'ping',
-          abortSignal: rt.signal,
-        });
+        // socket open for the full requestTimeoutMs. Concurrent presses share
+        // one upstream call rather than each billing their own.
+        if (!openRouterTestInFlight) {
+          openRouterTestInFlight = rt.llm
+            .complete({
+              system: 'Reply with the single word OK.',
+              user: 'ping',
+              abortSignal: rt.signal,
+            })
+            .finally(() => {
+              openRouterTestInFlight = null;
+              openRouterTestLastFinishedAt = Date.now();
+            });
+          openRouterTestInFlight.catch(() => {});
+        }
+        const result = await openRouterTestInFlight;
         sendOk(res, {
           model: result.model,
           totalTokens: result.usage.totalTokens,
@@ -479,8 +542,6 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
       const url = body.url ?? saved?.url;
       const database = body.database ?? saved?.database;
       const version = body.version ?? saved?.version ?? '1';
-      const username = body.username ?? saved?.username ?? '';
-      const password = body.password ?? saved?.password ?? '';
       if (!url || !database) {
         res.status(400).json({
           ok: false,
@@ -518,6 +579,17 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         return;
       }
       const normalized = stripTrailingSlashes(parsed.href);
+      // The stored credential travels only to the stored host. A request that
+      // names a different URL must carry its own credentials, an empty string
+      // being a legitimate "no auth": without this, overriding the URL alone
+      // turns one admin-authenticated probe into "post the vessel's InfluxDB
+      // token to a host of my choosing". The admin gate and the JSON content
+      // type keep that out of reach of an unauthenticated caller; it should not
+      // be within reach of an authenticated one either.
+      const useSavedCredentials =
+        body.url === undefined || sameInfluxTarget(saved?.url, normalized);
+      const username = body.username ?? (useSavedCredentials ? (saved?.username ?? '') : '');
+      const password = body.password ?? (useSavedCredentials ? (saved?.password ?? '') : '');
       try {
         const client = new InfluxDBClient({
           url: normalized,
