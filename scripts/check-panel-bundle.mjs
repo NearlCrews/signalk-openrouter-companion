@@ -17,20 +17,27 @@ if (!remoteEntry.includes('export')) {
 // not cover still fails. Only the JSX runtime may come from the react package.
 const stats = JSON.parse(await readFile('.tmp/panel-stats.json', 'utf8'));
 
-function collectModuleNames(modules = []) {
-  return modules.flatMap((module) => [
-    module.name,
-    ...collectModuleNames(module.modules ?? []),
-    ...collectModuleNames(module.children ?? []),
-  ]);
+// The policy, named where a reader looks for it: any React or React DOM module
+// in the graph is a failure except the JSX runtime, in either of the two
+// spellings webpack records it under.
+const REACT_MODULE = /node_modules[\\/]react(?:-dom)?[\\/]/;
+const JSX_RUNTIME = /[\\/]react[\\/]jsx-runtime\.js$/;
+const JSX_RUNTIME_CJS = /[\\/]react[\\/]cjs[\\/]react-jsx-runtime\.production\.js$/;
+
+// One accumulator down the whole tree: module concatenation nests records under
+// a parent, and building an array per node and per level would copy the graph
+// once for every level of nesting to end up with the same flat list.
+function collectModuleNames(modules = [], out = []) {
+  for (const module of modules) {
+    if (typeof module.name === 'string') out.push(module.name);
+    collectModuleNames(module.modules ?? [], out);
+    collectModuleNames(module.children ?? [], out);
+  }
+  return out;
 }
 
-const moduleNames = collectModuleNames(stats.modules).filter((name) => typeof name === 'string');
-const unexpectedReactModules = moduleNames.filter(
-  (name) =>
-    /node_modules[\\/]react(?:-dom)?[\\/]/.test(name) &&
-    !/[\\/]react[\\/]jsx-runtime\.js$/.test(name) &&
-    !/[\\/]react[\\/]cjs[\\/]react-jsx-runtime\.production\.js$/.test(name),
+const unexpectedReactModules = collectModuleNames(stats.modules).filter(
+  (name) => REACT_MODULE.test(name) && !JSX_RUNTIME.test(name) && !JSX_RUNTIME_CJS.test(name),
 );
 if (unexpectedReactModules.length > 0) {
   throw new Error(
