@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { usePollFreshness } from 'signalk-nearlcrews-ui';
 import { errText, fetchJson, POLL_MS } from '../api.js';
 import type { PanelStatus } from '../types.js';
 import { jsonEqual } from '../utils.js';
@@ -13,9 +14,9 @@ export interface UseStatus {
   // True while polling is stalled: a poll failed, or the last good snapshot has
   // aged past the threshold. Flips back false on the next success.
   stale: boolean;
-  // Epoch milliseconds of the last good snapshot, published when the stale
-  // marker appears and null before the first success. RelativeAge owns the
-  // clock from there, so nothing here re-renders to advance the age text.
+  // Epoch milliseconds of the last good snapshot, or null before the first
+  // success. RelativeAge owns the clock from there, so nothing here re-renders
+  // to advance the age text.
   lastSuccessAt: number | null;
 }
 
@@ -25,27 +26,28 @@ export interface UseStatus {
 // becomes visible again. Effect-local cancellation and request sequencing
 // suppress writes after unmount and from an older request that resolves late.
 //
-// The healthy steady state produces no re-render for an unchanged payload: the
-// success timestamp lives in a ref and reaches state only when the stale marker
-// appears, and each state setter receives its existing value.
+// The healthy steady state is quiet: an unchanged payload and a repeated
+// failure flag both write the value the state already holds, which React bails
+// out of, and the freshness clock ticks on the shared interval the whole panel
+// already reads.
 export function useStatus(): UseStatus {
   const [status, setStatus] = useState<PanelStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [stale, setStale] = useState(false);
+  const [pollFailed, setPollFailed] = useState(false);
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
-  const lastSuccessRef = useRef<number | null>(null);
+  // The age of the last good snapshot and whether it has passed the threshold
+  // come from the shared hook rather than from a clock and a comparison of this
+  // panel's own: it is the same rule every reader of a polled value needs, and
+  // it catches a fetch that hangs without ever resolving into the failure
+  // branch below.
+  const freshness = usePollFreshness(lastSuccessAt, {
+    staleAfterMs: STALE_AFTER_MS,
+    tickMs: POLL_MS,
+  });
   useEffect(() => {
     let cancelled = false;
     let latestRequest = 0;
     let activeController: AbortController | null = null;
-
-    const markStale = (value: boolean): void => {
-      setStale(value);
-      // Publish the freshness timestamp only when the marker appears. A repeat
-      // failure sets the same value, which React bails out of, so a stalled
-      // poll costs no renders at all.
-      if (value) setLastSuccessAt(lastSuccessRef.current);
-    };
 
     const tick = async (): Promise<void> => {
       const request = ++latestRequest;
@@ -59,31 +61,24 @@ export function useStatus(): UseStatus {
         const body = r.body;
         // Only a successful poll advances the freshness clock, so the staleness
         // marker measures time since the last good snapshot.
-        lastSuccessRef.current = Date.now();
-        markStale(false);
+        setLastSuccessAt(Date.now());
+        setPollFailed(false);
         setStatus((prev) => (jsonEqual(prev, body) ? prev : body));
         setStatusError(null);
       } else if (r.status === 503) {
-        markStale(true);
+        setPollFailed(true);
         setStatus(null);
         setStatusError('Plugin is not running. Set an API key and Save to start it.');
       } else {
-        markStale(true);
+        setPollFailed(true);
         setStatusError(`Status fetch failed: ${errText(r)}`);
       }
     };
 
-    // Shared by the interval and the visibilitychange handler: poll only while
-    // the tab is visible (a backgrounded admin tab should not keep hitting the
-    // server), and detect a stalled poll by the snapshot's age, which catches a
-    // fetch that hangs without ever resolving into the failure branch.
+    // Poll only while the tab is visible: a backgrounded admin tab should not
+    // keep hitting the server, and it fires immediately when the tab comes back.
     const tickIfVisible = (): void => {
       if (document.visibilityState !== 'visible') return;
-      const last = lastSuccessRef.current;
-      if (last !== null && Date.now() - last > STALE_AFTER_MS) {
-        setStale(true);
-        setLastSuccessAt(last);
-      }
       void tick();
     };
 
@@ -100,5 +95,5 @@ export function useStatus(): UseStatus {
     };
   }, []);
 
-  return { status, statusError, stale, lastSuccessAt };
+  return { status, statusError, stale: pollFailed || freshness.stale, lastSuccessAt };
 }

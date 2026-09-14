@@ -1,18 +1,5 @@
 import type { PanelConfig } from './types.js';
 
-// The plugin's own daily call cap, mirrored here so an empty field can show
-// what leaving it empty will apply. The panel cannot read DEFAULT_OPTIONS
-// itself: `src/types.ts` reaches into the Node-only core, and the panel keeps
-// its own configuration mirror on purpose. A case in tests/configpanel.test.ts
-// pins this number to the plugin default so the two cannot drift.
-export const DEFAULT_MAX_CALLS_PER_DAY = 20;
-
-// The ceiling the runtime clamps to (MAX_CALLS_PER_DAY_CEILING in src/types.ts,
-// and the schema's `maximum`). Mirrored here for the same reason as the default
-// above, and pinned to it by the same test, so the panel refuses a value the
-// plugin would silently rewrite rather than accepting it and looking saved.
-export const MAX_CALLS_PER_DAY = 1000;
-
 // Structural equality used to detect a dirty edit buffer and to skip
 // redundant status-state updates. Order-insensitive on object keys: the panel
 // edit buffer and the saved JSON can be structurally equal but key-ordered
@@ -66,6 +53,11 @@ export function isPromptOverride(value: string, promptDefault: string | undefine
   return value !== promptDefault;
 }
 
+// What the operator is told when the model catalog cannot be loaded. Written
+// once because the banner shows it and the announcer speaks it, and the two
+// must not drift.
+export const MODELS_ERROR = 'Could not load the model list. Type a model slug manually, or retry.';
+
 // The base-URL rule, written once. Both the history field error and the
 // save-blocked notice quote it, so a wording change cannot leave the two
 // describing different rules.
@@ -92,6 +84,22 @@ export function historyValidity(history: PanelConfig['history']): HistoryValidit
     invalidUrl: source !== 'none' && !noUrl && !isHttpUrl(url),
     missingDatabase: source === 'influxdb' && !history?.influxdb?.database?.trim(),
   };
+}
+
+// The error a history provider's URL field shows, or undefined when it has
+// none. Both providers' fields ask the same two questions in the same order, so
+// they ask them through one function: `missing` is the only thing that differs,
+// and the invalid case quotes the shared rule. Nothing is an error until a save
+// was actually blocked here, so a pristine panel accuses the operator of
+// nothing.
+export function urlError(
+  submitted: boolean,
+  validity: HistoryValidity,
+  missing: string,
+): string | undefined {
+  if (!submitted) return undefined;
+  if (validity.noUrl) return missing;
+  return validity.invalidUrl ? `Enter an ${HISTORY_URL_RULE}.` : undefined;
 }
 
 // History providers only support HTTP and HTTPS base URLs. Credentials, query

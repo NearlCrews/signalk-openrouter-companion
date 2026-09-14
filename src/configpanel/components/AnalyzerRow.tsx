@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { memo, useId } from 'react';
+import { memo, useCallback } from 'react';
 import {
   Banner,
   Button,
@@ -9,7 +9,6 @@ import {
   Code,
   CollapsibleSection,
   LabeledField,
-  LiveRegion,
   RelativeAge,
   Select,
   Stack,
@@ -17,13 +16,14 @@ import {
   Text,
   VisuallyHidden,
 } from 'signalk-nearlcrews-ui';
-import { EmptyState } from 'signalk-nearlcrews-ui/composites';
+import { EmptyState, useDisclosure } from 'signalk-nearlcrews-ui/composites';
 import { SEVERITY_FLOOR_PRESETS } from '../../severityFloors.js';
 import { reportTriggerLabel } from '../reportTrigger.js';
 import { buildScheduleOptions } from '../scheduleOptions.js';
 import type { AnalyzerStatus, AnalyzerUiState } from '../types.js';
-import { AnalyzerDrawerBody, AnalyzerDrawerToggle, useAnalyzerDrawer } from './AnalyzerDrawer.js';
+import { AnalyzerDrawerBody, AnalyzerDrawerToggle } from './AnalyzerDrawer.js';
 import styles from './analyzer.module.css';
+import { useControlHint } from './ControlHint.js';
 import { PromptDrawer } from './PromptDrawer.js';
 
 interface Props {
@@ -42,33 +42,6 @@ interface Props {
   onScheduleChange: (id: string, value: string) => void;
   severityFloor?: string;
   onSeverityFloorChange: (id: string, value: string) => void;
-}
-
-// What the row announces once a fire settles. The chip beside the button is
-// created in the same commit as its text, which a screen reader may never
-// observe, so the announcement rides on a region that already existed. The
-// completion time dates the paid call and gives a repeat of the same outcome
-// the content change a live region needs to speak twice.
-function fireAnnouncement(title: string, fire: AnalyzerUiState['fire']): string {
-  if (!fire?.text || fire.finishedAt === undefined) return '';
-  return `${title}: ${fire.text} at ${new Date(fire.finishedAt).toLocaleTimeString()}.`;
-}
-
-function reportsAnnouncement(title: string, ui: AnalyzerUiState): string {
-  if (!ui.reportsOpen) return '';
-  if (ui.reportsLoading) return `Loading reports for ${title}.`;
-  if (ui.reportsError) return `Failed to load reports for ${title}: ${ui.reportsError}`;
-  if (!ui.reports) return '';
-  if (ui.reports.length === 0) return `No reports yet for ${title}.`;
-  return ui.reports.length === 1
-    ? `1 report loaded for ${title}.`
-    : `${ui.reports.length} reports loaded for ${title}.`;
-}
-
-function promptAnnouncement(title: string, ui: AnalyzerUiState): string {
-  if (!ui.promptOpen) return '';
-  if (ui.promptError) return `Failed to load the prompt for ${title}: ${ui.promptError}`;
-  return ui.promptLoaded ? `Prompt loaded for ${title}.` : `Loading the prompt for ${title}.`;
 }
 
 export const AnalyzerRow = memo(function AnalyzerRow({
@@ -93,10 +66,22 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   const promptOpen = Boolean(ui.promptOpen);
   const cronEnabled = analyzer.cron.enabled;
   const scheduleOptions = buildScheduleOptions(schedule);
-  const fireHintId = useId();
+  // The cost sits beside the button that spends it, not in a section the
+  // operator may never open, and it doubles as the inert button's reason.
+  const { hintId: fireHintId, hint: fireHint } = useControlHint(
+    enabled
+      ? 'Running an analyzer now makes one paid OpenRouter call that counts against the daily cap.'
+      : 'Enable this analyzer to fire it. A run makes one paid OpenRouter call that counts against the daily cap.',
+  );
 
-  const reportsDrawer = useAnalyzerDrawer(reportsOpen, () => onToggleReports(analyzer.id));
-  const promptDrawer = useAnalyzerDrawer(promptOpen, () => onTogglePrompt(analyzer.id));
+  // Bound to the row's analyzer once rather than rebuilt each render: the
+  // shared hook memoizes the props it hands to the toggle and the body on this
+  // callback's identity, so a fresh arrow every render would rebuild all of
+  // them and give the button a new onClick besides.
+  const onReports = useCallback(() => onToggleReports(analyzer.id), [onToggleReports, analyzer.id]);
+  const onPrompt = useCallback(() => onTogglePrompt(analyzer.id), [onTogglePrompt, analyzer.id]);
+  const reportsDrawer = useDisclosure({ open: reportsOpen, onOpenChange: onReports });
+  const promptDrawer = useDisclosure({ open: promptOpen, onOpenChange: onPrompt });
 
   return (
     <CollapsibleSection
@@ -194,29 +179,11 @@ export const AnalyzerRow = memo(function AnalyzerRow({
                 {ui.fire.text}
               </StatusIndicator>
             ) : null}
-            <LiveRegion
-              data-fire-announcement=""
-              message={fireAnnouncement(analyzer.title, ui.fire)}
-            />
           </Cluster>
-          {/*
-           * The cost sits beside the button that spends it, not in a section
-           * the operator may never open, and it doubles as the disabled
-           * button's reason: `title` renders on pointer hover only, so a
-           * keyboard or touch user never sees one.
-           */}
-          <Text id={fireHintId} as="p" tone="muted" size="sm">
-            {enabled
-              ? 'Running an analyzer now makes one paid OpenRouter call that counts against the daily cap.'
-              : 'Enable this analyzer to fire it. A run makes one paid OpenRouter call that counts against the daily cap.'}
-          </Text>
+          {fireHint}
         </Stack>
 
-        <AnalyzerDrawerBody
-          drawer={reportsDrawer}
-          label={`Reports for ${analyzer.title}`}
-          announcement={reportsAnnouncement(analyzer.title, ui)}
-        >
+        <AnalyzerDrawerBody drawer={reportsDrawer} label={`Reports for ${analyzer.title}`}>
           <Card>
             {ui.reportsLoading ? (
               <StatusIndicator tone="info">Loading reports…</StatusIndicator>
@@ -272,11 +239,7 @@ export const AnalyzerRow = memo(function AnalyzerRow({
           </Card>
         </AnalyzerDrawerBody>
 
-        <AnalyzerDrawerBody
-          drawer={promptDrawer}
-          label={`Prompt for ${analyzer.title}`}
-          announcement={promptAnnouncement(analyzer.title, ui)}
-        >
+        <AnalyzerDrawerBody drawer={promptDrawer} label={`Prompt for ${analyzer.title}`}>
           <PromptDrawer
             analyzerId={analyzer.id}
             ui={ui}

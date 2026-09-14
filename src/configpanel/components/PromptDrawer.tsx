@@ -1,5 +1,4 @@
 import type { ReactElement } from 'react';
-import { useId } from 'react';
 import {
   Banner,
   Button,
@@ -8,11 +7,11 @@ import {
   LabeledField,
   Stack,
   StatusIndicator,
-  Text,
   Textarea,
 } from 'signalk-nearlcrews-ui';
 import type { AnalyzerUiState } from '../types.js';
 import { isPromptOverride } from '../utils.js';
+import { useControlHint } from './ControlHint.js';
 
 interface Props {
   analyzerId: string;
@@ -31,10 +30,12 @@ export function PromptDrawer({
   onReset,
   onClose,
 }: Props): ReactElement {
-  // The drawer announces its own load and failure through the stable region
-  // AnalyzerDrawerBody keeps outside this subtree, so nothing here is a live
-  // region: every element below mounts together with the text it carries.
-  const resetHintId = useId();
+  // The panel announces this drawer's load and failure through the shell's own
+  // region, so nothing here is a live region: every element below mounts
+  // together with the text it carries.
+  const { hintId: resetHintId, hint: resetHint } = useControlHint(
+    'This analyzer is already using the built-in default, so there is nothing to reset.',
+  );
 
   if (!ui.promptLoaded) {
     return (
@@ -75,14 +76,7 @@ export function PromptDrawer({
             onChange={(event) => onChange(analyzerId, event.target.value)}
           />
         </LabeledField>
-        {!isOverride ? (
-          // The reason the reset is inert, as text rather than a `title`:
-          // a title renders on pointer hover only, so a keyboard or touch
-          // user never sees one.
-          <Text id={resetHintId} as="p" tone="muted" size="sm">
-            This analyzer is already using the built-in default, so there is nothing to reset.
-          </Text>
-        ) : null}
+        {!isOverride ? resetHint : null}
         <Cluster gap={2} justify="end">
           <Button
             // aria-disabled rather than disabled: the control keeps focus, so

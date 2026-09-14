@@ -5,10 +5,10 @@ import {
   Button,
   CollapsibleSection,
   InlineConfirm,
-  LiveRegion,
   PanelShell,
   Section,
   Stack,
+  usePanelAnnouncer,
   useUnsavedChangesGuard,
 } from 'signalk-nearlcrews-ui';
 import { EmptyState, SaveActionBar } from 'signalk-nearlcrews-ui/composites';
@@ -49,6 +49,12 @@ function severityFloorFor(saved: string | undefined): string {
   return isSeverityFloor(saved) ? saved : DEFAULT_SEVERITY_FLOOR_VALUE;
 }
 
+// What the reports drawer says once its list settles.
+function reportsLoadedText(title: string, count: number): string {
+  if (count === 0) return `No reports yet for ${title}.`;
+  return count === 1 ? `1 report loaded for ${title}.` : `${count} reports loaded for ${title}.`;
+}
+
 // The shell runs the browser preflight, owns the theme toggle, and wraps the
 // content in an error boundary whose secondary action reloads the page on its
 // own. The content is a separate component so its polling and save hooks only
@@ -63,6 +69,12 @@ export default function PluginConfigurationPanel(props: Props): ReactElement {
 }
 
 function PanelContent({ configuration, save }: Props): ReactElement {
+  // The shell mounts one polite and one assertive region before any message
+  // exists and hands them out through this hook, which is the whole point: a
+  // region created together with its first message is not announced reliably.
+  // Nothing in this panel mounts a region of its own; every status change is
+  // spoken from the point its result arrives.
+  const announce = usePanelAnnouncer();
   const { status, statusError, stale, lastSuccessAt } = useStatus();
   const {
     cfg,
@@ -76,7 +88,7 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     onSave: saveConfiguration,
     onDiscard: discardConfiguration,
   } = useSaveLifecycle(configuration, save, status);
-  const { models, modelsState, loadModels } = useOpenRouterModels();
+  const { models, modelsState, loadModels } = useOpenRouterModels(announce);
 
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
@@ -108,6 +120,16 @@ function PanelContent({ configuration, save }: Props): ReactElement {
   useEffect(() => {
     analyzerUiRef.current = analyzerUi;
   }, [analyzerUi]);
+  // Analyzer titles for the announcements, read from a ref for the same reason:
+  // the handlers must not close over `status`, or every poll that changed the
+  // payload would rebuild them and re-render every memoized row.
+  const titlesRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    const titles: Record<string, string> = {};
+    for (const analyzer of status?.analyzers ?? []) titles[analyzer.id] = analyzer.title;
+    titlesRef.current = titles;
+  }, [status]);
+  const titleFor = useCallback((id: string): string => titlesRef.current[id] ?? id, []);
   // In-flight guard for the two per-analyzer GETs. React 19 StrictMode calls
   // event handlers' state updaters twice in dev; dedup-by-key here prevents
   // double-firing the network request even when the handler runs twice.
@@ -142,6 +164,20 @@ function PanelContent({ configuration, save }: Props): ReactElement {
   // close or reload while edits are unsaved.
   useUnsavedChangesGuard(dirty);
 
+  // The two failures that arrive from a poll or from the host rather than from
+  // a handler of this panel's own. Both interrupt: the plugin is not answering,
+  // or the edits were not taken. The effect runs only when the text or the
+  // notice actually changes, so a poll that keeps failing the same way is not
+  // read out again and again.
+  const savedError = savedNotice?.error;
+  useEffect(() => {
+    if (savedError) announce(noticeText, { assertive: true });
+  }, [savedError, noticeText, announce]);
+  const pluginUnreachable = statusError && !status ? statusError : '';
+  useEffect(() => {
+    if (pluginUnreachable) announce(pluginUnreachable, { assertive: true });
+  }, [pluginUnreachable, announce]);
+
   const patchUi = useCallback((id: string, patch: Partial<AnalyzerUiState>): void => {
     setAnalyzerUi((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
   }, []);
@@ -164,13 +200,11 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     const r = await fetchJson<{ totalTokens?: number; model?: string }>('/openrouter/test', {
       method: 'POST',
     });
-    setTestResult(
-      r.ok && r.body
-        ? { ok: true, text: `OK (${r.body.totalTokens} tokens, ${r.body.model})` }
-        : { ok: false, text: errText(r) },
-    );
+    const text = r.ok && r.body ? `OK (${r.body.totalTokens} tokens, ${r.body.model})` : errText(r);
+    setTestResult({ ok: r.ok, text });
     setTesting(false);
-  }, []);
+    announce(text);
+  }, [announce]);
 
   const historySource = cfg.history?.source ?? 'questdb';
   const questdbUrl = cfg.history?.questdb?.url;
@@ -205,16 +239,12 @@ function PanelContent({ configuration, save }: Props): ReactElement {
           : { url: questdbUrl },
       ),
     });
-    setHistoryTest(
-      r.body?.ok
-        ? {
-            ok: true,
-            url: r.body.url ?? '',
-          }
-        : { ok: false, text: errText(r) },
-    );
+    const url = r.body?.url ?? '';
+    setHistoryTest(r.body?.ok ? { ok: true, url } : { ok: false, text: errText(r) });
     setHistoryTesting(false);
+    announce(`History provider test: ${r.body?.ok ? `Reachable at ${url}` : errText(r)}`);
   }, [
+    announce,
     historySource,
     influxdbDatabase,
     influxdbPassword,
@@ -228,41 +258,35 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     (id: string): Promise<void> =>
       withInFlight(`reports:${id}`, async () => {
         patchUi(id, { reportsLoading: true });
+        announce(`Loading reports for ${titleFor(id)}.`);
         const r = await fetchJson<{ reports?: AnalyzerUiState['reports'] }>(
           `/analyzers/${id}/reports?limit=${REPORT_LIMIT}`,
         );
         if (r.ok) {
-          patchUi(id, {
-            reports: r.body?.reports || [],
-            reportsLoading: false,
-            reportsError: null,
-          });
+          const reports = r.body?.reports || [];
+          patchUi(id, { reports, reportsLoading: false, reportsError: null });
+          announce(reportsLoadedText(titleFor(id), reports.length));
         } else {
           // Keep any previously loaded reports rather than clobbering them with
           // an empty list, which would render a false "No reports yet".
           patchUi(id, { reportsLoading: false, reportsError: errText(r) });
+          announce(`Failed to load reports for ${titleFor(id)}: ${errText(r)}`);
         }
       }),
-    [withInFlight, patchUi],
+    [withInFlight, patchUi, announce, titleFor],
   );
 
   const fireAnalyzer = useCallback(
     async (id: string): Promise<void> => {
       patchUi(id, { fire: { pending: true } });
       const r = await fetchJson<{ outcome?: string }>(`/analyzers/${id}/fire`, { method: 'POST' });
-      // finishedAt dates the paid call for the row's announcement and, because
-      // it changes every run, gives a repeat of the same outcome the content
-      // change a live region needs before it will speak twice.
-      const finishedAt = Date.now();
-      patchUi(id, {
-        fire: r.ok
-          ? {
-              finishedAt,
-              ok: isFireSuccess(r.body?.outcome),
-              text: fireOutcomeText(r.body?.outcome),
-            }
-          : { finishedAt, ok: false, text: errText(r) },
-      });
+      const text = r.ok ? fireOutcomeText(r.body?.outcome) : errText(r);
+      patchUi(id, { fire: { ok: r.ok && isFireSuccess(r.body?.outcome), text } });
+      // The chip beside the button appears with its text, which a screen reader
+      // may never observe. The announcer speaks the same words through a region
+      // that already existed, and repeats them when a second run ends the same
+      // way rather than reading as an unchanged region.
+      announce(`${titleFor(id)}: ${text}.`);
       // Refresh the open drawer so the new report shows up after the LLM returns.
       // 800 ms is a heuristic; a real boat round-trip is 1-3 s. Read the live
       // drawer state via the ref: the multi-second fire means the closed-over
@@ -280,7 +304,7 @@ function PanelContent({ configuration, save }: Props): ReactElement {
         );
       }
     },
-    [patchUi, loadReports],
+    [patchUi, loadReports, announce, titleFor],
   );
 
   // A pure expand/collapse write with no side effect, so it funnels through
@@ -295,17 +319,23 @@ function PanelContent({ configuration, save }: Props): ReactElement {
 
   const toggleReports = useCallback(
     (id: string): void => {
-      const next = !analyzerUiRef.current[id]?.reportsOpen;
+      const current = analyzerUiRef.current[id];
+      const next = !current?.reportsOpen;
       patchUi(id, { reportsOpen: next });
-      if (next && !analyzerUiRef.current[id]?.reports) void loadReports(id);
+      if (!next) return;
+      // A drawer reopened on an already-loaded list still says what is in it,
+      // since nothing new arrives to speak for it.
+      if (current?.reports) announce(reportsLoadedText(titleFor(id), current.reports.length));
+      else void loadReports(id);
     },
-    [patchUi, loadReports],
+    [patchUi, loadReports, announce, titleFor],
   );
 
   const loadPrompt = useCallback(
     (id: string): Promise<void> =>
       withInFlight(`prompt:${id}`, async () => {
         patchUi(id, { promptLoaded: false, promptError: null });
+        announce(`Loading the prompt for ${titleFor(id)}.`);
         const r = await fetchJson<{ default?: string; current?: string | null }>(
           `/analyzers/${id}/prompt`,
         );
@@ -316,11 +346,13 @@ function PanelContent({ configuration, save }: Props): ReactElement {
             promptLoaded: true,
             promptError: null,
           });
+          announce(`Prompt loaded for ${titleFor(id)}.`);
         } else {
           patchUi(id, { promptError: errText(r), promptLoaded: true });
+          announce(`Failed to load the prompt for ${titleFor(id)}: ${errText(r)}`);
         }
       }),
-    [withInFlight, patchUi],
+    [withInFlight, patchUi, announce, titleFor],
   );
 
   const togglePrompt = useCallback(
@@ -328,10 +360,12 @@ function PanelContent({ configuration, save }: Props): ReactElement {
       const current = analyzerUiRef.current[id];
       const next = !current?.promptOpen;
       patchUi(id, { promptOpen: next });
+      if (!next) return;
       // Load on first open, and retry on reopen if the previous load failed.
-      if (next && (!current?.promptLoaded || current?.promptError)) void loadPrompt(id);
+      if (!current?.promptLoaded || current?.promptError) void loadPrompt(id);
+      else announce(`Prompt loaded for ${titleFor(id)}.`);
     },
-    [patchUi, loadPrompt],
+    [patchUi, loadPrompt, announce, titleFor],
   );
 
   const handleSetEnabled = useCallback(
@@ -561,12 +595,6 @@ function PanelContent({ configuration, save }: Props): ReactElement {
         </Stack>
       </CollapsibleSection>
 
-      {/*
-       * A live region created together with its message is not announced
-       * reliably, so the failure announces from this always-mounted region and
-       * the banner below carries no `live` of its own.
-       */}
-      <LiveRegion live="assertive" message={savedNotice?.error ? noticeText : ''} />
       {savedNotice?.error ? (
         // The edits are still in the buffer after a failed save, so the save
         // bar keeps reporting them as unsaved; the failure itself stays on

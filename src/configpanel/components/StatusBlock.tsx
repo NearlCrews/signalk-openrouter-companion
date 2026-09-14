@@ -1,19 +1,18 @@
 import type { ReactElement } from 'react';
-import { memo, useId } from 'react';
+import { memo } from 'react';
 import {
   Banner,
   Button,
   Cluster,
-  LiveRegion,
   Metric,
   MetricGrid,
   RelativeAge,
   Stack,
   StatusIndicator,
   type StatusTone,
-  Text,
 } from 'signalk-nearlcrews-ui';
 import type { PanelStatus, TestResult } from '../types.js';
+import { useControlHint } from './ControlHint.js';
 
 interface Props {
   status: PanelStatus | null;
@@ -34,27 +33,33 @@ function historyLabel(history: PanelStatus['history']): { text: string; tone: St
   return { text: 'Unreachable', tone: 'danger' };
 }
 
-interface LoadedProps {
-  status: PanelStatus;
-  onTest: () => void;
-  testing: boolean;
-  testResult: TestResult | null;
-  stale: boolean;
-  lastSuccessAt: number | null;
-}
-
-// The loaded body. Split from the shell so the shell's live regions keep one
-// identity across the loading, failed, and loaded branches: a region a screen
-// reader can announce is one that already existed when its text changed.
-function LoadedStatus({
+export const StatusBlock = memo(function StatusBlock({
   status,
+  statusError,
   onTest,
   testing,
   testResult,
   stale,
   lastSuccessAt,
-}: LoadedProps): ReactElement {
-  const testHintId = useId();
+}: Props): ReactElement {
+  // The test spends money the daily cap does not govern, so both facts sit
+  // beside the button rather than in the collapsed OpenRouter section where the
+  // cap is configured. Read before the branches below, since a hook cannot sit
+  // behind an early return.
+  const apiKeySet = Boolean(status?.openrouter?.apiKeySet);
+  const { hintId: testHintId, hint: testHint } = useControlHint(
+    apiKeySet
+      ? 'The test makes one paid OpenRouter call, and it does not count against the daily cap.'
+      : 'Save an API key to enable this test. It makes one paid OpenRouter call that does not count against the daily cap.',
+  );
+  // Nothing here is a live region: every element below mounts together with the
+  // text it carries, which a screen reader may never observe as a change. The
+  // panel speaks the poll failure and the test result through the shell's own
+  // regions instead, which is also why this no longer splits into a shell and a
+  // loaded body to keep a region mounted across the branches.
+  if (statusError && !status) return <Banner tone="danger">{statusError}</Banner>;
+  if (!status) return <StatusIndicator tone="info">Loading status…</StatusIndicator>;
+
   const openrouter: Partial<PanelStatus['openrouter']> = status.openrouter ?? {};
   const history = status.history;
   const historyState = historyLabel(history);
@@ -126,60 +131,8 @@ function LoadedStatus({
             </StatusIndicator>
           ) : null}
         </Cluster>
-        {/*
-         * The test spends money the daily cap does not govern, so both facts
-         * sit beside the button rather than in the collapsed OpenRouter
-         * section where the cap is configured.
-         */}
-        <Text id={testHintId} as="p" tone="muted" size="sm">
-          {openrouter.apiKeySet
-            ? 'The test makes one paid OpenRouter call, and it does not count against the daily cap.'
-            : 'Save an API key to enable this test. It makes one paid OpenRouter call that does not count against the daily cap.'}
-        </Text>
+        {testHint}
       </Stack>
     </Stack>
-  );
-}
-
-export const StatusBlock = memo(function StatusBlock({
-  status,
-  statusError,
-  onTest,
-  testing,
-  testResult,
-  stale,
-  lastSuccessAt,
-}: Props): ReactElement {
-  return (
-    <>
-      {/*
-       * Two regions that outlive every branch below, because a live region
-       * created together with its message is not announced reliably. The
-       * visible chips and banners carry no `live` of their own.
-       *
-       * "Loading status" deliberately announces nothing. It renders at mount,
-       * where any region carrying it would be brand new and unobservable, and
-       * no user action is waiting on it. The one transition worth hearing, the
-       * plugin coming back after a save restarts it, is already announced by
-       * SaveActionBar's own status line, which is a region that already
-       * existed and whose text changes.
-       */}
-      <LiveRegion live="assertive" message={statusError && !status ? statusError : ''} />
-      <LiveRegion message={testResult ? testResult.text : ''} />
-      {statusError && !status ? (
-        <Banner tone="danger">{statusError}</Banner>
-      ) : status ? (
-        <LoadedStatus
-          status={status}
-          onTest={onTest}
-          testing={testing}
-          testResult={testResult}
-          stale={stale}
-          lastSuccessAt={lastSuccessAt}
-        />
-      ) : (
-        <StatusIndicator tone="info">Loading status…</StatusIndicator>
-      )}
-    </>
   );
 });

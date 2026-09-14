@@ -4,7 +4,6 @@ import {
   Banner,
   Button,
   LabeledField,
-  LiveRegion,
   NumberField,
   Select,
   Stack,
@@ -12,11 +11,9 @@ import {
   TextInput,
 } from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
+import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY_CEILING } from '../../callBudget.js';
 import type { ModelOption, ModelsState, PanelConfig } from '../types.js';
-import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY } from '../utils.js';
-
-// Written once so the banner and its announcement cannot drift apart.
-const MODELS_ERROR = 'Could not load the model list. Type a model slug manually, or retry.';
+import { MODELS_ERROR } from '../utils.js';
 
 interface Props {
   cfg: PanelConfig;
@@ -88,13 +85,9 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         ))}
       </datalist>
 
-      {/*
-       * The banner below is created together with its text, which a screen
-       * reader may never observe, so the announcement rides on this region
-       * instead: it is mounted from the section's first render and only its
-       * message changes.
-       */}
-      <LiveRegion message={modelsState === 'error' ? MODELS_ERROR : ''} />
+      {/* The banner below appears with its text, so useOpenRouterModels
+       * announces the same words through the shell's own region: a region
+       * created together with its message is not announced reliably. */}
       {modelsState === 'error' ? (
         <Banner
           tone="danger"
@@ -110,7 +103,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
 
       <NumberField
         label="Maximum calls per day"
-        description="UTC daily cap on analyzer OpenRouter calls, from 1 to 1000. The Test button is exempt."
+        description={`UTC daily cap on analyzer OpenRouter calls, from 1 to ${MAX_CALLS_PER_DAY_CEILING}. The Test button is exempt.`}
         layout="inline"
         // Clamp mode with an empty field allowed: a cleared field means "use the
         // plugin default", anything unparsable or outside the range commits the
@@ -119,7 +112,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         allowEmpty
         integer
         min={1}
-        max={MAX_CALLS_PER_DAY}
+        max={MAX_CALLS_PER_DAY_CEILING}
         fallback={1}
         inputProps={{ placeholder: String(DEFAULT_MAX_CALLS_PER_DAY) }}
         value={openRouter.maxCallsPerDay}

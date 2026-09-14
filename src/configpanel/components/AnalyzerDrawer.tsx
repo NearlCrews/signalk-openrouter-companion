@@ -1,17 +1,14 @@
 import type { ReactElement, ReactNode } from 'react';
-import { Button, LiveRegion } from 'signalk-nearlcrews-ui';
-import { type UseDisclosureResult, useDisclosure } from 'signalk-nearlcrews-ui/composites';
+import { Button } from 'signalk-nearlcrews-ui';
+import type { UseDisclosureResult } from 'signalk-nearlcrews-ui/composites';
 import styles from './analyzer.module.css';
 
 // A drawer is a button-triggered inline disclosure rather than a heading
-// section, so it rides on the shared headless hook: the ids, aria-expanded,
-// aria-controls, hidden, and the focus handoff (into the region on open, back
-// to the toggle on close) all come from there. The toggle and the body are
-// separate pieces so every toggle sits in the row's button cluster and every
-// body sits below it.
-export function useAnalyzerDrawer(open: boolean, onToggle: () => void): UseDisclosureResult {
-  return useDisclosure({ open, onOpenChange: onToggle });
-}
+// section, so it rides on the shared headless `useDisclosure`: the ids,
+// aria-expanded, aria-controls, hidden, and the focus handoff (into the region
+// on open, back to the toggle on close) all come from there, and the row calls
+// it directly. The toggle and the body are separate pieces so every toggle sits
+// in the row's button cluster and every body sits below it.
 
 interface ToggleProps {
   drawer: UseDisclosureResult;
@@ -43,34 +40,20 @@ interface BodyProps {
   // The region's own name. The toggle's label flips between its verbs, so the
   // region is not named after it.
   label: string;
-  // What a screen reader should hear as the drawer's contents settle, empty
-  // while the drawer is closed. It rides on a region mounted outside the
-  // drawer, and outside the `hidden` container, because a live region that
-  // enters the accessibility tree already carrying its text is not announced
-  // reliably.
-  announcement: string;
   children: ReactNode;
 }
 
 // The body stays mounted while hidden so the toggle's aria-controls target
 // always resolves, and its contents mount only while open.
-export function AnalyzerDrawerBody({
-  drawer,
-  label,
-  announcement,
-  children,
-}: BodyProps): ReactElement {
+export function AnalyzerDrawerBody({ drawer, label, children }: BodyProps): ReactElement {
   return (
-    <>
-      <LiveRegion message={announcement} />
-      <section
-        {...drawer.panelProps}
-        aria-labelledby={undefined}
-        aria-label={label}
-        className={styles.drawer}
-      >
-        {drawer.open ? children : null}
-      </section>
-    </>
+    <section
+      {...drawer.panelProps}
+      aria-labelledby={undefined}
+      aria-label={label}
+      className={styles.drawer}
+    >
+      {drawer.open ? children : null}
+    </section>
   );
 }

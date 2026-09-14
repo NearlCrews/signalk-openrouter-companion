@@ -4,6 +4,17 @@ import packageJson from '../../package.json' with { type: 'json' };
 
 const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui'];
 
+// The action bar's two fixtures, named once: a change to the bar's test hook is
+// then a change to these two lines rather than to four scattered ones.
+const saveButton = (page: Page) =>
+  page.locator('[data-panel-action-bar]').locator('button', { hasText: 'Save configuration' });
+const saveStatus = (page: Page) => page.locator('[data-panel-action-bar] [tabindex="-1"]');
+
+// The shell mounts its polite region before the panel's own content, so it is
+// the first status region in the panel. Every announcement this panel makes
+// goes through it; nothing mounts a region of its own.
+const politeAnnouncer = (page: Page) => page.locator('[data-snui-root] [role="status"]').first();
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-fixture-ready', 'true');
@@ -60,10 +71,8 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(apiKey).not.toHaveAttribute('errorid');
   await apiKey.fill('   ');
 
-  const saveButton = page
-    .locator('[data-panel-action-bar]')
-    .locator('button', { hasText: 'Save configuration' });
-  await saveButton.click();
+  const save = saveButton(page);
+  await save.click();
   await expect(apiKey).toBeFocused();
   await expect(apiKey).toHaveAttribute('aria-invalid', 'true');
   await expect(page.getByText('Enter an OpenRouter API key.')).toBeVisible();
@@ -89,7 +98,7 @@ test('loads the production remote and completes the save flow', async ({ page })
   const questdbUrl = page.getByRole('textbox', { name: 'QuestDB REST URL', exact: true });
   await questdbUrl.fill('ftp://questdb.local');
   await expect(questdbUrl).not.toHaveAttribute('aria-invalid');
-  await saveButton.click();
+  await save.click();
   await expect(questdbUrl).toBeFocused();
   await expect(questdbUrl).toHaveAttribute('aria-invalid', 'true');
   await questdbUrl.fill('http://operator:secret@questdb.local:9000');
@@ -107,7 +116,7 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(page.locator('body')).not.toHaveAttribute('data-save-count', /\d/);
   await questdbUrl.fill('http://localhost:9000');
 
-  await saveButton.click();
+  await save.click();
   await expect(page.locator('body')).toHaveAttribute('data-saved-configuration', /fixture-key/);
   const savedConfiguration = await page.locator('body').getAttribute('data-saved-configuration');
   expect(JSON.parse(savedConfiguration ?? '{}')).toMatchObject({
@@ -134,26 +143,26 @@ test('loads the production remote and completes the save flow', async ({ page })
   });
   expect(JSON.parse(savedConfiguration ?? '{}')).not.toHaveProperty('questdb');
   await expect(page.locator('body')).toHaveAttribute('data-save-count', '1');
-  expect(await saveButton.evaluate((element) => element.hasAttribute('disabled'))).toBe(false);
-  await expect(saveButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(saveButton).toHaveAttribute('aria-busy', 'true');
-  await expect(saveButton).toHaveAccessibleName('Save configuration');
-  await expect(saveButton).toHaveAccessibleDescription('Saving changes');
-  const saveStatus = page.locator('[data-panel-action-bar] [tabindex="-1"]');
-  await expect(saveStatus).toBeFocused();
-  await expect(saveStatus).toContainText('Saving changes');
+  expect(await save.evaluate((element) => element.hasAttribute('disabled'))).toBe(false);
+  await expect(save).toHaveAttribute('aria-disabled', 'true');
+  await expect(save).toHaveAttribute('aria-busy', 'true');
+  await expect(save).toHaveAccessibleName('Save configuration');
+  await expect(save).toHaveAccessibleDescription('Saving changes');
+  const saveLine = saveStatus(page);
+  await expect(saveLine).toBeFocused();
+  await expect(saveLine).toContainText('Saving changes');
 
-  await saveButton.dispatchEvent('click');
+  await save.dispatchEvent('click');
   await expect(page.locator('body')).toHaveAttribute('data-save-count', '1');
 
   await page.evaluate(() => document.dispatchEvent(new Event('fixture-host-resync')));
   await expect(page.locator('body')).toHaveAttribute('data-host-resync-count', '1');
-  await expect(saveButton).toBeDisabled();
-  await expect(saveButton).not.toHaveAttribute('aria-busy');
+  await expect(save).toBeDisabled();
+  await expect(save).not.toHaveAttribute('aria-busy');
   await expect(page.getByText(/Plugin restarted\./)).toBeVisible();
-  await expect(saveStatus).toBeFocused();
-  await expect(saveStatus).toContainText('Saved at');
-  await expect(saveStatus).toContainText('Plugin restarted');
+  await expect(saveLine).toBeFocused();
+  await expect(saveLine).toContainText('Saved at');
+  await expect(saveLine).toContainText('Plugin restarted');
 });
 
 test('configures and tests InfluxDB history without exposing credentials', async ({ page }) => {
@@ -165,17 +174,15 @@ test('configures and tests InfluxDB history without exposing credentials', async
   await provider.selectOption('influxdb');
   const influxUrl = page.getByRole('textbox', { name: 'InfluxDB URL', exact: true });
   const database = page.getByRole('textbox', { name: 'Database', exact: true });
-  const saveButton = page
-    .locator('[data-panel-action-bar]')
-    .locator('button', { hasText: 'Save configuration' });
+  const save = saveButton(page);
   await influxUrl.fill('http://operator:secret@influx.local:8086');
   await expect(influxUrl).not.toHaveAttribute('aria-invalid');
-  await saveButton.click();
+  await save.click();
   await expect(influxUrl).toBeFocused();
   await expect(influxUrl).toHaveAttribute('aria-invalid', 'true');
   await influxUrl.fill('http://influx.local:8086');
 
-  await saveButton.click();
+  await save.click();
   await expect(database).toBeFocused();
   await expect(database).toHaveAttribute('aria-invalid', 'true');
   await expect(
@@ -195,7 +202,7 @@ test('configures and tests InfluxDB history without exposing credentials', async
     page.getByText('Reachable at http://influx.local:8086', { exact: true }),
   ).toBeVisible();
 
-  await saveButton.click();
+  await save.click();
   const saved = JSON.parse(
     (await page.locator('body').getAttribute('data-saved-configuration')) ?? '{}',
   );
@@ -294,7 +301,7 @@ test('confirms before discarding unsaved edits', async ({ page }) => {
   await expect(apiKey).toHaveValue('fixture-key');
   // The save bar moves focus to its status before Discard runs, so the
   // confirmation hands focus back there when it closes.
-  await expect(page.locator('[data-panel-action-bar] [tabindex="-1"]')).toBeFocused();
+  await expect(saveStatus(page)).toBeFocused();
 
   await discard.click();
   await page.getByRole('button', { name: 'Discard changes' }).click();
@@ -555,12 +562,10 @@ test('announces a fire outcome from a region that already existed', async ({ pag
   await page.getByRole('button', { name: 'Maintenance Advisor', exact: true }).click();
 
   // The region is in the document, and empty, before the run: a live region
-  // created in the same commit as its message is not announced reliably. Every
-  // row keeps one, so it is read through the row that owns it.
-  const row = page.getByRole('region', { name: 'Maintenance Advisor', exact: true });
-  const announcer = row.locator('[data-fire-announcement]');
+  // created in the same commit as its message is not announced reliably. One
+  // region serves the whole panel, so no row mounts one of its own.
+  const announcer = politeAnnouncer(page);
   await expect(announcer).toHaveText('');
-  await expect(announcer).toHaveAttribute('role', 'status');
   await announcer.evaluate((element) => element.setAttribute('data-marked', ''));
 
   const fire = page.getByRole('button', { name: 'Fire now for Maintenance Advisor' });
@@ -571,17 +576,16 @@ test('announces a fire outcome from a region that already existed', async ({ pag
   );
   await fire.click();
 
-  // The same node carries the text, rather than a fresh node appearing with it.
-  const marked = row.locator('[data-fire-announcement][data-marked]');
-  await expect(marked).toHaveText(/^Maintenance Advisor: Report generated at .+\.$/);
-  const first = await marked.textContent();
+  // The same node carries the text, rather than a fresh node appearing with it,
+  // and it names the analyzer the operator pressed.
+  const marked = page.locator('[role="status"][data-marked]');
+  await expect(marked).toHaveText('Maintenance Advisor: Report generated.');
 
-  // A second identical outcome still announces, because the completion time
-  // gives the region a content change to speak.
-  await page.waitForTimeout(1100);
+  // A second run with the same outcome lands on that same node. The words are
+  // read out again rather than passing as an unchanged region, because the
+  // shell's region carries an announcement key that changes per message.
   await fire.click();
-  await expect.poll(() => marked.textContent()).not.toBe(first);
-  await expect(marked).toHaveText(/^Maintenance Advisor: Report generated at .+\.$/);
+  await expect(marked).toHaveText('Maintenance Advisor: Report generated.');
 });
 
 test('renders a populated report list without Axe findings or overflow', async ({ page }) => {

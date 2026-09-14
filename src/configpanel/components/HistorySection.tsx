@@ -4,7 +4,6 @@ import {
   Button,
   Cluster,
   LabeledField,
-  LiveRegion,
   Select,
   Stack,
   StatusIndicator,
@@ -13,7 +12,7 @@ import {
 } from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
 import type { HistoryTestResult, PanelConfig } from '../types.js';
-import { HISTORY_URL_RULE, historyValidity } from '../utils.js';
+import { historyValidity, urlError } from '../utils.js';
 
 interface Props {
   cfg: PanelConfig;
@@ -42,13 +41,13 @@ export const HistorySection = memo(function HistorySection({
   const history: NonNullable<PanelConfig['history']> = cfg.history ?? {};
   const questdb = history.questdb ?? {};
   const influxdb = history.influxdb ?? {};
-  const { source, noUrl, invalidUrl, missingDatabase } = historyValidity(cfg.history);
+  const validity = historyValidity(cfg.history);
+  const { source, noUrl, invalidUrl, missingDatabase } = validity;
   const testText = testResult
     ? testResult.ok
       ? `Reachable at ${testResult.url}`
       : testResult.text
     : '';
-  const testAnnouncement = testResult ? `History provider test: ${testText}` : '';
 
   return (
     <Stack gap={3}>
@@ -78,15 +77,7 @@ export const HistorySection = memo(function HistorySection({
         <LabeledField
           label="QuestDB REST URL"
           description="The HTTP endpoint reachable from the Signal K server."
-          error={
-            !submitted
-              ? undefined
-              : noUrl
-                ? 'Enter the QuestDB REST URL.'
-                : invalidUrl
-                  ? `Enter an ${HISTORY_URL_RULE}.`
-                  : undefined
-          }
+          error={urlError(submitted, validity, 'Enter the QuestDB REST URL.')}
           layout="inline"
           required
         >
@@ -127,15 +118,7 @@ export const HistorySection = memo(function HistorySection({
           <LabeledField
             label="InfluxDB URL"
             description="The v1-compatible HTTP endpoint reachable from Signal K."
-            error={
-              !submitted
-                ? undefined
-                : noUrl
-                  ? 'Enter the InfluxDB URL.'
-                  : invalidUrl
-                    ? `Enter an ${HISTORY_URL_RULE}.`
-                    : undefined
-            }
+            error={urlError(submitted, validity, 'Enter the InfluxDB URL.')}
             layout="inline"
             required
           >
@@ -221,13 +204,9 @@ export const HistorySection = memo(function HistorySection({
         </>
       ) : null}
 
-      {/*
-       * The chip below is created together with its text, which a screen
-       * reader may never observe, so the probe result announces from this
-       * region instead: it is mounted from the section's first render and
-       * only its message changes.
-       */}
-      <LiveRegion message={testAnnouncement} />
+      {/* The chip below appears with its text, so the panel announces the probe
+       * result from the shell's own region instead: a region created together
+       * with its message is not announced reliably. */}
       {source !== 'none' ? (
         <Cluster gap={3}>
           <Button

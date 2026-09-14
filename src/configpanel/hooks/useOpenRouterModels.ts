@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
+import type { PanelAnnounce } from 'signalk-nearlcrews-ui';
 import { fetchJson } from '../api.js';
 import type { ModelOption, ModelsState } from '../types.js';
+import { MODELS_ERROR } from '../utils.js';
 
 export interface UseOpenRouterModels {
   models: ModelOption[];
@@ -14,7 +16,7 @@ export interface UseOpenRouterModels {
 // is a no-op so a focus storm cannot stack requests, and a successful list is
 // retained for the lifetime of the mounted panel. A failed request can still
 // be retried explicitly.
-export function useOpenRouterModels(): UseOpenRouterModels {
+export function useOpenRouterModels(announce: PanelAnnounce): UseOpenRouterModels {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelsState, setModelsState] = useState<ModelsState>('idle');
   const requestStateRef = useRef<ModelsState>('idle');
@@ -31,8 +33,12 @@ export function useOpenRouterModels(): UseOpenRouterModels {
     } else {
       requestStateRef.current = 'error';
       setModelsState('error');
+      // Spoken from the panel's own region rather than from a region mounted
+      // beside the banner: the banner appears with its text, which a screen
+      // reader may never observe as a change.
+      announce(MODELS_ERROR);
     }
-  }, []);
+  }, [announce]);
 
   return { models, modelsState, loadModels };
 }

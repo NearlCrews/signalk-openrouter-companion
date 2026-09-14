@@ -106,10 +106,7 @@ export type ModelsState = 'idle' | 'loading' | 'ready' | 'error';
 // via patchUi. One entry per analyzer id.
 export interface AnalyzerUiState {
   expanded?: boolean;
-  // `finishedAt` is set with the outcome text, never while pending: the row's
-  // announcement dates the paid call from it, and its change is what lets a
-  // repeat of the same outcome announce a second time.
-  fire?: { pending?: boolean; finishedAt?: number; ok?: boolean; text?: string };
+  fire?: { pending?: boolean; ok?: boolean; text?: string };
   reportsOpen?: boolean;
   reports?: ReportEntry[];
   reportsLoading?: boolean;
