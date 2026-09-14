@@ -95,6 +95,12 @@ export const WEATHER_PRESSURE_PATH = 'environment.outside.pressure';
 // this exact string, so the gate and the canonical path list cannot drift.
 export const WIND_DIRECTION_PATH = 'environment.wind.directionTrue';
 
+// Air temperature and dew point (K). Named for the same reason: the forecast
+// analyzer reads this pair to measure the convergence that corroborates a
+// graded outlook, so the check and the canonical path list cannot drift.
+export const AIR_TEMPERATURE_PATH = 'environment.outside.temperature';
+export const DEW_POINT_PATH = 'environment.outside.dewPointTemperature';
+
 // Weather telemetry the forecast ("Weather Outlook Advisor") analyzer reads.
 // Two families. Canonical paths are Signal K 1.8.2 standard leaves any
 // barometer/anemometer or weather plugin can feed. Extension paths are the
@@ -105,8 +111,8 @@ export const WIND_DIRECTION_PATH = 'environment.wind.directionTrue';
 // and battery banks), so the analyzer subscribes this list directly.
 export const WEATHER_CANONICAL_PATHS = [
   WEATHER_PRESSURE_PATH,
-  'environment.outside.temperature',
-  'environment.outside.dewPointTemperature',
+  AIR_TEMPERATURE_PATH,
+  DEW_POINT_PATH,
   'environment.outside.relativeHumidity',
   'environment.wind.speedOverGround',
   WIND_DIRECTION_PATH,
