@@ -6,49 +6,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
-### Changed
+<a id="v080"></a>
 
-- A report that follows an alert now publishes `state: normal` on its
-  notification path, whichever analyzer wrote it. Signal K separates `nominal`
-  ("no action needed") from `normal` ("recovered after an alarm"), and a
-  chartplotter bridge has no alert type for `nominal`, so a recovery published
-  that way never cleared the alert it was meant to clear. The publisher tracks
-  what stands on each path, so the first settled report after an alert, or
-  after a failure notice, is the recovery and the one after that is plain
-  `nominal` again. The forecast analyzer no longer keeps that memory itself.
-- The reports drawer reads only the tail of the report log rather than the
-  whole file. The log rotates at 8 MB, and parsing all of it to show ten rows
-  cost seconds of blocked event loop on a Raspberry Pi with a drawer open per
-  analyzer.
-- The configuration panel speaks every status change through one pair of live
-  regions the panel frame mounts, instead of a region beside each message.
-  Screen readers announce a region that already existed when its text changed,
-  so the fire outcome, the two connection tests, the model-list failure, the
-  drawer contents, and a rejected save all announce from there. A fire that
-  ends the same way twice is still read out twice, and the announcement no
-  longer carries the completion time it only needed to make the words differ.
-- A configured report-log filename is accepted only when it is a plain
-  filename of letters, digits, dot, dash, and underscore. Anything else,
-  including a name made only of dots, falls back to `reports.jsonl` instead of
-  being checked against a list of known-bad values.
-
-### Fixed
-
-- A cron pattern is now validated by the scheduler that will run it, so a
-  pattern with an out-of-range field (`99 * * * *`), an illegal character, or
-  no next occurrence at all falls back to the analyzer's shipped schedule
-  instead of reaching the scheduler and leaving that analyzer silently never
-  running while the status banner still read "Running". The five-field rule
-  stays: a six-field pattern would fire every second and empty the daily call
-  cap in under a minute.
-- The InfluxDB probe route compares the request's URL with the saved one
-  after both go through the normalization the client itself applies, so
-  re-probing a saved host whose URL carries embedded credentials keeps using
-  the stored username and password instead of silently probing without them.
-
-<a id="v076"></a>
-
-## [0.7.6] - 2026-09-13
+## [0.8.0] - 2026-09-14
 
 ### Changed
 
@@ -87,6 +47,13 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   the end of a scrolled page.
 - A save the host rejects now stays visible as an alert beside the save bar
   until the next save or discard, instead of clearing after six seconds.
+- The configuration panel speaks every status change through one pair of live
+  regions the panel frame mounts, instead of a region beside each message.
+  Screen readers announce a region that already existed when its text changed,
+  so the fire outcome, the two connection tests, the model-list failure, the
+  drawer contents, and a rejected save all announce from there. A fire that
+  ends the same way twice is still read out twice, and the announcement no
+  longer carries the completion time it only needed to make the words differ.
 - The panel build uses webpack's native CSS pipeline and emits one panel
   chunk plus one stylesheet, so the plugin-specific styles arrive as a linked
   stylesheet instead of a style tag injected at runtime. The Module Federation
@@ -105,15 +72,25 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   stamped with the installed library version. Dependabot proposes
   `signalk-nearlcrews-ui` updates in their own pull request.
 - Development dependencies are current. TypeScript 7 compiles and
-  type-checks through the `@typescript/native` alias and `scripts/tsc7.mjs`,
-  while the bare `typescript` specifier is aliased to `@typescript/typescript6`
-  so typescript-eslint, Knip, and dependency-cruiser keep the 6.x compiler
-  API; `npm run check` runs both type checks. Vitest and its v8 coverage
-  provider move to 5.0.0, and Biome, Playwright, ESLint, typescript-eslint,
-  cspell, Knip, Linkinator, webpack, and the React types take their latest
-  minor and patch releases. `@types/node` stays on 22 to match the runtime
-  floor. `npm run cruise` now follows type-only imports, which had kept about
-  a third of the module graph out of the boundary rules.
+  type-checks through the `@typescript/native` alias, run by path from
+  `scripts/tsc.mjs`, which walks the backend, test, panel, and browser tooling
+  projects from one list, while the bare `typescript` specifier is aliased to
+  `@typescript/typescript6` so typescript-eslint, Knip, and dependency-cruiser
+  keep the 6.x compiler API; `npm run check` runs both type checks. Vitest and
+  its v8 coverage provider move to 5.0.0, and Biome, Playwright, ESLint,
+  typescript-eslint, cspell, Knip, Linkinator, dependency-cruiser, size-limit,
+  webpack, and the React types take their latest minor and patch releases.
+  `@types/node` stays on 22 to match the runtime floor. `npm run cruise` now
+  follows type-only imports, which had kept about a third of the module graph
+  out of the boundary rules.
+- A report that follows an alert now publishes `state: normal` on its
+  notification path, whichever analyzer wrote it. Signal K separates `nominal`
+  ("no action needed") from `normal` ("recovered after an alarm"), and a
+  chartplotter bridge has no alert type for `nominal`, so a recovery published
+  that way never cleared the alert it was meant to clear. The publisher tracks
+  what stands on each path, so the first settled report after an alert, or
+  after a failure notice, is the recovery and the one after that is plain
+  `nominal` again. The forecast analyzer no longer keeps that memory itself.
 - The OpenRouter client now reads `error.metadata.error_type` on a 503 instead
   of treating every 503 as terminal. A `provider_overloaded` answer is
   transient: it is retried through the same jittered ladder as a 429, honoring
@@ -154,13 +131,14 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   either way, a wind shift of 45 degrees or more across the window, or air
   temperature closing to within 1 K of the dew point. An uncorroborated
   outlook still publishes, capped at `alert` and visual only, so it stays
-  readable in the Data Browser without beeping at the helm. The first
-  below-floor outlook after a raised one publishes as `normal` rather than
-  `nominal`, which is the state `signalk-nmea2000-emitter-cannon` needs to
-  clear an alert it has already put on a chartplotter.
+  readable in the Data Browser without beeping at the helm.
 - The report log rotates. `reports.jsonl` moves to `reports.jsonl.1` once it
   passes 8 MB and one generation is kept, so the file the panel's report list
   reads stays bounded however long the plugin has been running.
+- The reports drawer reads only the tail of the report log rather than the
+  whole file. The log rotates at 8 MB, and parsing all of it to show ten rows
+  cost seconds of blocked event loop on a Raspberry Pi with a drawer open per
+  analyzer.
 - The panel's "Test API key" button is bounded. Presses that overlap an
   in-flight test share the one upstream call, and for five seconds after a
   test finishes the next press is refused, so a held or repeated button
@@ -175,6 +153,10 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   seconds column from turning `* * * * * *` into a run every second, and a
   blank model slug falls back to the shipped slug instead of failing every run
   with a 400.
+- A configured report-log filename is accepted only when it is a plain
+  filename of letters, digits, dot, dash, and underscore. Anything else,
+  including a name made only of dots, falls back to `reports.jsonl` instead of
+  being checked against a list of known-bad values.
 
 ### Fixed
 
@@ -191,9 +173,17 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   drop its `sound` method. A failure notice now holds the standing state when
   that state is the more severe of the two, and the failure is still recorded
   in the report log and on the server log.
-- A report log filename of `.` or `..` no longer makes every append fail with
-  EISDIR. Both now fall back to `reports.jsonl` alongside the other names that
-  are not a plain basename.
+- A cron pattern is now validated by the scheduler that will run it, so a
+  pattern with an out-of-range field (`99 * * * *`), an illegal character, or
+  no next occurrence at all falls back to the analyzer's shipped schedule
+  instead of reaching the scheduler and leaving that analyzer silently never
+  running while the status banner still read "Running". The five-field rule
+  stays: a six-field pattern would fire every second and empty the daily call
+  cap in under a minute.
+- The InfluxDB probe route compares the request's URL with the saved one
+  after both go through the normalization the client itself applies, so
+  re-probing a saved host whose URL carries embedded credentials keeps using
+  the stored username and password instead of silently probing without them.
 - Two admin tabs polling the model list no longer cancel each other. A stop
   that aborted one caller's request used to reject the other caller's wait on
   the same shared fetch as a 502, for a request it never cancelled.
@@ -1780,8 +1770,8 @@ The changes were derived from a study of
   real tag, and 0.5.4 compares straight back to 0.5.2.
 -->
 
-[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.6...HEAD
-[0.7.6]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.5...v0.7.6
+[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.2...v0.7.3

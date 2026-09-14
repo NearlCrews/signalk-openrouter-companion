@@ -18,24 +18,28 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.6
+## What's new in 0.8.0
 
-0.7.6 rebuilds the configuration panel on shared UI 0.11.1, stops analyzer runs
-from being lost or double-billed, weighs a graded weather outlook against the
-vessel's own telemetry, and refreshes the build toolchain.
+0.8.0 rebuilds the configuration panel on shared UI 0.11.1, clears an alert on
+the chartplotter once the condition passes, stops analyzer runs from being lost
+or double-billed, and weighs a graded weather outlook against the vessel's own
+telemetry.
 
 - **Shared UI 0.11.1 panel.** The panel frame, the Save and Discard bar, the
   calls-per-day field, and the reports and prompt drawers all come from the
   library now. A panel error offers "Try again" and "Reload page" instead of a
   blank card, the save bar keeps its buttons in the tab order and says why a
-  save is blocked, each drawer opens a named region a screen reader announces,
-  and the theme selector at the foot of the panel is no longer covered by the
-  docked bar.
+  save is blocked, every status change is spoken through one pair of live
+  regions, and the reports drawer reads only the tail of the report log
+  instead of parsing all of it.
+- **A recovery clears the alert.** The first settled report after an alert, or
+  after a failure notice, publishes `state: normal` rather than `nominal`, so a
+  bridge that put the alert on a chartplotter has the state it needs to clear
+  it. A failed run no longer lowers an alarm that still stands.
 - **No lost vessel events.** A battery or engine event that arrives during
   startup, or while the same analyzer is still running, is now held and run
   rather than dropped, and battery alerts serialize per bank so two banks
-  crossing one threshold no longer contend. A failed run no longer replaces a
-  standing alarm with a warning.
+  crossing one threshold no longer contend.
 - **A weather alarm has to be corroborated.** An outlook graded above alert
   sounds only when the observed pressure, wind, or dew point trend supports it.
   An uncorroborated grade still publishes, capped at alert and visual only, so
@@ -45,11 +49,8 @@ vessel's own telemetry, and refreshes the build toolchain.
   key" button coalesces overlapping presses and refuses a repeat for five
   seconds, and an overloaded OpenRouter provider is retried instead of failing
   the run.
-- **A current toolchain.** TypeScript 7 builds and type-checks the plugin, the
-  panel ships its styles as a linked stylesheet instead of injecting them at
-  runtime, and its size gate measures against a recorded baseline.
 
-See the [v0.7.6 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v076) and the
+See the [v0.8.0 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v080) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
