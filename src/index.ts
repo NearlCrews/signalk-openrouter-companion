@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { rename, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import type { SKVersion } from '@signalk/server-api';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
@@ -18,7 +18,7 @@ import {
   SOC_PATH_RE,
 } from './core/discovery.js';
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
-import { HOUR_MS } from './core/format.js';
+import { compositeKey, HOUR_MS } from './core/format.js';
 import type { HistoryProvider } from './core/history.js';
 import { InfluxDBClient } from './core/influxdb.js';
 import { Logger, stringify } from './core/logger.js';
@@ -26,7 +26,7 @@ import { OpenRouterClient } from './core/openrouter.js';
 import { enginePaths, PLUGIN_HTTP_PREFIX, PLUGIN_ID, pluginPutPath } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
-import { type RunOutcome, TriggerRouter } from './core/triggerRouter.js';
+import { REPLAYABLE_TRIGGER_KINDS, type RunOutcome, TriggerRouter } from './core/triggerRouter.js';
 import { manualPutCtx } from './core/triggers.js';
 import { buildSchema, buildUiSchema } from './schema.js';
 import { ALERTS_SUPPORTED_EVENTS, mergeWithDefaults, type PluginOptions } from './types.js';
@@ -57,8 +57,12 @@ const ENGINE_STATE_MAX_RESUME_SEC = 3600;
 // How often the in-progress engine session is persisted to disk so a restart
 // mid-session can resume it.
 const DETECTOR_SAVE_INTERVAL_MS = 60_000;
-// Used when the configured report-log filename is not a plain basename.
+// Used when the configured report-log filename is not a plain filename.
 const DEFAULT_LOG_FILENAME = 'reports.jsonl';
+// What a report-log filename may be: letters, digits, dot, dash, and
+// underscore. See safeLogFilename.
+const PLAIN_FILENAME = /^[A-Za-z0-9._-]+$/;
+const ONLY_DOTS = /^\.+$/;
 // Ceiling on events held for the router during the deferred init (see
 // withRouter in start). The window is a local budget-file read, so one or two
 // is the realistic worst case; the bound only stops a pathologically stalled
@@ -199,7 +203,7 @@ export default function createPlugin(app: ServerApiLike): {
         mkdirSync(dataDir, { recursive: true });
         // logFilename is not exposed in the schema, so a value with a path
         // separator or a parent segment can only come from a hand-edited
-        // config. Keep it a plain basename so the report log cannot be
+        // config. Keep it a plain filename so the report log cannot be
         // written outside the plugin's own data directory.
         const logPath = join(dataDir, safeLogFilename(cfg.output.logFilename));
         const budgetPath = join(dataDir, 'budget.json');
@@ -418,9 +422,7 @@ export default function createPlugin(app: ServerApiLike): {
               const timezone = cfg.analyzers[a.id].triggers.cron.timezone;
               for (const t of a.triggers) {
                 if (t.kind !== 'cron') continue;
-                // Join pattern + timezone with a NUL: cron patterns contain spaces and
-                // IANA timezone names do not, so the pair cannot collide into one key.
-                const key = `${t.pattern}\u0000${timezone}`;
+                const key = compositeKey(t.pattern, timezone);
                 const existing = cronJobs.get(key);
                 if (existing) existing.analyzerIds.push(a.id);
                 else cronJobs.set(key, { pattern: t.pattern, timezone, analyzerIds: [a.id] });
@@ -791,16 +793,16 @@ export default function createPlugin(app: ServerApiLike): {
   };
 }
 
-// Reduce a configured log filename to a plain basename, falling back to the
-// default when the configured value was not one already. '.' and '..' pass the
-// basename test but name a directory, so every append would fail with EISDIR;
-// reject them alongside the empty string.
+// Accept a configured log filename only when it is a plain filename in the
+// plugin's data directory, falling back to the shipped default otherwise. An
+// allowlist rather than a list of known-bad values: a separator, a traversal,
+// and anything else nobody thought of is rejected by default, and a name made
+// only of dots is rejected on top because '.' and '..' name a directory, so
+// every append would fail with EISDIR.
 function safeLogFilename(configured: string): string {
-  const base = basename(configured);
-  if (base !== configured || base === '' || base === '.' || base === '..') {
-    return DEFAULT_LOG_FILENAME;
-  }
-  return base;
+  return PLAIN_FILENAME.test(configured) && !ONLY_DOTS.test(configured)
+    ? configured
+    : DEFAULT_LOG_FILENAME;
 }
 
 function runningStatus(analyzerCount: number): string {
@@ -835,9 +837,10 @@ function putAckFor(outcomes: readonly RunOutcome[]): {
     return { state: 'COMPLETED', statusCode: 503, message: 'the plugin stopped mid-run' };
   }
   // A PUT is a replayable trigger, so the router skips rather than defers it
-  // and this branch is unreachable from the PUT path today. It is here so a
-  // deferred run is never answered as "nothing to report".
-  if (outcomes.includes('queued')) {
+  // and no run started here comes back queued today. The claim is checked
+  // rather than narrated: the day 'put' leaves that set, a deferred run gets
+  // its own answer instead of being reported as "nothing to report".
+  if (!REPLAYABLE_TRIGGER_KINDS.has('put') && outcomes.includes('queued')) {
     return {
       state: 'COMPLETED',
       statusCode: 202,

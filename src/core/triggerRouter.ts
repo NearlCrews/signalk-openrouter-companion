@@ -1,8 +1,19 @@
 import type { Analyzer, AnalyzerDeps } from '../analyzers/Analyzer.js';
 import type { AnalyzerId } from '../analyzers/ids.js';
+import { compositeKey } from './format.js';
 import type { HistoryProvider } from './history.js';
 import { stringify } from './logger.js';
-import type { BatteryEventKind, TriggerCtx, TriggerKind, TriggerSpec } from './triggerContext.js';
+import type {
+  BatteryEventKind,
+  RunOutcome,
+  TriggerCtx,
+  TriggerKind,
+  TriggerSpec,
+} from './triggerContext.js';
+
+// The run outcomes this router produces are part of the shared vocabulary in
+// triggerContext.ts, re-exported here because this is where they are decided.
+export type { RunOutcome } from './triggerContext.js';
 
 // cron triggers are dispatched directly via runById (a cron job names its
 // analyzer ids); only put and battery-event flow through dispatch + match.
@@ -10,25 +21,6 @@ interface DispatchExtras {
   putPath?: string;
   batterySubkind?: BatteryEventKind;
 }
-
-// Outcome of one analyzer run. `runById` returns it so a caller (the REST fire
-// endpoint) can tell a real report apart from a no-op or a failure instead of
-// reporting blanket success. `unknown` distinguishes "no analyzer with that
-// id" from `no-input` ("collectContext returned nothing"); the REST endpoint
-// pre-guards unknown ids with a 409, but in-process callers may not.
-// `aborted` is a run the plugin shutdown interrupted, kept distinct from
-// `no-input` because it may already have spent a budget call.
-// `queued` is an event trigger deferred behind a run of the same subject; it
-// runs when that one settles, so it is neither a report nor a drop.
-export type RunOutcome =
-  | 'reported'
-  | 'no-input'
-  | 'budget-exhausted'
-  | 'failed'
-  | 'unknown'
-  | 'already-running'
-  | 'aborted'
-  | 'queued';
 
 // Trigger kinds whose producer fires again on its own: cron comes round on the
 // next tick and a PUT is the operator pressing the button, so one that lands
@@ -38,7 +30,7 @@ export type RunOutcome =
 // skipped one never comes back; those are deferred instead. Listing the
 // replayable kinds rather than the droppable ones keeps a future event kind on
 // the safe side of the guard by default.
-const REPLAYABLE_TRIGGER_KINDS: ReadonlySet<TriggerKind> = new Set(['cron', 'put']);
+export const REPLAYABLE_TRIGGER_KINDS: ReadonlySet<TriggerKind> = new Set(['cron', 'put']);
 
 // One deferred trigger, held until the run it landed on settles.
 interface DeferredRun {
@@ -109,10 +101,7 @@ export class TriggerRouter {
   // one key and cannot publish out of order.
   private runKeyFor(a: Analyzer, ctx: TriggerCtx): string {
     const subject = a.runKey?.(ctx);
-    // The pair is joined with a NUL, the same convention index.ts uses for
-    // its (pattern, timezone) cron keys: no analyzer id or Signal K path
-    // segment can contain one, so the pair cannot collide into one key.
-    return subject ? `${a.id}\u0000${subject}` : a.id;
+    return subject ? compositeKey(a.id, subject) : a.id;
   }
 
   // A trigger that landed on an in-flight run of the same subject. A cron fire

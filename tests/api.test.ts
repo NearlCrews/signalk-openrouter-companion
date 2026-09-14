@@ -1,14 +1,15 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import type { Analyzer } from '../src/analyzers/Analyzer.js';
 import type { AnalyzerId } from '../src/analyzers/ids.js';
 import type { PluginRuntime, RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
-import { _resetOpenRouterModelsCache, getOpenApi, registerApiRoutes } from '../src/core/api.js';
+import { _resetOpenRouterApiState, getOpenApi, registerApiRoutes } from '../src/core/api.js';
 import { OpenRouterError } from '../src/core/openrouter.js';
 import createPlugin from '../src/index.js';
 import {
   cleanupTmpDir,
+  jsonResponse,
   type MockApp,
   makeMockApp,
   makePluginRuntime,
@@ -232,7 +233,7 @@ describe('plugin REST API', () => {
     // The route's coalescing slot and cooldown are module state, so each case
     // starts from a clean one rather than inheriting the previous test's ping.
     beforeEach(() => {
-      _resetOpenRouterModelsCache();
+      _resetOpenRouterApiState();
     });
 
     const okLlm = {
@@ -560,11 +561,11 @@ describe('plugin REST API', () => {
 
   describe('/api/openrouter/models handler', () => {
     beforeEach(() => {
-      _resetOpenRouterModelsCache();
+      _resetOpenRouterApiState();
     });
     afterEach(() => {
       vi.unstubAllGlobals();
-      _resetOpenRouterModelsCache();
+      _resetOpenRouterApiState();
     });
 
     const emptyRuntime = (): PluginRuntime => makePluginRuntime();
@@ -825,6 +826,22 @@ describe('plugin REST API', () => {
         },
       });
 
+    const stubInfluxProbe = (): {
+      fetchMock: Mock<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>;
+      routes: RecordedRoute[];
+    } => {
+      // Every case below varies only the request body, so the fetch stub that
+      // answers with a result set and the routes registered against the saved
+      // runtime are written once.
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse(200, { results: [{}] }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, makeRuntime);
+      return { fetchMock, routes };
+    };
+
     it('requires both a URL and database when no saved configuration exists', async () => {
       const { router, routes } = makeRecordingRouter();
       registerApiRoutes(router, () => null);
@@ -866,16 +883,7 @@ describe('plugin REST API', () => {
     });
 
     it('probes saved settings with Basic auth and never returns credentials', async () => {
-      const fetchMock = vi.fn(
-        async (_input: string | URL | Request, _init?: RequestInit) =>
-          new Response(JSON.stringify({ results: [{}] }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-      );
-      vi.stubGlobal('fetch', fetchMock);
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, makeRuntime);
+      const { fetchMock, routes } = stubInfluxProbe();
 
       const r = await call(routes, 'post', '/api/influxdb/test', { body: {} });
 
@@ -902,16 +910,7 @@ describe('plugin REST API', () => {
       // vessel's InfluxDB token to a host of my choosing". The admin gate keeps
       // that away from an unauthenticated caller; it should not be within reach
       // of an authenticated one either.
-      const fetchMock = vi.fn(
-        async (_input: string | URL | Request, _init?: RequestInit) =>
-          new Response(JSON.stringify({ results: [{}] }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-      );
-      vi.stubGlobal('fetch', fetchMock);
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, makeRuntime);
+      const { fetchMock, routes } = stubInfluxProbe();
 
       const r = await call(routes, 'post', '/api/influxdb/test', {
         body: { url: 'http://attacker.example:8086' },
@@ -927,16 +926,7 @@ describe('plugin REST API', () => {
     it('still sends the saved credentials when the request names the saved URL', async () => {
       // Re-probing the configured host from the panel, with the URL echoed back
       // in the body, must keep working without the operator retyping the token.
-      const fetchMock = vi.fn(
-        async (_input: string | URL | Request, _init?: RequestInit) =>
-          new Response(JSON.stringify({ results: [{}] }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-      );
-      vi.stubGlobal('fetch', fetchMock);
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, makeRuntime);
+      const { fetchMock, routes } = stubInfluxProbe();
 
       await call(routes, 'post', '/api/influxdb/test', {
         body: { url: 'http://saved-influx:8086/' },
@@ -949,16 +939,7 @@ describe('plugin REST API', () => {
     });
 
     it('uses request settings instead of the saved settings', async () => {
-      const fetchMock = vi.fn(
-        async (_input: string | URL | Request, _init?: RequestInit) =>
-          new Response(JSON.stringify({ results: [{}] }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-      );
-      vi.stubGlobal('fetch', fetchMock);
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, makeRuntime);
+      const { fetchMock, routes } = stubInfluxProbe();
 
       const r = await call(routes, 'post', '/api/influxdb/test', {
         body: {

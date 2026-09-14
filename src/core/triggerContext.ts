@@ -28,6 +28,29 @@ export type TriggerSpec =
 
 export type TriggerKind = TriggerSpec['kind'];
 
+// Outcome of one analyzer run, decided by the TriggerRouter (which re-exports
+// this name) and read as far away as the configuration panel, which turns each
+// one into the words shown beside the Fire button. It lives here with the rest
+// of the run vocabulary so the panel can have the compiler check that every
+// outcome has words, without importing the router.
+//
+// `unknown` distinguishes "no analyzer with that id" from `no-input`
+// ("collectContext returned nothing"); the REST endpoint pre-guards unknown ids
+// with a 409, but in-process callers may not. `aborted` is a run the plugin
+// shutdown interrupted, kept distinct from `no-input` because it may already
+// have spent a budget call. `queued` is an event trigger deferred behind a run
+// of the same subject; it runs when that one settles, so it is neither a report
+// nor a drop.
+export type RunOutcome =
+  | 'reported'
+  | 'no-input'
+  | 'budget-exhausted'
+  | 'failed'
+  | 'unknown'
+  | 'already-running'
+  | 'aborted'
+  | 'queued';
+
 // Only reached through TriggerCtx.engineSession, so it stays module-private the
 // way it was when it lived in the analyzer layer.
 interface EngineSessionCtx {
