@@ -106,7 +106,10 @@ export type ModelsState = 'idle' | 'loading' | 'ready' | 'error';
 // via patchUi. One entry per analyzer id.
 export interface AnalyzerUiState {
   expanded?: boolean;
-  fire?: { pending?: boolean; ok?: boolean; text?: string };
+  // `finishedAt` is set with the outcome text, never while pending: the row's
+  // announcement dates the paid call from it, and its change is what lets a
+  // repeat of the same outcome announce a second time.
+  fire?: { pending?: boolean; finishedAt?: number; ok?: boolean; text?: string };
   reportsOpen?: boolean;
   reports?: ReportEntry[];
   reportsLoading?: boolean;
@@ -118,9 +121,12 @@ export interface AnalyzerUiState {
   promptCurrent?: string | null;
 }
 
-// The two-phase post-save notice shown beside the Save button.
+// The two-phase post-save notice: the save bar's status line renders it, or
+// the failure banner beside the bar when the host rejected the save.
 export interface SavedNotice {
-  at: string;
+  // Epoch milliseconds of the save request. The status text renders it as a
+  // local time and the save bar reads it as saveRequestedAt.
+  requestedAt: number;
   phase: 'restarting' | 'done';
   error?: string;
 }

@@ -1,22 +1,17 @@
 import type { ReactElement } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActionBar,
   Banner,
   Button,
-  Cluster,
   CollapsibleSection,
   InlineConfirm,
-  PanelRoot,
+  LiveRegion,
+  PanelShell,
   Section,
   Stack,
-  StatusIndicator,
-  type StatusTone,
-  supportsNativeCssScope,
-  ThemeToggle,
-  UnsupportedBrowserNotice,
+  useUnsavedChangesGuard,
 } from 'signalk-nearlcrews-ui';
-import { EmptyState } from 'signalk-nearlcrews-ui/composites';
+import { EmptyState, SaveActionBar } from 'signalk-nearlcrews-ui/composites';
 import { DEFAULT_SEVERITY_FLOOR_VALUE, isSeverityFloor } from '../severityFloors.js';
 import { errText, fetchJson, REPORT_LIMIT } from './api.js';
 import { AnalyzerRow } from './components/AnalyzerRow.js';
@@ -27,6 +22,7 @@ import { fireOutcomeText, isFireSuccess } from './fireOutcome.js';
 import { useOpenRouterModels } from './hooks/useOpenRouterModels.js';
 import { useSaveLifecycle } from './hooks/useSaveLifecycle.js';
 import { useStatus } from './hooks/useStatus.js';
+import styles from './panel.module.css';
 import type { AnalyzerUiState, HistoryTestResult, PanelConfig, TestResult } from './types.js';
 import { HISTORY_URL_RULE, historyValidity, isPromptOverride } from './utils.js';
 
@@ -40,6 +36,8 @@ const SECTION_OPENROUTER = 'orc-section-openrouter';
 const SECTION_HISTORY = 'orc-section-history';
 const SECTION_ANALYZERS = 'orc-section-analyzers';
 
+const SAVE_LABEL = 'Save configuration';
+
 // One shared empty-ui object so an analyzer with no UI state yet passes a stable
 // reference to its (memoized) row instead of a fresh `{}` every render.
 const EMPTY_UI: AnalyzerUiState = Object.freeze({});
@@ -51,21 +49,21 @@ function severityFloorFor(saved: string | undefined): string {
   return isSeverityFloor(saved) ? saved : DEFAULT_SEVERITY_FLOOR_VALUE;
 }
 
+// The shell runs the browser preflight, owns the theme toggle, and wraps the
+// content in an error boundary whose secondary action reloads the page on its
+// own. The content is a separate component so its polling and save hooks only
+// mount on a supported browser and can be remounted by the boundary's "Try
+// again".
 export default function PluginConfigurationPanel(props: Props): ReactElement {
-  if (!supportsNativeCssScope(window)) {
-    return (
-      <UnsupportedBrowserNotice>
-        This panel requires native CSS @scope. Update the browser or embedded WebView before
-        reopening Signal K Admin.
-      </UnsupportedBrowserNotice>
-    );
-  }
-
-  return <SupportedPluginConfigurationPanel {...props} />;
+  return (
+    <PanelShell className={styles.shell} themeToggle="end">
+      <PanelContent {...props} />
+    </PanelShell>
+  );
 }
 
-function SupportedPluginConfigurationPanel({ configuration, save }: Props): ReactElement {
-  const { status, statusError, stale, staleAgeMs } = useStatus();
+function PanelContent({ configuration, save }: Props): ReactElement {
+  const { status, statusError, stale, lastSuccessAt } = useStatus();
   const {
     cfg,
     dirty,
@@ -75,7 +73,6 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     saving,
     savedNotice,
     noticeText,
-    savedNoticeRef,
     onSave: saveConfiguration,
     onDiscard: discardConfiguration,
   } = useSaveLifecycle(configuration, save, status);
@@ -91,7 +88,6 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
   >(null);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const apiKeyRef = useRef<HTMLInputElement>(null);
-  const discardButtonRef = useRef<HTMLButtonElement>(null);
   const historyUrlRef = useRef<HTMLInputElement>(null);
   const historyDatabaseRef = useRef<HTMLInputElement>(null);
   const setHistorySection = useCallback(
@@ -142,18 +138,9 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     };
   }, []);
 
-  // Warn before a tab close or reload while edits are unsaved (a save restarts
-  // the plugin, so lost edits are costly). Registered only while dirty.
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent): void => {
-      e.preventDefault();
-      // Legacy browsers require a returnValue to trigger the prompt.
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
+  // A save restarts the plugin, so lost edits are costly: ask before a tab
+  // close or reload while edits are unsaved.
+  useUnsavedChangesGuard(dirty);
 
   const patchUi = useCallback((id: string, patch: Partial<AnalyzerUiState>): void => {
     setAnalyzerUi((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
@@ -263,10 +250,18 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
     async (id: string): Promise<void> => {
       patchUi(id, { fire: { pending: true } });
       const r = await fetchJson<{ outcome?: string }>(`/analyzers/${id}/fire`, { method: 'POST' });
+      // finishedAt dates the paid call for the row's announcement and, because
+      // it changes every run, gives a repeat of the same outcome the content
+      // change a live region needs before it will speak twice.
+      const finishedAt = Date.now();
       patchUi(id, {
         fire: r.ok
-          ? { ok: isFireSuccess(r.body?.outcome), text: fireOutcomeText(r.body?.outcome) }
-          : { ok: false, text: errText(r) },
+          ? {
+              finishedAt,
+              ok: isFireSuccess(r.body?.outcome),
+              text: fireOutcomeText(r.body?.outcome),
+            }
+          : { finishedAt, ok: false, text: errText(r) },
       });
       // Refresh the open drawer so the new report shows up after the LLM returns.
       // 800 ms is a heuristic; a real boat round-trip is 1-3 s. Read the live
@@ -391,6 +386,9 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
 
   // Open the OpenRouter section and move focus to the API key field, so the
   // first-run callout's button lands the user exactly where they need to type.
+  // The rAF is load-bearing on the blocked-save path and is not redundant with
+  // the save bar's own focus move: SaveActionBar focuses its status line
+  // inline, before it calls onSave, so this frame lands afterwards and wins.
   const focusApiKey = (): void => {
     openSection(SECTION_OPENROUTER);
     requestAnimationFrame(() => {
@@ -449,187 +447,164 @@ function SupportedPluginConfigurationPanel({ configuration, save }: Props): Reac
         : validationTarget === 'history-database' && history.missingDatabase
           ? 'Enter the InfluxDB database or DBRP database name before saving.'
           : '';
-  const saveStatusTone: StatusTone = validationText
-    ? 'danger'
-    : savedNotice?.error
-      ? 'danger'
-      : savedNotice?.phase === 'done'
-        ? 'success'
-        : savedNotice
-          ? 'info'
-          : dirty
-            ? 'warning'
-            : 'neutral';
-  const saveStatusText =
-    validationText || noticeText || (dirty ? 'Unsaved changes' : 'No unsaved changes');
 
   return (
-    <PanelRoot>
-      <Stack gap={4}>
-        <Cluster justify="end">
-          <ThemeToggle />
-        </Cluster>
-
-        {noApiKey ? (
-          <Banner
-            tone="info"
-            title="OpenRouter setup required"
-            actions={
-              <Button variant="primary" size="compact" onClick={focusApiKey}>
-                Add API key
-              </Button>
-            }
-          >
-            No OpenRouter API key set yet. Add one in the OpenRouter section to start the plugin.
-          </Banner>
-        ) : null}
-
-        <Section title="Live status">
-          <StatusBlock
-            status={status}
-            statusError={statusError}
-            onTest={runTest}
-            testing={testing}
-            testResult={testResult}
-            stale={stale}
-            staleAgeMs={staleAgeMs}
-          />
-        </Section>
-
-        <CollapsibleSection
-          id={SECTION_OPENROUTER}
-          title="OpenRouter"
-          open={Boolean(openSections[SECTION_OPENROUTER])}
-          onOpenChange={(open) => setSectionOpen(SECTION_OPENROUTER, open)}
-        >
-          <OpenRouterSection
-            cfg={cfg}
-            set={setSection}
-            models={models}
-            modelsState={modelsState}
-            loadModels={loadModels}
-            apiKeyRef={apiKeyRef}
-            submitted={validationTarget === 'api-key'}
-          />
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          id={SECTION_HISTORY}
-          title="History source"
-          open={Boolean(openSections[SECTION_HISTORY])}
-          onOpenChange={(open) => setSectionOpen(SECTION_HISTORY, open)}
-        >
-          <HistorySection
-            cfg={cfg}
-            set={setHistorySection}
-            testResult={historyTest}
-            onTest={runHistoryTest}
-            testing={historyTesting}
-            urlRef={historyUrlRef}
-            databaseRef={historyDatabaseRef}
-            submitted={
-              validationTarget === 'history-url' || validationTarget === 'history-database'
-            }
-          />
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          id={SECTION_ANALYZERS}
-          title="Analyzers"
-          mountStrategy="lazy-retain"
-          open={Boolean(openSections[SECTION_ANALYZERS])}
-          onOpenChange={(open) => setSectionOpen(SECTION_ANALYZERS, open)}
-        >
-          <Stack gap={2}>
-            {analyzersList.length === 0 ? (
-              <EmptyState
-                title={status ? 'No analyzers reported' : 'Waiting for the plugin'}
-                description={
-                  status
-                    ? 'The plugin is running but reported no analyzers.'
-                    : 'The analyzer list loads once the plugin is running.'
-                }
-              />
-            ) : null}
-            {analyzersList.map((analyzer) => (
-              <AnalyzerRow
-                key={analyzer.id}
-                analyzer={analyzer}
-                enabled={cfg.analyzers?.[analyzer.id]?.enabled ?? analyzer.enabled}
-                setEnabled={handleSetEnabled}
-                ui={analyzerUi[analyzer.id] ?? EMPTY_UI}
-                onToggleExpand={setExpanded}
-                onFire={fireAnalyzer}
-                onToggleReports={toggleReports}
-                onTogglePrompt={togglePrompt}
-                promptValue={promptValueFor(analyzer.id)}
-                onPromptChange={onPromptChange}
-                onPromptReset={onPromptReset}
-                schedule={
-                  cfg.analyzers?.[analyzer.id]?.triggers?.cron?.pattern ?? analyzer.cron.pattern
-                }
-                onScheduleChange={setSchedule}
-                // A saved value off the preset scale is coerced to the default
-                // by the analyzer, so the dropdown shows the default too rather
-                // than blanking on a value the plugin is not using.
-                severityFloor={
-                  analyzer.hasSeverityFloor
-                    ? severityFloorFor(cfg.analyzers?.[analyzer.id]?.severityFloor)
-                    : undefined
-                }
-                onSeverityFloorChange={handleSeverityFloorChange}
-              />
-            ))}
-          </Stack>
-        </CollapsibleSection>
-
-        <ActionBar
-          sticky="viewport-bottom"
-          data-panel-action-bar=""
-          statusRef={savedNoticeRef}
-          status={
-            <StatusIndicator tone={saveStatusTone} live="polite">
-              {saveStatusText}
-            </StatusIndicator>
-          }
+    <>
+      {noApiKey ? (
+        <Banner
+          tone="info"
+          title="OpenRouter setup required"
           actions={
-            <>
-              <InlineConfirm
-                // Closes itself if the buffer goes clean while it is open, so
-                // it cannot ask about edits that no longer exist.
-                open={discardConfirmOpen && dirty}
-                title="Discard unsaved changes?"
-                message="Every unsaved edit in this panel is reverted, including prompt overrides."
-                confirmLabel="Discard changes"
-                cancelLabel="Keep editing"
-                returnFocusRef={discardButtonRef}
-                onCancel={() => setDiscardConfirmOpen(false)}
-                onConfirm={handleDiscard}
-              />
-              <Button
-                ref={discardButtonRef}
-                // aria-disabled rather than disabled: the button self-disables
-                // the moment the buffer goes clean, and keeping it focusable
-                // means focus does not drop to <body> when that happens.
-                ariaDisabled={!dirty || saving}
-                title={dirty ? 'Revert all unsaved edits' : 'No unsaved changes to revert'}
-                onClick={() => setDiscardConfirmOpen(true)}
-              >
-                Discard
-              </Button>
-              <Button
-                variant="primary"
-                loading={saving}
-                loadingLabel="Saving"
-                disabled={!dirty}
-                onClick={handleSave}
-              >
-                Save configuration
-              </Button>
-            </>
+            <Button variant="primary" size="compact" onClick={focusApiKey}>
+              Add API key
+            </Button>
           }
+        >
+          No OpenRouter API key set yet. Add one in the OpenRouter section to start the plugin.
+        </Banner>
+      ) : null}
+
+      <Section title="Live status">
+        <StatusBlock
+          status={status}
+          statusError={statusError}
+          onTest={runTest}
+          testing={testing}
+          testResult={testResult}
+          stale={stale}
+          lastSuccessAt={lastSuccessAt}
         />
-      </Stack>
-    </PanelRoot>
+      </Section>
+
+      <CollapsibleSection
+        id={SECTION_OPENROUTER}
+        title="OpenRouter"
+        open={Boolean(openSections[SECTION_OPENROUTER])}
+        onOpenChange={(open) => setSectionOpen(SECTION_OPENROUTER, open)}
+      >
+        <OpenRouterSection
+          cfg={cfg}
+          set={setSection}
+          models={models}
+          modelsState={modelsState}
+          loadModels={loadModels}
+          apiKeyRef={apiKeyRef}
+          submitted={validationTarget === 'api-key'}
+        />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id={SECTION_HISTORY}
+        title="History source"
+        open={Boolean(openSections[SECTION_HISTORY])}
+        onOpenChange={(open) => setSectionOpen(SECTION_HISTORY, open)}
+      >
+        <HistorySection
+          cfg={cfg}
+          set={setHistorySection}
+          testResult={historyTest}
+          onTest={runHistoryTest}
+          testing={historyTesting}
+          urlRef={historyUrlRef}
+          databaseRef={historyDatabaseRef}
+          submitted={validationTarget === 'history-url' || validationTarget === 'history-database'}
+        />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id={SECTION_ANALYZERS}
+        title="Analyzers"
+        mountStrategy="lazy-retain"
+        open={Boolean(openSections[SECTION_ANALYZERS])}
+        onOpenChange={(open) => setSectionOpen(SECTION_ANALYZERS, open)}
+      >
+        <Stack gap={2}>
+          {analyzersList.length === 0 ? (
+            <EmptyState
+              title={status ? 'No analyzers reported' : 'Waiting for the plugin'}
+              description={
+                status
+                  ? 'The plugin is running but reported no analyzers.'
+                  : 'The analyzer list loads once the plugin is running.'
+              }
+            />
+          ) : null}
+          {analyzersList.map((analyzer) => (
+            <AnalyzerRow
+              key={analyzer.id}
+              analyzer={analyzer}
+              enabled={cfg.analyzers?.[analyzer.id]?.enabled ?? analyzer.enabled}
+              setEnabled={handleSetEnabled}
+              ui={analyzerUi[analyzer.id] ?? EMPTY_UI}
+              onToggleExpand={setExpanded}
+              onFire={fireAnalyzer}
+              onToggleReports={toggleReports}
+              onTogglePrompt={togglePrompt}
+              promptValue={promptValueFor(analyzer.id)}
+              onPromptChange={onPromptChange}
+              onPromptReset={onPromptReset}
+              schedule={
+                cfg.analyzers?.[analyzer.id]?.triggers?.cron?.pattern ?? analyzer.cron.pattern
+              }
+              onScheduleChange={setSchedule}
+              // A saved value off the preset scale is coerced to the default
+              // by the analyzer, so the dropdown shows the default too rather
+              // than blanking on a value the plugin is not using.
+              severityFloor={
+                analyzer.hasSeverityFloor
+                  ? severityFloorFor(cfg.analyzers?.[analyzer.id]?.severityFloor)
+                  : undefined
+              }
+              onSeverityFloorChange={handleSeverityFloorChange}
+            />
+          ))}
+        </Stack>
+      </CollapsibleSection>
+
+      {/*
+       * A live region created together with its message is not announced
+       * reliably, so the failure announces from this always-mounted region and
+       * the banner below carries no `live` of its own.
+       */}
+      <LiveRegion live="assertive" message={savedNotice?.error ? noticeText : ''} />
+      {savedNotice?.error ? (
+        // The edits are still in the buffer after a failed save, so the save
+        // bar keeps reporting them as unsaved; the failure itself stays on
+        // screen until the next save or discard.
+        <Banner tone="danger">{noticeText}</Banner>
+      ) : null}
+
+      <InlineConfirm
+        // Closes itself if the buffer goes clean while it is open, so it
+        // cannot ask about edits that no longer exist.
+        open={discardConfirmOpen && dirty}
+        title="Discard unsaved changes?"
+        message="Every unsaved edit in this panel is reverted, including prompt overrides."
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={() => setDiscardConfirmOpen(false)}
+        onConfirm={handleDiscard}
+      />
+
+      <SaveActionBar
+        data-panel-action-bar=""
+        dirty={dirty}
+        saving={saving}
+        // Once the host has taken the save, the status line reads the request
+        // time while the plugin restarts and the completion once the restart is
+        // seen, until the notice retires and the bar falls back to its clean
+        // wording. While the save is still in flight the bar's own "Saving
+        // changes" covers both the status and the busy Save button.
+        saveRequestedAt={savedNotice && !savedNotice.error ? savedNotice.requestedAt : null}
+        // The panel ends the saved window on the restart it watches for, not on
+        // a clock, so the bar holds the message until the request timestamp
+        // clears rather than retiring it after its own default.
+        savedMessageDurationMs={0}
+        labels={{ save: SAVE_LABEL, saved: noticeText }}
+        invalidMessage={validationText || null}
+        onSave={handleSave}
+        onDiscard={() => setDiscardConfirmOpen(true)}
+      />
+    </>
   );
 }

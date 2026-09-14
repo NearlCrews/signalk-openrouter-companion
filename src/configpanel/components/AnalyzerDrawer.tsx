@@ -1,32 +1,20 @@
-import type { ReactElement, ReactNode, RefObject } from 'react';
-import { useEffect, useRef } from 'react';
-import { Button } from 'signalk-nearlcrews-ui';
+import type { ReactElement, ReactNode } from 'react';
+import { Button, LiveRegion } from 'signalk-nearlcrews-ui';
+import { type UseDisclosureResult, useDisclosure } from 'signalk-nearlcrews-ui/composites';
 import styles from './analyzer.module.css';
 
-export interface DrawerHandles {
-  readonly buttonRef: RefObject<HTMLButtonElement | null>;
-  readonly bodyRef: RefObject<HTMLDivElement | null>;
-}
-
-// Focus follows the drawer: opening moves it into the revealed body, closing
-// returns it to the toggle so keyboard users never land on <body>.
-export function useAnalyzerDrawer(open: boolean): DrawerHandles {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const previousOpen = useRef(open);
-  useEffect(() => {
-    if (open === previousOpen.current) return;
-    previousOpen.current = open;
-    if (open) bodyRef.current?.focus();
-    else buttonRef.current?.focus();
-  }, [open]);
-  return { buttonRef, bodyRef };
+// A drawer is a button-triggered inline disclosure rather than a heading
+// section, so it rides on the shared headless hook: the ids, aria-expanded,
+// aria-controls, hidden, and the focus handoff (into the region on open, back
+// to the toggle on close) all come from there. The toggle and the body are
+// separate pieces so every toggle sits in the row's button cluster and every
+// body sits below it.
+export function useAnalyzerDrawer(open: boolean, onToggle: () => void): UseDisclosureResult {
+  return useDisclosure({ open, onOpenChange: onToggle });
 }
 
 interface ToggleProps {
-  buttonRef: RefObject<HTMLButtonElement | null>;
-  bodyId: string;
-  open: boolean;
+  drawer: UseDisclosureResult;
   // "reports" or "prompt": the drawer's contents, named in the button text and
   // in the per-analyzer accessible name.
   noun: string;
@@ -34,48 +22,55 @@ interface ToggleProps {
   // always "Hide".
   openVerb: string;
   analyzerTitle: string;
-  onToggle: () => void;
 }
 
-// The toggle half of a drawer. Kept separate from the body so both can keep
-// their place in the row layout: every toggle sits in the button cluster and
-// every body sits below it.
 export function AnalyzerDrawerToggle({
-  buttonRef,
-  bodyId,
-  open,
+  drawer,
   noun,
   openVerb,
   analyzerTitle,
-  onToggle,
 }: ToggleProps): ReactElement {
-  const verb = open ? 'Hide' : openVerb;
+  const verb = drawer.open ? 'Hide' : openVerb;
   return (
-    <Button
-      ref={buttonRef}
-      aria-label={`${verb} ${noun} for ${analyzerTitle}`}
-      aria-expanded={open}
-      aria-controls={bodyId}
-      onClick={onToggle}
-    >
+    <Button {...drawer.triggerProps} aria-label={`${verb} ${noun} for ${analyzerTitle}`}>
       {`${verb} ${noun}`}
     </Button>
   );
 }
 
 interface BodyProps {
-  bodyRef: RefObject<HTMLDivElement | null>;
-  bodyId: string;
-  open: boolean;
+  drawer: UseDisclosureResult;
+  // The region's own name. The toggle's label flips between its verbs, so the
+  // region is not named after it.
+  label: string;
+  // What a screen reader should hear as the drawer's contents settle, empty
+  // while the drawer is closed. It rides on a region mounted outside the
+  // drawer, and outside the `hidden` container, because a live region that
+  // enters the accessibility tree already carrying its text is not announced
+  // reliably.
+  announcement: string;
   children: ReactNode;
 }
 
-// The body half of a drawer. It stays mounted while hidden so the toggle's
-// aria-controls target always resolves, and its contents mount only while open.
-export function AnalyzerDrawerBody({ bodyRef, bodyId, open, children }: BodyProps): ReactElement {
+// The body stays mounted while hidden so the toggle's aria-controls target
+// always resolves, and its contents mount only while open.
+export function AnalyzerDrawerBody({
+  drawer,
+  label,
+  announcement,
+  children,
+}: BodyProps): ReactElement {
   return (
-    <div id={bodyId} ref={bodyRef} className={styles.drawer} tabIndex={-1} hidden={!open}>
-      {open ? children : null}
-    </div>
+    <>
+      <LiveRegion message={announcement} />
+      <section
+        {...drawer.panelProps}
+        aria-labelledby={undefined}
+        aria-label={label}
+        className={styles.drawer}
+      >
+        {drawer.open ? children : null}
+      </section>
+    </>
   );
 }

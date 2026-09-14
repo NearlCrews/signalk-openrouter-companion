@@ -19,7 +19,7 @@ src/
 ├── cronPresets.ts             CRON_PRESETS: schedule-dropdown presets shared by schema + panel
 ├── severityFloors.ts          SEVERITY_FLOOR_PRESETS, SeverityFloor, isSeverityFloor: shared by schema + panel + forecast
 ├── analyzers/
-│   ├── Analyzer.ts           Shared interface, TriggerSpec union, AnalyzerDeps
+│   ├── Analyzer.ts           Shared interface and AnalyzerDeps; re-exports the trigger vocabulary
 │   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
 │   ├── registry.ts           ANALYZER_FACTORIES + ANALYZER_DEFAULT_SYSTEM_PROMPTS: per-id maps driven by ANALYZER_IDS
 │   ├── maintenance.ts        State: engine-session narrative
@@ -39,9 +39,10 @@ src/
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
     ├── engineDetector.ts     Per-engine RPM session state machine, persisted across restarts
     ├── emitter.ts            TypedEmitter base used by batteryMonitor and engineDetector
-    ├── triggerRouter.ts      Routes cron + put + event triggers to analyzers
+    ├── triggerContext.ts     TriggerSpec, TriggerCtx, BatteryEventKind, PublishRunMeta: the trigger vocabulary
+    ├── triggerRouter.ts      Routes cron + put + event triggers to analyzers; one run per subject
     ├── cronScheduler.ts      Wraps croner for cron-driven triggers
-    ├── publisher.ts          handleMessage notification + JSONL log writer; exports JsonlEntry
+    ├── publisher.ts          handleMessage notification + rotating JSONL log writer; exports JsonlEntry
     ├── budget.ts             Per-day OpenRouter call cap
     ├── openrouter.ts         HTTP client with retry and backoff ladder
     ├── history.ts            Read-only history-provider contract
@@ -54,7 +55,7 @@ src/
     ├── triggers.ts           buildTriggers(analyzerId, cfg, eventMapper?) + manualPutCtx(value?)
     ├── readings.ts           Per-source rolling map helpers: evictStale, fuseMin, fuseMax, evictStaleSpan
     ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
-    ├── cfg.ts                clampPositiveInt + clampMin + clampRange + finiteOr + resolveSystemPrompt
+    ├── cfg.ts                clamp and default helpers, resolveSystemPrompt, and the prompt sanitizers and row cap
     └── logger.ts             Wraps app.debug / app.error / stringify
 ```
 
@@ -66,9 +67,17 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   readonly title: string;
   readonly triggers: ReadonlyArray<TriggerSpec>;
   readonly watchedPaths?: ReadonlyArray<string>;
+  readonly failureAudible?: boolean;
+  runKey?(ctx: TriggerCtx): string | null;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
   buildPrompt(input: I): { system: string; user: string };
-  publishOutput?(text: string, ctx: TriggerCtx, deps: AnalyzerDeps): Promise<void>;
+  publishOutput?(
+    text: string,
+    ctx: TriggerCtx,
+    deps: AnalyzerDeps,
+    run?: PublishRunMeta,
+    input?: I,
+  ): Promise<void>;
 }
 ```
 
@@ -76,7 +85,19 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
 
 `collectContext` returns `null` to mean "no report for this trigger" (e.g., engine-stop with too short a session, or a trend window without enough data). `buildPrompt` is pure: given a snapshot, it produces the prompt halves. `publishOutput` is optional: when omitted, the `TriggerRouter` publishes via `deps.publisher.publishReport(this.id, ctx, text)` on the canonical `notifications.openrouter-companion.<id>.report` path with `state: 'nominal'` (informational, no N2K alert PGN). Override only when an analyzer needs a different path or state; transition analyzers like `alerts` use `deps.publisher.publishOnPath` with a canonical per-event path (`notifications.electrical.batteries.<bankId>.<kind>`), explicit alert state, and an `alertId` from `alertIdFor(path)` so [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon) emits a stable PGN 126983 / 126985 pair.
 
+The optional `run` argument is the `PublishRunMeta` of the completed OpenRouter call: the served model slug plus its total tokens, cached tokens, and cost. The `TriggerRouter` passes it to `publishOutput` and to the default `publishReport` path alike, and an override should forward it in the `publishOnPath` metadata so the JSONL log records which model and cost produced the text.
+
+`runKey` is optional and names the subject one run acts on, for an analyzer whose runs are independent per subject rather than per analyzer. The `TriggerRouter` serializes its in-flight guard on the analyzer id plus this key, so `alerts` returns the bank and alert-kind pair and two banks crossing one threshold never contend, while an alert and the recovery that clears it still run in order. Return `null`, or omit the method, when one run at a time is correct for the whole analyzer.
+
+The optional `input` argument of `publishOutput` is what `collectContext` returned for this run, so an analyzer that has to check the model's answer against the telemetry behind it reads the numbers there rather than stashing them on the instance. `forecast` uses it to weigh a graded outlook against the observed trend.
+
+`failureAudible` is optional and defaults to silent. When true, a failed run publishes its `warn` failure notification with method `visual` and `sound`; otherwise the failure is visual only. The narrative analyzers leave it unset so a failed monthly aging summary or weather outlook never sounds the helm alarm, and `alerts` sets it true so a sustained failure to produce a battery alert still beeps.
+
 `watchedPaths` is optional: an analyzer sets it to a fixed list of Signal K paths it needs buffered that are not discovered from the live tree (engines and battery banks are discovered; `forecast`'s weather leaves are fixed strings). The lifecycle in `index.ts` subscribes the union of `watchedPaths` across enabled analyzers, so no analyzer's data need is hardcoded by id in the lifecycle.
+
+### One run per subject
+
+`TriggerRouter` holds an in-flight guard so one event does not spend two budget calls and publish two reports. The key is the analyzer id plus whatever `runKey` returns for the trigger, so most analyzers serialize per analyzer and `alerts` serializes per bank and alert kind. A trigger that lands on a run already holding its key is skipped when its producer will fire again on its own, which is cron and PUT, and deferred otherwise: an event producer clears the state that raised it as it emits, so a skipped `low-soc-exit` would never come back. One deferred trigger is held per key, newest wins, and it goes through the same daily cap check as any other run, so a drain adds at most one call per run it follows. A shutdown drops the slot rather than spending on the way down.
 
 ### Standardized triggers contract
 
@@ -90,7 +111,7 @@ interface AnalyzerTriggerCfg {
 }
 ```
 
-Each analyzer constructor calls `buildTriggers(this.id, cfg.triggers, eventMapper?)` which returns the `TriggerSpec[]` consumed by the lifecycle in `index.ts`. The PUT path is derived from the analyzer id inside `buildTriggers`, not stored on the cfg, so it cannot drift from the convention. The lifecycle reads `analyzer.triggers` and wires cron via `CronScheduler`, PUT via `app.registerPutHandler`, and events from `EngineDetector` / `BatteryMonitor`. Adding a new trigger kind means adding a `TriggerSpec` variant in `Analyzer.ts` and a dispatch arm in `TriggerRouter`. The analyzers themselves are decoupled.
+Each analyzer constructor calls `buildTriggers(this.id, cfg.triggers, eventMapper?)` which returns the `TriggerSpec[]` consumed by the lifecycle in `index.ts`. The PUT path is derived from the analyzer id inside `buildTriggers`, not stored on the cfg, so it cannot drift from the convention. The lifecycle reads `analyzer.triggers` and wires cron via `CronScheduler`, PUT via `app.registerPutHandler`, and events from `EngineDetector` / `BatteryMonitor`. Adding a new trigger kind means adding a `TriggerSpec` variant in `core/triggerContext.ts`, which `Analyzer.ts` re-exports, and a dispatch arm in `TriggerRouter`. The analyzers themselves are decoupled.
 
 The complete analyzer workflow is in [Adding a new analyzer](#adding-a-new-analyzer)
 below and in [CONTRIBUTING.md](../.github/CONTRIBUTING.md).
@@ -101,7 +122,7 @@ The seven analyzers are split by purpose so they don't duplicate findings:
 
 - **State** (`maintenance`, `health`, `liveness`): describe "now". Read from the in-memory `RollingBuffer` (`maintenance` and `health` also read the live SK tree via `app.getSelfPath(...)`; `liveness` reads the buffer only). No long-term history provider.
 - **Transition** (`alerts`): describe a threshold crossing. Triggered by `battery-event` subkinds from `BatteryMonitor`. Reads a one-shot snapshot.
-- **Trend** (`aging`, `drift`, `forecast`): describe gradual change over a window. `aging` and `drift` read the selected QuestDB or InfluxDB provider through the shared `HistoryProvider` contract; the buffer just discovers which banks and engines exist. `forecast` is the exception: it reads weather trends straight from the `RollingBuffer` (which retains about 24 hours) and treats the selected provider as an optional baseline extension, so it still produces a forecast with history disabled.
+- **Trend** (`aging`, `drift`, `forecast`): describe gradual change over a window. `aging` and `drift` read the selected QuestDB or InfluxDB provider through the shared `HistoryProvider` contract; the buffer just discovers which banks and engines exist. `forecast` is the exception: it reads weather trends straight from the `RollingBuffer` (which retains 26 hours) and treats the selected provider as an optional baseline extension, so it still produces a forecast with history disabled.
 
 Trend analyzers request provider-neutral summaries; the QuestDB and InfluxDB implementations own their query details. State analyzers do not use long-term history, so a daily health report stays independent of the selected provider and does not duplicate the trend analyzers' findings.
 
@@ -142,12 +163,12 @@ the client.
 | Verb | Path | Purpose |
 | ---- | ---- | ------- |
 | GET | `/api/status` | Live status snapshot for the panel |
-| POST | `/api/openrouter/test` | One-token ping with the saved key |
+| POST | `/api/openrouter/test` | Minimal completion request to verify the saved key. The prompt asks for one word, but the request carries the same 2000-token completion bound as every other call, and a small per-call cap is not the fix: it returns an empty completion with `finish_reason` `length` on a reasoning model. It does not consume the daily budget, and is bounded instead by coalescing overlapping presses onto one upstream call and refusing a new one for five seconds after the last finishes |
 | GET | `/api/openrouter/models` | Proxy to the OpenRouter models list, cached 1 h |
 | POST | `/api/questdb/test` | Probe a QuestDB URL |
 | POST | `/api/influxdb/test` | Probe an InfluxDB 1.x or 2.x InfluxQL endpoint |
 | POST | `/api/analyzers/:id/fire` | Manually trigger an analyzer |
-| GET | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100) |
+| GET | `/api/analyzers/:id/reports?limit=N` | Tail the JSONL log filtered by analyzer (default 10, max 100). The route reads the whole current file, which `ReportPublisher` keeps bounded by rotating `reports.jsonl` to `reports.jsonl.1` past 8 MB and keeping one generation; the archive is deliberately not read here |
 | GET | `/api/analyzers/:id/prompt` | `{ default, current }` for the prompt editor |
 
 Manual fire is also available via the standardized Signal K PUT trigger paths
@@ -162,11 +183,11 @@ untrusted prompt input. Keep them bounded and on one line with
 ## Build
 
 ```bash
-npm run build          # clean + tsc -d + esbuild bundle + webpack panel
-npm run build:types    # tsc --emitDeclarationOnly --declaration --outDir dist
+npm run build          # clean + declarations + esbuild bundle + webpack panel + panel check
+npm run build:types    # scripts/tsc7.mjs --emitDeclarationOnly --declaration --outDir dist
 npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
 npm run build:panel    # node scripts/build-panel.mjs (admin UI panel + build stats)
-npm run check:panel    # verify the remote, bundled shared UI, and host React pair
+npm run check:panel    # shared consumer check (pin, version stamp, share map, size baseline) plus the ESM container and React module graph checks
 npm run clean          # delete dist/ and public/ via Node fs.rmSync (cross-platform)
 ```
 
@@ -178,12 +199,14 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.8.2 component library and shares React 19 and React
+`signalk-nearlcrews-ui` 0.11.1 component library and shares React 19 and React
 DOM as Module Federation singletons supplied by the Signal K admin host. The
-shares carry no strict version check: the Admin registers them with a version
-that understates the React it actually ships, so a strict check would reject
-compatible hosts, and with `import: false` the panel would never mount there.
-A mismatched registration warns and continues.
+share map is read from `signalk-nearlcrews-ui/federation`, so it cannot drift
+from the release the panel bundles. The shares carry no strict version check:
+the Admin registers them with a version that understates the React it actually
+ships, so a strict check would reject compatible hosts, and with `import: false`
+the panel would never mount there. A mismatched registration warns and
+continues; `hostNotes` on the same entry records the reasoning.
 `PanelRoot` owns the theme tokens. A profile without a valid shared preference
 starts in Auto, follows an explicit host theme, otherwise stays Light, and does
 not persist an implicit choice. System follows the operating-system preference.
@@ -192,12 +215,20 @@ native CSS scope support before mounting, and its responsive rules follow the
 panel container rather than the browser viewport. Chromium and Edge 120 are the minimum
 Chromium-family versions because the shared UI mirrors direction-sensitive
 controls with `:dir()`. Plugin-specific drawer and report styles stay in CSS
-Modules.
+Modules, which webpack's native CSS support emits as one stylesheet asset the
+remote links at runtime.
 
 The panel is built with `experiments.outputModule: true` and
 `library: { type: 'module' }` because this package's `"type": "module"` makes
-Signal K admin load the container as an ES module. The bundle check rejects a
-remote that embeds its own React implementation or omits the shared UI package.
+Signal K admin load the container as an ES module, and with
+`optimization.splitChunks: false` so the panel and the bundled shared UI form
+one chunk beside `remoteEntry.js`. `npm run check:panel` runs the library's
+`snui-check-consumer`, which asserts the exact pin against the installed
+version, the bundled version stamp, the absence of a React runtime, the
+published share map in both the remote and the webpack configuration, and the
+gzip size against `scripts/panel-size-baseline.json`; the local
+`check-panel-bundle.mjs` then asserts the container is a real ES module and
+that the only React module in the graph is the JSX runtime.
 
 ## Tests
 
@@ -218,6 +249,14 @@ unused local port when another development server is already using it.
 `npm run screenshots` captures the declared App Store screenshots at 1280 by
 800 pixels, and `npm run package:check` rejects stale dimensions.
 
+The tarball ships one icon, `assets/icons/icon-192.png`, because
+`signalk.appIcon` is the only icon reference any consumer reads: the App Store
+has no size ladder to pick from and this package ships no web manifest. The
+`files` entry names that one path rather than the whole directory, so the rest
+of `assets/icons/` (the 72, 96, and 512 pixel renders and `icon.svg`, the
+vector master they come from) stays in the repository for regenerating the
+192 pixel PNG without adding 36 kB to every install.
+
 `test:integration` targets the unsecured temporary server used by plugin-ci. On
 a secured, installed server, use `test:host-asset` to verify the public Admin UI
 and configurator asset without requesting authenticated plugin metadata.
@@ -228,6 +267,7 @@ The unit and integration suite covers:
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), and both history providers (probe, query, decode, and error paths).
 - `tests/api.test.ts` covers all eight REST route families: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), QuestDB test, and InfluxDB test.
 - `tests/integration.test.ts` exercises the plugin end-to-end with a mocked SK server and `vi.stubGlobal('fetch')` for OpenRouter.
+- `tests/panelStyles.test.ts` walks the panel sources for CSS Modules classes that land on a shared UI component and requires each one to repeat its own name. The library ships its rules inside a native CSS scope, so at equal specificity the scoped rule wins whatever the stylesheet order and a single-class override would be dropped without a warning.
 
 The shared test mocks live in `tests/_mocks.ts`:
 
@@ -243,20 +283,76 @@ npm run lint           # code, documentation, and spelling checks
 npm run lint:fix       # safe Biome and ESLint code fixes
 npm run format         # format supported repository files with Biome
 npm run format:check   # verify formatting without writes
-npm run cruise         # dependency boundaries and circular imports
+npm run cruise         # dependency boundaries and circular imports, type edges included
 npm run deadcode       # unused files, exports, and dependencies
 npm run type-check     # backend, tests, panel, and tooling configs
 ```
 
+`cruise` runs with `tsPreCompilationDeps: true`, so `import type` and inline
+`import('...')` type references count as edges. dependency-cruiser drops them by
+default because they erase at compile time, which here hid roughly 30 percent of
+the graph: the two boundary rules would have passed a type-only import from the
+panel into `src/core/`, and a type-only cycle between the analyzer contract and
+the publisher went unreported. A type-only cycle is harmless at runtime but it
+still signals a layering problem, so `no-circular` stays at `severity: 'error'`
+for every edge rather than exempting type ones.
+
 Biome owns formatting and its recommended lint rules. ESLint adds typed promise
 checks and React Hooks rules. The documentation gate uses exact-pinned
-markdownlint-cli2 0.23.2, cspell 10.0.1, and Linkinator 8.0.4. Local files and
+markdownlint-cli2 0.23.2, cspell 10.3.0, and Linkinator 8.1.0. Local files and
 fragments block the commit gate. External links run in a scheduled workflow
 with bounded concurrency, retries, and rate-limit warnings because remote rate
 limits and bot protection make them unsuitable for the merge gate. The repo
 follows strict-mode TypeScript with no implicit `any` and no unchecked indexed
 access. The `type-check` script covers `src/`, tests, the config panel,
-Playwright, Vite, and browser fixtures through four TypeScript configurations.
+Playwright, Vite, and browser fixtures through four TypeScript configurations,
+and `type-check:ts6` repeats them under the TypeScript 6 compiler API.
+
+### TypeScript toolchain
+
+Two TypeScript compilers are installed on purpose, through npm aliases in
+`devDependencies`:
+
+- `@typescript/native` is the real `typescript` package at 7.x. `npm run
+  build:types` and `npm run type-check` run its compiler by path through
+  `scripts/tsc7.mjs`. Both aliases declare a `tsc` binary and npm links
+  `node_modules/.bin/tsc` to whichever it installed last, so a bare `tsc` call
+  could silently compile with TypeScript 6 after a fresh install; never call
+  bare `tsc` from a script.
+- `typescript` is aliased to `@typescript/typescript6`, which provides the
+  TypeScript 6 JavaScript compiler API plus a `tsc6` binary.
+
+The alias exists because tools that import the compiler API, most importantly
+typescript-eslint, do not yet run under TypeScript 7. Resolving the bare
+`typescript` specifier to the TypeScript 6 API keeps type-aware linting, Knip,
+and dependency-cruiser working while builds use the native compiler. Because
+lint rules evaluate under TypeScript 6 while the build evaluates under
+TypeScript 7, `npm run check` runs both `type-check` and `type-check:ts6`.
+Dependabot does not bump npm-alias ranges, so the two entries need a manual
+check with `npm outdated`. Collapse back to a single `typescript` dependency
+once typescript-eslint supports TypeScript 7, and confirm the emitted
+declarations in `dist/` are unchanged across that collapse.
+
+### Dependency pins that need a manual step
+
+- `@types/react` and `@types/react-dom` are pinned exactly, the way `react` and
+  `react-dom` are. With carets they resolve ahead of the runtime on the next
+  install, and typing the panel against a React minor it does not bundle is the
+  kind of skew that type-checks locally and misbehaves in the admin host. Bump
+  all four together.
+- `allowScripts` in `package.json` records the one dependency with an install
+  script, `esbuild`, pinned to the exact version reviewed. npm treats the field
+  as advisory today and will block unreviewed install scripts in a future
+  release, so **every esbuild bump needs `npm run approve-scripts` in the same
+  commit**; `npm run approve-scripts:check` reports nothing outstanding when the
+  entry is current. Dependabot bumps `devDependencies` and
+  never touches `allowScripts`, so a bump PR that skips this step installs with
+  an unreviewed-install-script warning.
+- The `overrides` block carries `smol-toml` alone, and it is load-bearing:
+  `markdownlint-cli2` pins `smol-toml` to exactly 1.7.0 while `knip` and
+  `cspell-config-lib` take `^1.8.0`, so without it npm nests a second,
+  vulnerable copy. Do not add an override for a version a dependency already
+  declares: it is a no-op that silently holds the next upgrade back.
 
 ## Verification gates
 
@@ -276,14 +372,17 @@ commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
 `prepublishOnly` and the release workflow both run `verify:release` before npm
 can publish an artifact.
 
-The `signalk-nearlcrews-ui` migration keeps the complete panel near 38.2 kB
-gzip, measured at 38,222 bytes by summing the three emitted files at gzip -9.
-This documented exception retains the shared accessibility, validation,
-responsive layout, and theme contracts. The 40 kB gzip gate keeps future growth
-visible, and `npm run size` prints the current figure. Of the growth over
-0.7.1, roughly 1.3 kB is the library itself, and the inline discard
-confirmation and the shared empty states account for most of the rest.
-Per-release byte attribution belongs in the changelog rather than here.
+The panel's size gate lives in `scripts/panel-size-baseline.json`, read by
+`snui-check-consumer` during `npm run check:panel`: the baseline records the
+panel's JavaScript and CSS assets in gzip bytes at level 9, the way the check
+measures them, and the check allows 5 percent growth over it. Re-record the
+baseline when a library upgrade legitimately grows the panel, as the move to
+shared UI 0.11.1 did, so the gate keeps catching unexpected growth instead of
+sitting near its ceiling. Raise `gzipBytes` to the new measurement, or add
+`approvedCeilingGzipBytes` with the reason, rather than loosening the
+percentage. `npm run size` keeps the
+separate 60 kB budget on the backend bundle. Per-release byte attribution
+belongs in the changelog rather than here.
 
 ## Local development against a real Signal K server
 
@@ -394,20 +493,21 @@ release.
 
 ## Tech stack
 
-- TypeScript 6 strict, ESM, ES2022 target
+- TypeScript 7 strict (the native compiler, for builds and type checks) with
+  the TypeScript 6 compiler API alongside for lint tooling, ESM, ES2022 target
 - Node 22.22.2+, Node 24.15+, or Node 26 with npm 11.18.0 for development.
   The published plugin remains compatible with Node 22.18 or newer. The
   manifest accepts npm 10.9.3 only so the upstream Node 22 plugin workflow can
   bootstrap the project.
-- `@signalk/server-api` 2.31 types with a `>=2.24.0 <3` runtime peer range. The
+- `@signalk/server-api` 2.32 types with a `>=2.24.0 <3` runtime peer range. The
   separate Signal K server floor is 2.25.0 because that release added the ESM
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
-- Webpack 5, esbuild-loader 4, React 19, React DOM 19, and
-  `signalk-nearlcrews-ui` 0.8.2
-- Biome 2.5, ESLint 10, dependency-cruiser 18, Knip 6, and TypeScript 6
-- Vitest 4 with v8 coverage and Playwright cross-browser checks
+- Webpack 5 with native CSS Modules, esbuild-loader 4, React 19, React DOM
+  19, and `signalk-nearlcrews-ui` 0.11.1
+- Biome 2.5, ESLint 10, dependency-cruiser 18, and Knip 6
+- Vitest 5 with v8 coverage and Playwright cross-browser checks
 
 ## Third-party notices
 

@@ -1,10 +1,10 @@
-import { appendFile } from 'node:fs/promises';
+import { appendFile, rename, stat } from 'node:fs/promises';
 import { SKVersion } from '@signalk/server-api';
-import type { PublishRunMeta, TriggerCtx } from '../analyzers/Analyzer.js';
-import type { NotificationState } from '../types.js';
+import { ALARM_STATES, type NotificationState } from '../types.js';
 import { clampAtWord } from './format.js';
 import { stringify } from './logger.js';
 import { notificationReportPath } from './paths.js';
+import type { PublishRunMeta, TriggerCtx } from './triggerContext.js';
 
 export interface SignalKNotificationValue {
   state: NotificationState;
@@ -47,6 +47,25 @@ function methodFor(state: NotificationState): string[] {
 // where `signalk-nmea2000-emitter-cannon` hard-truncates the alert-text PGN.
 const HEADLINE_MAX_CHARS = 140;
 
+// The state a failure notice publishes. A run that could not produce a report
+// is worth seeing, but it is never itself a hazard, so it must not outrank the
+// report it replaces.
+const FAILURE_STATE: NotificationState = 'warn';
+
+// Where a state sits on the Signal K severity ladder, from the spec-ordered
+// list in types.ts. Used only to compare two states on one path.
+function severityRank(state: NotificationState): number {
+  return ALARM_STATES.indexOf(state);
+}
+
+const FAILURE_STATE_RANK = severityRank(FAILURE_STATE);
+
+// Size at which the JSONL report log rotates. One generation is kept, so the
+// log costs at most twice this on disk, and `tailReports` still reads a bounded
+// file. Sized so a plugin running at the daily call ceiling holds weeks of
+// history before the first rotation.
+const DEFAULT_MAX_LOG_BYTES = 8 * 1024 * 1024;
+
 // The chartplotter alert text. Analyzer reports lead with a short headline
 // line followed by the full narrative; this returns just that first line
 // (clamped at a word boundary), leaving the full text for the JSONL log.
@@ -80,6 +99,10 @@ interface PublisherCfg {
   };
   pluginId: string;
   logPath: string;
+  // Rotation threshold for the report log, in bytes. Defaults to
+  // DEFAULT_MAX_LOG_BYTES; the plugin never sets it and tests use it to reach
+  // the rotation path without writing megabytes.
+  maxLogBytes?: number;
 }
 
 interface PublishMeta {
@@ -110,6 +133,17 @@ export interface JsonlEntry {
 // A future v2-shaped path must pass `SKVersion.v2` to keep it out of the v1
 // full data model.
 export class ReportPublisher {
+  // The state each notification path last carried from a successful report.
+  // A failure notice must not lower a standing non-nominal state on the same
+  // path: `forecast` publishes its outlook and its failures both on
+  // `notifications.openrouter-companion.forecast.report`, so a rate-limited
+  // call three hours after a gale alarm would otherwise replace that alarm
+  // with a `warn` and drop the `sound` method, clearing a live hazard because
+  // a request failed. Held in memory only, which is enough: the plugin is the
+  // sole writer of these paths, and a restart republishes before anything can
+  // fail against a state this map has forgotten.
+  private readonly lastReportState = new Map<string, NotificationState>();
+
   constructor(private cfg: PublisherCfg) {}
 
   // Failure notifications always publish on the canonical report path
@@ -130,13 +164,26 @@ export class ReportPublisher {
     const now = new Date();
     const reason = stringify(err);
     const message = `${analyzerId} report unavailable: ${reason}`;
-    this.cfg.app.handleMessage(
-      this.cfg.pluginId,
-      this.makeDelta(headlineOf(message), 'warn', now, notificationReportPath(analyzerId), {
-        method: opts.audible ? ['visual', 'sound'] : ['visual'],
-      }),
-      SKVersion.v1,
-    );
+    const path = notificationReportPath(analyzerId);
+    const standing = this.lastReportState.get(path);
+    if (standing !== undefined && severityRank(standing) > FAILURE_STATE_RANK) {
+      // A report on this path is standing at alarm or emergency. Leave it
+      // alone: the weather has not changed because a call failed. The failure
+      // is still recorded in the JSONL log the panel reads, and on the server
+      // log, so the run is not silently forgotten.
+      this.cfg.app.error(`${analyzerId}: ${reason} (holding the standing ${standing})`);
+    } else {
+      this.cfg.app.handleMessage(
+        this.cfg.pluginId,
+        this.makeDelta(headlineOf(message), FAILURE_STATE, now, path, {
+          method: opts.audible ? ['visual', 'sound'] : ['visual'],
+        }),
+        SKVersion.v1,
+      );
+      // What stands on the path now is this failure, not the report it
+      // replaced, so a second failure republishes rather than being held.
+      this.lastReportState.delete(path);
+    }
     await this.appendLog({
       ...this.buildEntry(message, { analyzerId, ctx }, now),
       failure: reason,
@@ -149,6 +196,10 @@ export class ReportPublisher {
   // analyzer truncates the message to fit PGN 126985 but the full LLM report
   // belongs in the log so an operator reviewing history sees the reasoning,
   // not just the headline.
+  // `method` overrides the state's default audible/visual mapping. The forecast
+  // analyzer uses it to publish an outlook the vessel's own telemetry does not
+  // corroborate as visual-only, so a graded severity the sensors do not support
+  // stays readable without sounding the helm alarm.
   async publishOnPath(
     displayText: string,
     meta: PublishMeta,
@@ -157,6 +208,7 @@ export class ReportPublisher {
       state: NotificationState;
       alertId?: number;
       logText?: string;
+      method?: string[];
     },
   ): Promise<void> {
     const now = new Date();
@@ -164,9 +216,11 @@ export class ReportPublisher {
       this.cfg.pluginId,
       this.makeDelta(headlineOf(displayText), override.state, now, override.path, {
         alertId: override.alertId,
+        method: override.method,
       }),
       SKVersion.v1,
     );
+    this.lastReportState.set(override.path, override.state);
     await this.appendLog(this.buildEntry(override.logText ?? displayText, meta, now));
   }
 
@@ -255,9 +309,31 @@ export class ReportPublisher {
   // failure on the server log instead of swallowing it.
   private async appendLog(entry: JsonlEntry): Promise<void> {
     try {
+      await this.rotateIfOversized();
       await appendFile(this.cfg.logPath, `${JSON.stringify(entry)}\n`);
     } catch (err) {
       this.cfg.app.error(`report log append failed: ${stringify(err)}`);
     }
+  }
+
+  // Keep the report log bounded. Nothing else trims it, and `tailReports` reads
+  // the whole file per request, so an unbounded log would eventually cost both
+  // disk and an admin request proportional to the plugin's whole history. One
+  // generation is kept as `<log>.1`; the panel reads only the current file, so
+  // history immediately after a rotation is short rather than lost. Cheap at
+  // this rate: at most a few hundred appends a day.
+  private async rotateIfOversized(): Promise<void> {
+    const max = this.cfg.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
+    let size: number;
+    try {
+      size = (await stat(this.cfg.logPath)).size;
+    } catch {
+      // No log yet (the first append creates it), or it is unreadable; either
+      // way there is nothing to rotate and the append below reports any real
+      // fault.
+      return;
+    }
+    if (size < max) return;
+    await rename(this.cfg.logPath, `${this.cfg.logPath}.1`);
   }
 }

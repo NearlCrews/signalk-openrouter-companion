@@ -1,8 +1,10 @@
 import type { BufferEntry } from '../core/buffer.js';
-import { resolveSystemPrompt, sanitizeProducerString } from '../core/cfg.js';
+import { resolveSystemPrompt } from '../core/cfg.js';
 import { asFiniteNumber, fmtNumber, fmtSigned, HOUR_MS } from '../core/format.js';
 import type { HistoryProvider } from '../core/history.js';
 import {
+  AIR_TEMPERATURE_PATH,
+  DEW_POINT_PATH,
   notificationReportPath,
   WEATHER_CANONICAL_PATHS,
   WEATHER_EXTENSION_PATHS,
@@ -12,6 +14,7 @@ import {
 import { buildTriggers } from '../core/triggers.js';
 import { isSeverityFloor, SEVERITY_GRADES, type SeverityGrade } from '../severityFloors.js';
 import {
+  ALARM_STATES,
   type AnalyzerTriggerCfg,
   FORECAST_DEFAULT_SEVERITY_FLOOR,
   type NotificationState,
@@ -58,6 +61,29 @@ const GRADE_STATE: Record<SeverityGrade, NotificationState> = {
   moderate: 'warn',
   severe: 'alarm',
 };
+
+// The model's SEVERITY line is the only thing standing between a settled
+// afternoon and an audible helm alarm: the configured floor decides which
+// grades publish, never whether the readings support one. So a state above this
+// ceiling has to be corroborated by the observed trend. An uncorroborated
+// outlook still publishes, capped here and visual-only, which keeps it readable
+// in the data browser without beeping. Repeated false alarms are how a crew
+// learns to mute a channel, which is the cost that actually matters.
+const UNCORROBORATED_CEILING: NotificationState = 'alert';
+
+// The corroborating thresholds, all read from the observed trend, all named by
+// the system prompt as the leading indicators the model is asked to weigh:
+// a barometric tendency at or past the classic deepening-system rate (either
+// sign: a hard rise behind a front is as much a wind event as a fall), a wind
+// shift of 45 degrees or more across the window whether veering or backing, and
+// air temperature closing to within a degree of the dew point.
+const CORROBORATING_TENDENCY_HPA = 3;
+const CORROBORATING_WIND_SHIFT_RAD = Math.PI / 4;
+const CORROBORATING_DEW_POINT_SPREAD_K = 1;
+
+// Visual-only notification method, the same escape hatch publishFailure uses.
+// `methodFor` would otherwise give every non-nominal state 'sound'.
+const VISUAL_ONLY_METHOD = ['visual'];
 
 type PathFamily = 'canonical' | 'extension';
 
@@ -138,7 +164,6 @@ interface PathTrend {
   family: PathFamily;
   label: string;
   unit: string;
-  source: string | null;
   current: number | null;
   // Hourly means over the trend window, oldest bucket first. null where a
   // bucket holds no numeric sample.
@@ -169,6 +194,10 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   readonly watchedPaths: ReadonlyArray<string> = ALL_WEATHER_PATHS;
   private readonly systemPrompt: string;
   private readonly severityFloor: SeverityFloor;
+  // Whether the last published outlook raised a non-nominal state, so the
+  // recovery that follows publishes as `normal` rather than `nominal`. See
+  // resolveRecovery.
+  private raised = false;
 
   constructor(cfg: ForecastCfg) {
     this.triggers = buildTriggers(this.id, cfg.triggers);
@@ -228,7 +257,6 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
         family: familyForPath(path),
         label: meta?.label ?? path,
         unit: meta?.unit ?? '',
-        source: latest?.source ?? null,
         current: latest ? asFiniteNumber(latest.value) : null,
         buckets: bucketMeans(entries, windowStart, path === WIND_DIRECTION_PATH),
         baselineMean: baseline.get(path) ?? null,
@@ -283,6 +311,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     ctx: TriggerCtx,
     deps: AnalyzerDeps,
     run?: PublishRunMeta,
+    input?: ForecastInput,
   ): Promise<void> {
     const { grade, body, severityLineParsed } = parseForecast(text);
     if (!severityLineParsed) {
@@ -290,13 +319,92 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
         'forecast: LLM reply had no valid SEVERITY line; outlook graded none (no alarm)',
       );
     }
-    const state = resolveForecastState(grade, this.severityFloor);
+    const graded = resolveForecastState(grade, this.severityFloor);
+    // No input means no telemetry to check the grade against, so the outlook
+    // is treated as uncorroborated. The router always passes the input it
+    // collected; only a direct caller can reach this branch.
+    const corroborated = input != null && hasCorroboratingTelemetry(input);
+    const capped = corroborated ? graded : capUncorroborated(graded);
+    if (capped !== graded) {
+      deps.logger.debug(
+        `forecast: graded ${grade} but the observed trend does not support it; publishing ${capped}, visual only`,
+      );
+    }
+    const state = this.resolveRecovery(capped);
     await deps.publisher.publishOnPath(
       body.length > 0 ? body : text.trim(),
       { analyzerId: this.id, ctx, run },
-      { path: notificationReportPath(this.id), state },
+      {
+        path: notificationReportPath(this.id),
+        state,
+        // Leave `nominal` on its empty method: it is the informational
+        // no-action state, and forcing a method there would start raising
+        // visuals for every settled outlook.
+        ...(corroborated || state === 'nominal' ? {} : { method: VISUAL_ONLY_METHOD }),
+      },
     );
   }
+
+  // Signal K separates `nominal` ("no action needed", and never alarmed) from
+  // `normal` ("recovered after an alarm"), and `signalk-nmea2000-emitter-cannon`
+  // has no alertTypes entry for `nominal`, so it suppresses the PGN: a recovery
+  // published as `nominal` emits nothing on the bus and never clears the
+  // chartplotter's alert. The first below-floor outcome after a raised one is
+  // that recovery; every one after it is plain `nominal`. The router serializes
+  // the runs of one analyzer, so a plain field is safe here.
+  private resolveRecovery(state: NotificationState): NotificationState {
+    if (state !== 'nominal') {
+      this.raised = true;
+      return state;
+    }
+    if (!this.raised) return 'nominal';
+    this.raised = false;
+    return 'normal';
+  }
+}
+
+// Cap a state at the ceiling an uncorroborated grade may publish at.
+function capUncorroborated(state: NotificationState): NotificationState {
+  return ALARM_STATES.indexOf(state) > ALARM_STATES.indexOf(UNCORROBORATED_CEILING)
+    ? UNCORROBORATED_CEILING
+    : state;
+}
+
+// Whether the observed trend supports an outlook above the uncorroborated
+// ceiling. Any one of the three indicators is enough; none of them being
+// present is not proof of settled weather, which is why an uncorroborated
+// outlook is capped and quieted rather than suppressed.
+function hasCorroboratingTelemetry(input: ForecastInput): boolean {
+  const tendency = input.pressureTendencyHpa;
+  if (tendency != null && Math.abs(tendency) >= CORROBORATING_TENDENCY_HPA) return true;
+  const shift = windShiftRad(input.trends);
+  if (shift != null && shift >= CORROBORATING_WIND_SHIFT_RAD) return true;
+  const spread = dewPointSpreadK(input.trends);
+  return spread != null && spread <= CORROBORATING_DEW_POINT_SPREAD_K;
+}
+
+// Smallest angular separation between the oldest and newest populated wind
+// direction bucket, in radians, so a shift across the 0/2pi wrap reads as the
+// small change it is. null when the window holds fewer than two buckets.
+function windShiftRad(trends: ReadonlyArray<PathTrend>): number | null {
+  const buckets = trends.find((t) => t.path === WIND_DIRECTION_PATH)?.buckets;
+  if (!buckets) return null;
+  const populated = buckets.filter((b): b is number => b != null);
+  const first = populated[0];
+  const last = populated[populated.length - 1];
+  if (populated.length < 2 || first == null || last == null) return null;
+  const diff = Math.abs(last - first) % (2 * Math.PI);
+  return diff > Math.PI ? 2 * Math.PI - diff : diff;
+}
+
+// Air temperature minus dew point at the latest observation, in K. null when
+// either path has no current reading, which is the absent-telemetry case the
+// caller treats as uncorroborated.
+function dewPointSpreadK(trends: ReadonlyArray<PathTrend>): number | null {
+  const air = trends.find((t) => t.path === AIR_TEMPERATURE_PATH)?.current;
+  const dew = trends.find((t) => t.path === DEW_POINT_PATH)?.current;
+  if (air == null || dew == null) return null;
+  return air - dew;
 }
 
 function normalizeFloor(v: unknown): SeverityFloor {
@@ -390,11 +498,13 @@ function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): vo
   }
   for (const t of trends) {
     const hourly = t.buckets.map((b) => (b == null ? '-' : fmtNumber(b))).join(', ');
-    const parts = [
-      `now=${fmtNumber(t.current)}`,
-      `source=${sanitizeProducerString(t.source ?? 'n/a')}`,
-      `hourly=[${hourly}]`,
-    ];
+    // No `source=` here, unlike the liveness and maintenance prompts. The
+    // forecast never reasons about which sensor produced a reading, and
+    // `$source` is producer-controlled free text taken verbatim from the delta:
+    // any client with Signal K write access chooses that string, and this is
+    // the one prompt whose answer decides a notification state. Nothing that
+    // writable belongs in it.
+    const parts = [`now=${fmtNumber(t.current)}`, `hourly=[${hourly}]`];
     if (t.baselineMean != null) parts.push(`baseline=${fmtNumber(t.baselineMean)}`);
     lines.push(`- ${t.label} (${t.path}) [${t.unit}]: ${parts.join('; ')}`);
   }

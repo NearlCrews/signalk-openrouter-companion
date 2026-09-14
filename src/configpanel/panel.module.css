@@ -1,0 +1,14 @@
+/*
+ * The save bar docks to the bottom of the viewport and the shell places the
+ * theme selector after it, so at the end of a scrolled page the selector's
+ * last row sits under the bar and cannot be pressed. The clearance reads the
+ * height the shared UI reserves for a docked bar rather than a guess of its
+ * own, with the library's own formula as the fallback for a panel rendered
+ * without one. The class name is doubled because it lands on the shared UI
+ * PanelShell, whose rules ship inside a native CSS scope: at equal
+ * specificity the cascade prefers the scoped rule whatever the stylesheet
+ * order.
+ */
+.shell.shell {
+  padding-block-end: var(--snui-sticky-clearance, 4.75rem);
+}

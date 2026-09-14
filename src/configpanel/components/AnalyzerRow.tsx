@@ -1,20 +1,25 @@
 import type { ReactElement } from 'react';
-import { memo } from 'react';
+import { memo, useId } from 'react';
 import {
-  Badge,
   Banner,
   Button,
   Card,
   Checkbox,
   Cluster,
+  Code,
   CollapsibleSection,
   LabeledField,
+  LiveRegion,
+  RelativeAge,
   Select,
   Stack,
   StatusIndicator,
+  Text,
+  VisuallyHidden,
 } from 'signalk-nearlcrews-ui';
 import { EmptyState } from 'signalk-nearlcrews-ui/composites';
 import { SEVERITY_FLOOR_PRESETS } from '../../severityFloors.js';
+import { reportTriggerLabel } from '../reportTrigger.js';
 import { buildScheduleOptions } from '../scheduleOptions.js';
 import type { AnalyzerStatus, AnalyzerUiState } from '../types.js';
 import { AnalyzerDrawerBody, AnalyzerDrawerToggle, useAnalyzerDrawer } from './AnalyzerDrawer.js';
@@ -39,6 +44,33 @@ interface Props {
   onSeverityFloorChange: (id: string, value: string) => void;
 }
 
+// What the row announces once a fire settles. The chip beside the button is
+// created in the same commit as its text, which a screen reader may never
+// observe, so the announcement rides on a region that already existed. The
+// completion time dates the paid call and gives a repeat of the same outcome
+// the content change a live region needs to speak twice.
+function fireAnnouncement(title: string, fire: AnalyzerUiState['fire']): string {
+  if (!fire?.text || fire.finishedAt === undefined) return '';
+  return `${title}: ${fire.text} at ${new Date(fire.finishedAt).toLocaleTimeString()}.`;
+}
+
+function reportsAnnouncement(title: string, ui: AnalyzerUiState): string {
+  if (!ui.reportsOpen) return '';
+  if (ui.reportsLoading) return `Loading reports for ${title}.`;
+  if (ui.reportsError) return `Failed to load reports for ${title}: ${ui.reportsError}`;
+  if (!ui.reports) return '';
+  if (ui.reports.length === 0) return `No reports yet for ${title}.`;
+  return ui.reports.length === 1
+    ? `1 report loaded for ${title}.`
+    : `${ui.reports.length} reports loaded for ${title}.`;
+}
+
+function promptAnnouncement(title: string, ui: AnalyzerUiState): string {
+  if (!ui.promptOpen) return '';
+  if (ui.promptError) return `Failed to load the prompt for ${title}: ${ui.promptError}`;
+  return ui.promptLoaded ? `Prompt loaded for ${title}.` : `Loading the prompt for ${title}.`;
+}
+
 export const AnalyzerRow = memo(function AnalyzerRow({
   analyzer,
   enabled,
@@ -56,33 +88,24 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   severityFloor,
   onSeverityFloorChange,
 }: Props): ReactElement {
-  const reportsId = `orc-reports-${analyzer.id}`;
-  const promptId = `orc-prompt-body-${analyzer.id}`;
   const expanded = Boolean(ui.expanded);
   const reportsOpen = Boolean(ui.reportsOpen);
   const promptOpen = Boolean(ui.promptOpen);
   const cronEnabled = analyzer.cron.enabled;
   const scheduleOptions = buildScheduleOptions(schedule);
+  const fireHintId = useId();
 
-  const { buttonRef: reportsButtonRef, bodyRef: reportsBodyRef } = useAnalyzerDrawer(reportsOpen);
-  const { buttonRef: promptButtonRef, bodyRef: promptBodyRef } = useAnalyzerDrawer(promptOpen);
+  const reportsDrawer = useAnalyzerDrawer(reportsOpen, () => onToggleReports(analyzer.id));
+  const promptDrawer = useAnalyzerDrawer(promptOpen, () => onTogglePrompt(analyzer.id));
 
   return (
     <CollapsibleSection
-      title={<span className={styles.title}>{analyzer.title}</span>}
-      // The enabled state rides in the summary rather than the title: a summary
-      // renders outside the toggle button, so ticking the checkbox does not
-      // rewrite the disclosure's accessible name.
-      summary={
-        <Badge tone={enabled ? 'success' : 'neutral'}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
-      }
-      summaryPlacement="header"
-      summaryVisibility="always"
+      title={analyzer.title}
       actions={
         <Checkbox
           label={
             <>
-              <span className={styles.visuallyHidden}>{analyzer.title}: </span>
+              <VisuallyHidden>{analyzer.title}: </VisuallyHidden>
               Enabled
             </>
           }
@@ -139,55 +162,66 @@ export const AnalyzerRow = memo(function AnalyzerRow({
           </LabeledField>
         ) : null}
 
-        <Cluster gap={2}>
-          <Button
-            variant="primary"
-            aria-label={`Fire now for ${analyzer.title}`}
-            loading={Boolean(ui.fire?.pending)}
-            loadingLabel="Running"
-            // aria-disabled rather than disabled: the control keeps focus and
-            // its title, so the reason it is inert reaches keyboard users.
-            ariaDisabled={!enabled}
-            title={enabled ? undefined : 'Enable this analyzer to fire it'}
-            onClick={() => onFire(analyzer.id)}
-          >
-            Fire now
-          </Button>
-          <AnalyzerDrawerToggle
-            buttonRef={reportsButtonRef}
-            bodyId={reportsId}
-            open={reportsOpen}
-            noun="reports"
-            openVerb="View"
-            analyzerTitle={analyzer.title}
-            onToggle={() => onToggleReports(analyzer.id)}
-          />
-          <AnalyzerDrawerToggle
-            buttonRef={promptButtonRef}
-            bodyId={promptId}
-            open={promptOpen}
-            noun="prompt"
-            openVerb="Edit"
-            analyzerTitle={analyzer.title}
-            onToggle={() => onTogglePrompt(analyzer.id)}
-          />
-          {ui.fire?.text ? (
-            <StatusIndicator tone={ui.fire.ok ? 'success' : 'danger'} live="polite">
-              {ui.fire.text}
-            </StatusIndicator>
-          ) : null}
-        </Cluster>
+        <Stack gap={2}>
+          <Cluster gap={2}>
+            <Button
+              variant="primary"
+              aria-label={`Fire now for ${analyzer.title}`}
+              loading={Boolean(ui.fire?.pending)}
+              loadingLabel="Running"
+              // aria-disabled rather than disabled: the control keeps focus, so
+              // the description below reaches a keyboard user who lands on it.
+              ariaDisabled={!enabled}
+              aria-describedby={fireHintId}
+              onClick={() => onFire(analyzer.id)}
+            >
+              Fire now
+            </Button>
+            <AnalyzerDrawerToggle
+              drawer={reportsDrawer}
+              noun="reports"
+              openVerb="View"
+              analyzerTitle={analyzer.title}
+            />
+            <AnalyzerDrawerToggle
+              drawer={promptDrawer}
+              noun="prompt"
+              openVerb="Edit"
+              analyzerTitle={analyzer.title}
+            />
+            {ui.fire?.text ? (
+              <StatusIndicator tone={ui.fire.ok ? 'success' : 'danger'}>
+                {ui.fire.text}
+              </StatusIndicator>
+            ) : null}
+            <LiveRegion
+              data-fire-announcement=""
+              message={fireAnnouncement(analyzer.title, ui.fire)}
+            />
+          </Cluster>
+          {/*
+           * The cost sits beside the button that spends it, not in a section
+           * the operator may never open, and it doubles as the disabled
+           * button's reason: `title` renders on pointer hover only, so a
+           * keyboard or touch user never sees one.
+           */}
+          <Text id={fireHintId} as="p" tone="muted" size="sm">
+            {enabled
+              ? 'Running an analyzer now makes one paid OpenRouter call that counts against the daily cap.'
+              : 'Enable this analyzer to fire it. A run makes one paid OpenRouter call that counts against the daily cap.'}
+          </Text>
+        </Stack>
 
-        <AnalyzerDrawerBody bodyRef={reportsBodyRef} bodyId={reportsId} open={reportsOpen}>
+        <AnalyzerDrawerBody
+          drawer={reportsDrawer}
+          label={`Reports for ${analyzer.title}`}
+          announcement={reportsAnnouncement(analyzer.title, ui)}
+        >
           <Card>
             {ui.reportsLoading ? (
-              <StatusIndicator tone="info" live="polite">
-                Loading reports...
-              </StatusIndicator>
+              <StatusIndicator tone="info">Loading reports…</StatusIndicator>
             ) : ui.reportsError ? (
-              <Banner tone="danger" live="assertive">
-                Failed to load reports: {ui.reportsError}
-              </Banner>
+              <Banner tone="danger">Failed to load reports: {ui.reportsError}</Banner>
             ) : !ui.reports || ui.reports.length === 0 ? (
               <EmptyState
                 title="No reports yet"
@@ -203,27 +237,33 @@ export const AnalyzerRow = memo(function AnalyzerRow({
                     key={`${report.ts}-${report.trigger}-${report.engineId ?? ''}`}
                     className={styles.reportEntry}
                   >
-                    <div className={styles.reportTimestamp}>
-                      {report.ts} · trigger={report.trigger}
-                      {report.engineId ? ` · engine=${report.engineId}` : ''}
-                      {typeof report.durationSec === 'number' ? ` · ${report.durationSec}s` : ''}
-                    </div>
+                    <Text as="div" tone="muted" size="sm">
+                      <RelativeAge since={report.ts} /> · {reportTriggerLabel(report.trigger)}
+                      {report.engineId ? ` · Engine ${report.engineId}` : ''}
+                      {typeof report.durationSec === 'number'
+                        ? ` · ${report.durationSec}s session`
+                        : ''}
+                    </Text>
                     {report.model ? (
-                      <div className={styles.reportMetadata}>
-                        {report.model}
+                      <Text as="div" tone="muted" size="sm">
+                        <Code>{report.model}</Code>
                         {typeof report.totalTokens === 'number'
                           ? ` · ${report.totalTokens.toLocaleString()} tokens`
                           : ''}
                         {typeof report.costUsd === 'number'
                           ? ` · $${report.costUsd.toFixed(4)}`
                           : ''}
-                      </div>
+                      </Text>
                     ) : null}
                     {report.report ? (
-                      <div className={styles.reportBody}>{report.report}</div>
+                      <Text as="div" size="sm" className={styles.reportText}>
+                        {report.report}
+                      </Text>
                     ) : null}
                     {report.failure ? (
-                      <div className={styles.reportFailure}>Failure: {report.failure}</div>
+                      <Text as="div" tone="danger" size="sm" className={styles.reportText}>
+                        Failure: {report.failure}
+                      </Text>
                     ) : null}
                   </article>
                 ))}
@@ -232,14 +272,24 @@ export const AnalyzerRow = memo(function AnalyzerRow({
           </Card>
         </AnalyzerDrawerBody>
 
-        <AnalyzerDrawerBody bodyRef={promptBodyRef} bodyId={promptId} open={promptOpen}>
+        <AnalyzerDrawerBody
+          drawer={promptDrawer}
+          label={`Prompt for ${analyzer.title}`}
+          announcement={promptAnnouncement(analyzer.title, ui)}
+        >
           <PromptDrawer
             analyzerId={analyzer.id}
             ui={ui}
             value={promptValue}
             onChange={onPromptChange}
             onReset={onPromptReset}
-            onClose={() => onTogglePrompt(analyzer.id)}
+            // Closing through the disclosure rather than the parent's own
+            // toggle is what returns focus to the trigger: a change made by
+            // setting `open` directly moves no focus, and this panel unmounts
+            // its children on close, so the pressed button would be removed
+            // from the document with focus still on it. setOpen still calls
+            // onOpenChange, so the parent state stays in step.
+            onClose={() => promptDrawer.setOpen(false)}
           />
         </AnalyzerDrawerBody>
       </Stack>

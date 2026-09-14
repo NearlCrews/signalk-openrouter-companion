@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { QuestDBClient } from '../src/core/questdb.js';
 import createPlugin from '../src/index.js';
 import {
   cleanupTmpDir,
@@ -198,6 +199,59 @@ describe('integration: engine session -> report', () => {
     const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
     const entry = JSON.parse(lastLine(logRaw));
     expect(entry.analyzer).toBe('alerts');
+
+    await plugin.stop();
+  });
+
+  it('raises a battery alert while the history probe is still outstanding', async () => {
+    // A configured history host that accepts the connection and never answers
+    // holds its probe for the provider's full 30-second timeout. The router
+    // used to wait on that probe, so every battery and engine event in the
+    // window was dropped, and a low-SoC crossing does not come back: the
+    // monitor has already flipped the bank's flag. Signal K restarts the
+    // plugin on every config save, so the window reopened on every save.
+    app.availablePaths = [
+      'electrical.batteries.house.voltage',
+      'electrical.batteries.house.capacity.stateOfCharge',
+    ];
+    app.setSelfPath('electrical.batteries', {
+      house: { voltage: { value: 12.2 }, capacity: { stateOfCharge: { value: 0.25 } } },
+    });
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: 'House bank dropped to 25%.' } }],
+            model: 'anthropic/claude-haiku-4.5',
+            usage: { prompt_tokens: 50, completion_tokens: 30, total_tokens: 80 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const probe = vi
+      .spyOn(QuestDBClient.prototype, 'probe')
+      .mockReturnValue(new Promise<boolean>(() => {}));
+
+    const plugin = createPlugin(app as never);
+    plugin.start({ openrouter: { apiKey: 'sk-x' } } as never, () => {});
+    // Deliberately no _whenReady: the probe never settles, which is the case
+    // under test. The crossing is pushed immediately, in the window where the
+    // deferred init has not finished.
+    const bus = app.busFor<{ value: number; timestamp: string; $source: string }>(
+      'electrical.batteries.house.capacity.stateOfCharge',
+    );
+    bus.push({ value: 0.5, timestamp: new Date().toISOString(), $source: 'bms' });
+    bus.push({ value: 0.25, timestamp: new Date().toISOString(), $source: 'bms' });
+
+    const alert = () =>
+      app.published.find(
+        (p) =>
+          firstNotificationValue(p.delta).path ===
+          'notifications.electrical.batteries.house.lowSoc',
+      );
+    await vi.waitFor(() => expect(alert()).toBeDefined(), { timeout: 2000 });
+    expect(firstNotificationValue(alert()?.delta).state).toBe('alert');
+    expect(probe).toHaveBeenCalled();
 
     await plugin.stop();
   });

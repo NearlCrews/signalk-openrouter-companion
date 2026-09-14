@@ -18,11 +18,17 @@ function panelAssetServer(): Plugin {
           next();
           return;
         }
-        void readFile(resolve(panelOutput, match[1]))
+        const assetName = match[1];
+        void readFile(resolve(panelOutput, assetName))
           .then((source) => {
             response.statusCode = 200;
             response.setHeader('Cache-Control', 'no-store');
-            response.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+            response.setHeader(
+              'Content-Type',
+              assetName.endsWith('.css')
+                ? 'text/css; charset=utf-8'
+                : 'text/javascript; charset=utf-8',
+            );
             response.end(source);
           })
           .catch(next);

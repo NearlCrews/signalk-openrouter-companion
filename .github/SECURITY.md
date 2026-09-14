@@ -67,8 +67,19 @@ When using this plugin:
 
 1. **Use a dedicated API key**: give this plugin its own OpenRouter API
    key so you can revoke it without impacting other tools.
-2. **Cap the spend**: set "Max calls per day" to a hard cap so a stuck
-   loop cannot burn through credit.
+2. **Cap the spend**: set "Max calls per day" to a hard cap on analyzer
+   runs, so a stuck loop cannot burn through credit. It accepts 1 to 1000,
+   and the runtime clamps anything outside that range, so the bound cannot
+   be edited away. Read it as a cap on analyzer runs only. The panel's
+   "Test API key" button is deliberately outside it: a test makes a billed
+   OpenRouter call that the cap neither counts nor stops, so an operator
+   debugging connectivity cannot run themselves out of analyzer calls. That
+   route carries its own limits instead. Presses that overlap an in-flight
+   test share the one call, and for five seconds after a test finishes the
+   next press is refused, so a held or repeated button cannot spend in a
+   loop. Each test that does run carries the same 2000-token completion
+   bound as every other call, so a model that ignores the one-word
+   instruction can bill for a full completion.
 3. **Access Control**: keep the Signal K server's admin UI behind
    authentication. The plugin's REST routes are admin-gated, and its PUT
    triggers go through `app.registerPutHandler`, so anyone who can write
@@ -78,8 +89,14 @@ When using this plugin:
    (`propulsion.*`, `electrical.batteries.*`), they can influence the
    model's input, and the published prose could carry attacker text. The
    output is only published as Signal K notifications, never executed.
-5. **Monitor disk usage**: the JSONL report log is not pruned, so reports
-   accumulate in `reports.jsonl` indefinitely on a constrained device.
+   Producer-controlled strings reach a prompt bounded and labeled: each
+   per-path list stops at 250 rows and states what it left out, free text
+   is clamped per field and marked when it was cut, and the weather prompt
+   carries no `$source` at all, because that prompt's answer decides a
+   notification state.
+5. **Monitor disk usage**: the JSONL report log rotates at 8 MB and keeps
+   one previous generation as `reports.jsonl.1`, so it costs at most twice
+   that on a constrained device. Nothing prunes the rotated file.
 6. **Keep Updated**: always use the latest version, and keep your Node.js
    runtime up to date. There is no outbound TLS pinning; the plugin
    trusts the system CA store for openrouter.ai and any HTTPS history-provider
@@ -122,8 +139,9 @@ npm run audit:runtime
   or API token is stored in the same Signal K plugin configuration. The panel
   renders the secret as a password field, passes it to Signal K's configuration
   callback when saving, and sends it to the authenticated connection-test route.
-  Runtime InfluxDB queries send it only in the authorization header. Status and
-  error responses do not include it.
+  The saved credential travels only to the saved host: a test that names a
+  different URL has to carry its own. Runtime InfluxDB queries send it only in
+  the authorization header. Status and error responses do not include it.
 
 ## Signal K Security
 

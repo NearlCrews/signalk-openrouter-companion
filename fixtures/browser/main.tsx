@@ -46,6 +46,9 @@ const statusRaceMode = parameters.has('status-race');
 // would otherwise be unmeasurable and untested.
 const modelsErrorMode = parameters.has('models-error');
 const promptErrorMode = parameters.has('prompt-error');
+// The populated reports list: money figures, model slugs, relative ages, model
+// prose, and a failure line, none of which the empty happy path renders.
+const reportsMode = parameters.has('reports');
 if (parameters.has('unsupported-css-scope')) {
   Object.defineProperty(window, 'CSSScopeRule', {
     configurable: true,
@@ -110,6 +113,36 @@ const statusPayload = {
     },
   ],
 };
+
+const hoursAgo = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
+
+const reportEntries = [
+  {
+    ts: hoursAgo(2),
+    trigger: 'cron',
+    report: 'House bank held 12.9 V overnight.\nNo action needed before the next passage.',
+    model: 'anthropic/claude-sonnet-4',
+    totalTokens: 1842,
+    cachedTokens: 512,
+    costUsd: 0.0123,
+  },
+  {
+    ts: hoursAgo(5),
+    trigger: 'engine-stop',
+    engineId: 'port',
+    durationSec: 5400,
+    report: 'Port engine ran 90 minutes at a steady exhaust temperature.',
+    model: 'anthropic/claude-sonnet-4',
+    totalTokens: 964,
+    cachedTokens: 0,
+    costUsd: 0.0071,
+  },
+  {
+    ts: hoursAgo(9),
+    trigger: 'put',
+    failure: 'OpenRouter returned 502 after three attempts.',
+  },
+];
 
 const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -182,7 +215,9 @@ window.fetch = async (input, init): Promise<Response> => {
       version: '2',
     });
   }
-  if (path.endsWith('/reports')) return jsonResponse({ reports: [] });
+  if (path.endsWith('/reports')) {
+    return jsonResponse({ reports: reportsMode ? reportEntries : [] });
+  }
   if (path.endsWith('/prompt')) {
     if (promptErrorMode) return jsonResponse({ error: 'prompt unavailable' }, 502);
     return jsonResponse({ default: 'Summarize the vessel data.', current: null });
