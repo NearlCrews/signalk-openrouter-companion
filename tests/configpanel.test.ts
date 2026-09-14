@@ -1,10 +1,19 @@
-import { formatRelativeAge } from 'signalk-nearlcrews-ui';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { formatRelativeAge, RELATIVE_AGE_NARROW } from 'signalk-nearlcrews-ui';
 import { describe, expect, it } from 'vitest';
 import { fireOutcomeText, isFireSuccess } from '../src/configpanel/fireOutcome.js';
-import { RELATIVE_AGE_FORMAT } from '../src/configpanel/relativeAge.js';
+import { reportTriggerLabel } from '../src/configpanel/reportTrigger.js';
 import { buildScheduleOptions } from '../src/configpanel/scheduleOptions.js';
-import { historyValidity, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
+import {
+  DEFAULT_MAX_CALLS_PER_DAY,
+  historyValidity,
+  isHttpUrl,
+  jsonEqual,
+  MAX_CALLS_PER_DAY,
+} from '../src/configpanel/utils.js';
 import { CRON_PRESETS } from '../src/cronPresets.js';
+import { DEFAULT_OPTIONS, MAX_CALLS_PER_DAY_CEILING } from '../src/types.js';
 
 describe('jsonEqual', () => {
   it('treats key order as insignificant', () => {
@@ -129,22 +138,20 @@ describe('isHttpUrl', () => {
 });
 
 describe('shared status age formatting', () => {
-  it('uses the shared UI relative-age contract', () => {
-    expect(formatRelativeAge(0, { locale: 'en' })).toBe('0s ago');
-    expect(formatRelativeAge(59_500, { locale: 'en' })).toBe('1m ago');
-    expect(formatRelativeAge(undefined, { fallback: 'unknown' })).toBe('unknown');
+  it('renders the library default as words rather than a zero-second stamp', () => {
+    // The status block passes no options, so the library default is what an
+    // operator reads: pin it.
+    expect(formatRelativeAge(0, { locale: 'en' })).toBe('now');
+    expect(formatRelativeAge(59_500, { locale: 'en' })).toBe('1 minute ago');
+    expect(formatRelativeAge(7_200_000, { locale: 'en' })).toBe('2 hours ago');
+    // A day and up counts in numbers rather than calendar words, so a report
+    // stamped yesterday reads as an elapsed duration and not as a date.
+    expect(formatRelativeAge(86_400_000, { locale: 'en' })).toBe('1 day ago');
+    expect(formatRelativeAge(undefined)).toBe('Unknown');
   });
 
-  it('renders the family format as words rather than a zero-second stamp', () => {
-    // The library default is numeric-always and narrow. RELATIVE_AGE_FORMAT is
-    // what the panel actually passes, so pin what an operator reads.
-    expect(formatRelativeAge(0, { ...RELATIVE_AGE_FORMAT, locale: 'en' })).toBe('now');
-    expect(formatRelativeAge(59_500, { ...RELATIVE_AGE_FORMAT, locale: 'en' })).toBe(
-      '1 minute ago',
-    );
-    expect(formatRelativeAge(7_200_000, { ...RELATIVE_AGE_FORMAT, locale: 'en' })).toBe(
-      '2 hours ago',
-    );
+  it('keeps the compact form available as a named preset', () => {
+    expect(formatRelativeAge(59_500, { ...RELATIVE_AGE_NARROW, locale: 'en' })).toBe('1m ago');
   });
 });
 
@@ -155,13 +162,62 @@ describe('fire outcome mapping', () => {
     expect(fireOutcomeText('reported')).toBe('Report generated');
   });
 
-  it('reads only failed and unknown as a failure', () => {
+  it('gives every outcome the router can return its own words', () => {
+    // The panel cannot import RunOutcome as a value (a union erases), so the
+    // union is read out of the router source. Without this, a new outcome
+    // reaches the operator as the neutral "Dispatched" fallback, which reads as
+    // a run that went out fine: that is how `aborted` shipped as "Dispatched"
+    // for a run a shutdown had interrupted.
+    const router = readFileSync(
+      fileURLToPath(new URL('../src/core/triggerRouter.ts', import.meta.url)),
+      'utf8',
+    );
+    const union = /export type RunOutcome\s*=([^;]+);/.exec(router)?.[1];
+    expect(union, 'RunOutcome union not found in src/core/triggerRouter.ts').toBeDefined();
+    const outcomes = [...(union ?? '').matchAll(/'([\w-]+)'/g)].map((match) => match[1] ?? '');
+    expect(outcomes.length).toBeGreaterThanOrEqual(6);
+    for (const outcome of outcomes) {
+      expect(fireOutcomeText(outcome), `RunOutcome '${outcome}' has no panel label`).not.toBe(
+        'Dispatched',
+      );
+    }
+  });
+
+  it('names the two outcomes the router grew for deferral and shutdown', () => {
+    expect(fireOutcomeText('aborted')).toBe('Interrupted by shutdown');
+    expect(fireOutcomeText('queued')).toBe('Queued behind the current run');
+  });
+
+  it('reads failed, unknown, and aborted as a failure', () => {
     expect(isFireSuccess('reported')).toBe(true);
     expect(isFireSuccess('no-input')).toBe(true);
     expect(isFireSuccess('budget-exhausted')).toBe(true);
     expect(isFireSuccess(undefined)).toBe(true);
+    // Deferred, not dropped: the router starts it when the in-flight run of the
+    // same subject settles.
+    expect(isFireSuccess('queued')).toBe(true);
     expect(isFireSuccess('failed')).toBe(false);
     expect(isFireSuccess('unknown')).toBe(false);
+    // A shutdown mid-run can already have spent a budget call and publishes no
+    // report, so it must not read as a run that went out fine.
+    expect(isFireSuccess('aborted')).toBe(false);
+  });
+});
+
+describe('report trigger labels', () => {
+  it('writes every trigger kind the publisher records as interface copy', () => {
+    // The kinds are TriggerSpec['kind'] in src/analyzers/Analyzer.ts, written
+    // to each report row by core/publisher.ts.
+    expect(reportTriggerLabel('cron')).toBe('Scheduled');
+    expect(reportTriggerLabel('put')).toBe('Manual run');
+    expect(reportTriggerLabel('engine-start')).toBe('Engine start');
+    expect(reportTriggerLabel('engine-stop')).toBe('Engine stop');
+    expect(reportTriggerLabel('possible-stop')).toBe('Possible engine stop');
+    expect(reportTriggerLabel('battery-event')).toBe('Battery event');
+  });
+
+  it('renders a kind this build does not know rather than blanking the line', () => {
+    expect(reportTriggerLabel('brand-new-kind')).toBe('brand-new-kind');
   });
 });
 
@@ -188,5 +244,17 @@ describe('buildScheduleOptions', () => {
     const opts = buildScheduleOptions(custom);
     expect(opts[opts.length - 1]).toEqual({ value: custom, label: `Custom: ${custom}` });
     expect(opts.some((o) => o.value === custom)).toBe(true);
+  });
+});
+
+describe('calls-per-day bounds', () => {
+  it('mirrors the plugin default so an empty field promises the real cap', () => {
+    // The panel cannot import DEFAULT_OPTIONS, so the number is mirrored in
+    // the panel and pinned here. A default changed on one side alone fails.
+    expect(DEFAULT_MAX_CALLS_PER_DAY).toBe(DEFAULT_OPTIONS.openrouter.maxCallsPerDay);
+  });
+
+  it('mirrors the runtime ceiling so the field cannot save a clamped value', () => {
+    expect(MAX_CALLS_PER_DAY).toBe(MAX_CALLS_PER_DAY_CEILING);
   });
 });

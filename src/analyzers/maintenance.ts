@@ -1,8 +1,11 @@
 import type { BufferSummary } from '../core/buffer.js';
 import {
+  MAX_PROMPT_PATH_ROWS,
+  omittedPathsLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
+  sanitizeForPrompt,
   sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverEngineIds, WATCH_PREFIXES } from '../core/discovery.js';
@@ -154,20 +157,25 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     lines.push(`Duration: ${session.durationSec} s`);
     lines.push('');
     lines.push('## Telemetry');
-    for (const path of Object.keys(telemetry).sort()) {
+    const reported = Object.keys(telemetry)
+      .sort()
+      .filter((path) => (telemetry[path]?.count ?? 0) > 0);
+    for (const path of reported.slice(0, MAX_PROMPT_PATH_ROWS)) {
       const s = telemetry[path];
-      if (!s || s.count === 0) continue;
+      if (!s) continue;
       const unit = unitForPath(path);
       const unitSuffix = unit ? ` ${unit}` : '';
       lines.push(
         `- ${path}: min=${f(s.min)} max=${f(s.max)} mean=${f(s.mean)}${unitSuffix} count=${f(s.count)} sources=${JSON.stringify(s.sources.map((source) => sanitizeProducerString(source)))}`,
       );
     }
+    if (reported.length > MAX_PROMPT_PATH_ROWS) {
+      lines.push(omittedPathsLine(reported.length - MAX_PROMPT_PATH_ROWS));
+    }
     lines.push('');
     lines.push('## Engine notification slots');
     for (const [slot, value] of Object.entries(engineNotifications)) {
-      const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-      lines.push(`- ${sanitizeProducerString(slot)}: ${sanitizeProducerString(serialized, 512)}`);
+      lines.push(`- ${sanitizeProducerString(slot)}: ${formatNotificationSlot(value)}`);
     }
     lines.push('');
     lines.push('## Batteries (end-of-session snapshot)');
@@ -179,6 +187,40 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     }
     return { system: this.systemPrompt, user: lines.join('\n') };
   }
+}
+
+// Per-field budgets for a rendered notification slot. Each field is clamped on
+// its own, because clamping one serialized blob puts them at the mercy of key
+// order: a 600-character `message` ahead of `state` carries the state past the
+// cut, and the prompt's instruction to surface a non-normal slot prominently
+// then runs on a value with no state left in it.
+const NOTIFICATION_STATE_MAX_CHARS = 32;
+const NOTIFICATION_MESSAGE_MAX_CHARS = 240;
+const NOTIFICATION_METHOD_MAX_CHARS = 32;
+const NOTIFICATION_VALUE_MAX_CHARS = 512;
+
+// Render one engine notification slot for the prompt. A Signal K notification
+// value contributes its state, message, and method as separately clamped
+// fields; anything else falls back to a clamped serialization, which is what a
+// slot holding a bare string or an unexpected shape gets.
+function formatNotificationSlot(value: unknown): string {
+  if (typeof value !== 'object' || value === null) {
+    return sanitizeForPrompt(value, NOTIFICATION_VALUE_MAX_CHARS);
+  }
+  const v = value as { state?: unknown; message?: unknown; method?: unknown };
+  const parts: string[] = [];
+  if (v.state !== undefined) {
+    parts.push(`state=${sanitizeForPrompt(v.state, NOTIFICATION_STATE_MAX_CHARS)}`);
+  }
+  if (v.message !== undefined) {
+    parts.push(`message=${sanitizeForPrompt(v.message, NOTIFICATION_MESSAGE_MAX_CHARS)}`);
+  }
+  if (Array.isArray(v.method)) {
+    const methods = v.method.map((m) => sanitizeForPrompt(m, NOTIFICATION_METHOD_MAX_CHARS));
+    parts.push(`method=[${methods.join(', ')}]`);
+  }
+  if (parts.length > 0) return parts.join('; ');
+  return sanitizeForPrompt(JSON.stringify(value), NOTIFICATION_VALUE_MAX_CHARS);
 }
 
 function listWatchedPaths(

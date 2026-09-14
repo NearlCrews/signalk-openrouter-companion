@@ -6,7 +6,7 @@ import {
   type EnabledGatedNode,
   type TriggerSchemaNode,
 } from '../src/schema.js';
-import { DEFAULT_OPTIONS, mergeWithDefaults } from '../src/types.js';
+import { DEFAULT_OPTIONS, MAX_CALLS_PER_DAY_CEILING, mergeWithDefaults } from '../src/types.js';
 
 /**
  * Index into a Record by key, asserting the key is present. Narrows away the
@@ -473,6 +473,51 @@ describe('mergeWithDefaults', () => {
       const result = mergeWithDefaults({ openrouter: { baseUrl } } as never);
       expect(result.openrouter.baseUrl).toBe(DEFAULT_OPTIONS.openrouter.baseUrl);
     }
+  });
+
+  it('falls back to the shipped model slug when the configured one is blank', () => {
+    // A blank slug reaches OpenRouter as a 400 on every run, each one recording
+    // a budget call and publishing a failure while the status banner still
+    // reads "Running": a day's cap spent on nothing.
+    for (const model of ['', '   ']) {
+      const r = mergeWithDefaults({ openrouter: { model } } as never);
+      expect(r.openrouter.model).toBe(DEFAULT_OPTIONS.openrouter.model);
+    }
+    expect(mergeWithDefaults({ openrouter: { model: '  x/y  ' } } as never).openrouter.model).toBe(
+      'x/y',
+    );
+  });
+
+  it('bounds maxCallsPerDay at both ends and truncates a fraction', () => {
+    // The daily cap is the only hard spend bound in the plugin, so it needs a
+    // ceiling as much as a floor, and a count has no fractional part.
+    expect(
+      mergeWithDefaults({ openrouter: { maxCallsPerDay: 1e9 } } as never).openrouter.maxCallsPerDay,
+    ).toBe(MAX_CALLS_PER_DAY_CEILING);
+    expect(
+      mergeWithDefaults({ openrouter: { maxCallsPerDay: 20.7 } } as never).openrouter
+        .maxCallsPerDay,
+    ).toBe(20);
+    expect(
+      mergeWithDefaults({ openrouter: { maxCallsPerDay: 0 } } as never).openrouter.maxCallsPerDay,
+    ).toBe(DEFAULT_OPTIONS.openrouter.maxCallsPerDay);
+  });
+
+  it('rejects a cron pattern that is not five fields', () => {
+    // Croner accepts a 6-field pattern with a leading seconds column, so an
+    // unvalidated '* * * * * *' from a hand-edited config fires every second
+    // and empties the daily cap in under a minute.
+    const r = mergeWithDefaults({
+      analyzers: { health: { triggers: { cron: { enabled: true, pattern: '* * * * * *' } } } },
+    } as never);
+    expect(r.analyzers.health.triggers.cron.pattern).toBe(
+      DEFAULT_OPTIONS.analyzers.health.triggers.cron.pattern,
+    );
+    // A real five-field pattern is untouched.
+    const kept = mergeWithDefaults({
+      analyzers: { health: { triggers: { cron: { enabled: true, pattern: '15 6 * * 1' } } } },
+    } as never);
+    expect(kept.analyzers.health.triggers.cron.pattern).toBe('15 6 * * 1');
   });
 
   it('preserves user-provided events and other fields', () => {

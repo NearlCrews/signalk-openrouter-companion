@@ -28,8 +28,18 @@ try {
 
   await page.getByRole('button', { name: 'OpenRouter', exact: true }).click();
   const themeGroup = page.getByRole('radiogroup', { name: 'Panel theme' });
+  // Blur before scrolling: the theme selector sits at the foot of the panel,
+  // so the radio that was just clicked keeps focus, and the browser scrolls a
+  // focused control back into view after a re-render. Without the blur the
+  // capture ends up at the bottom of the page and the live status grid, which
+  // is what these shots are for, never appears.
   const captureViewport = async (path) => {
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+      window.scrollTo(0, 0);
+    });
+    await page.waitForFunction(() => window.scrollY === 0);
     await page.mouse.move(0, 0);
     await page.screenshot({ animations: 'disabled', caret: 'hide', path });
   };

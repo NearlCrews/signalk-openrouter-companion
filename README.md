@@ -18,32 +18,38 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.7.5
+## What's new in 0.7.6
 
-0.7.5 restores the configuration panel on Signal K 2.24 hosts, where the
-0.7.4 panel does not load, refreshes it on shared UI 0.8.2, makes analyzer
-fires report what really happened, bounds the plugin's memory and state
-writes, and corrects the bundled-code attribution.
+0.7.6 rebuilds the configuration panel on shared UI 0.11.1, stops analyzer runs
+from being lost or double-billed, weighs a graded weather outlook against the
+vessel's own telemetry, and refreshes the build toolchain.
 
-- **The panel loads again on Signal K 2.24 hosts.** 0.7.4 checked the host's
-  shared React version strictly, and the 2.24.x Admin registers its shares
-  with an older number than the React it actually ships, which left the panel
-  blank. A mismatched registration now warns and continues.
-- **Shared UI 0.8.2** lets a control the docked action bar overlaps activate on
-  the first press without the panel scrolling under your finger, asks before
-  discarding unsaved changes, and fixes a segmented control that could submit a
-  value it did not display after a native form reset.
-- **Real fire outcomes** mean a Signal K PUT that fires an analyzer reports
-  what actually happened, and a trigger that lands while the same analyzer is
-  already running is skipped instead of double-spending the daily budget.
-- **Bounded runtime state** puts a total ceiling on the telemetry buffer
-  across every path and makes budget state writes atomic and serialized, so
-  the daily spend cap survives overlapping runs and power loss.
-- **Generated third-party notices** are built from the packages the panel and
-  backend bundles actually carry, with each license text embedded, and now
-  credit `react-aria`, which the previous hand-maintained file omitted.
+- **Shared UI 0.11.1 panel.** The panel frame, the Save and Discard bar, the
+  calls-per-day field, and the reports and prompt drawers all come from the
+  library now. A panel error offers "Try again" and "Reload page" instead of a
+  blank card, the save bar keeps its buttons in the tab order and says why a
+  save is blocked, each drawer opens a named region a screen reader announces,
+  and the theme selector at the foot of the panel is no longer covered by the
+  docked bar.
+- **No lost vessel events.** A battery or engine event that arrives during
+  startup, or while the same analyzer is still running, is now held and run
+  rather than dropped, and battery alerts serialize per bank so two banks
+  crossing one threshold no longer contend. A failed run no longer replaces a
+  standing alarm with a warning.
+- **A weather alarm has to be corroborated.** An outlook graded above alert
+  sounds only when the observed pressure, wind, or dew point trend supports it.
+  An uncorroborated grade still publishes, capped at alert and visual only, so
+  it stays readable without beeping at the helm.
+- **Tighter spend bounds.** The daily cap accepts 1 to 1000 and cannot be
+  edited away, a retry after a request timeout counts against it, the "Test API
+  key" button coalesces overlapping presses and refuses a repeat for five
+  seconds, and an overloaded OpenRouter provider is retried instead of failing
+  the run.
+- **A current toolchain.** TypeScript 7 builds and type-checks the plugin, the
+  panel ships its styles as a linked stylesheet instead of injecting them at
+  runtime, and its size gate measures against a recorded baseline.
 
-See the [v0.7.5 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v075) and the
+See the [v0.7.6 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v076) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
@@ -104,7 +110,7 @@ OpenRouter Companion is one plugin built from focused modules:
   under `src/analyzers/`, wired through a shared registry; the trigger
   router, rolling buffer, budget tracker, OpenRouter client, and history
   providers live in `src/core/`.
-- **TypeScript 6, ESM.** esbuild bundles the backend to `dist/index.js`;
+- **TypeScript 7, ESM.** esbuild bundles the backend to `dist/index.js`;
   webpack with esbuild-loader bundles the React panel to
   `public/remoteEntry.js` as a Module Federation remote the Signal K
   admin UI loads.
@@ -174,7 +180,7 @@ plugin form. The main settings:
 | --------- | ------------- | --------- |
 | OpenRouter API key | Required. Key from openrouter.ai. | n/a |
 | Model | OpenRouter model slug. | anthropic/claude-haiku-4.5 |
-| Max calls per day | Hard cap on OpenRouter calls per UTC day, to bound spend. | 20 |
+| Max calls per day | Hard cap on analyzer OpenRouter calls per UTC day, to bound spend. Accepts 1 to 1000. The panel's Test button is exempt and makes a billed call of its own, rate-limited separately. | 20 |
 | History source | Disabled, QuestDB, or InfluxDB for the trend analyzers. | QuestDB; `http://localhost:9000` |
 | Analyzers | Each of the seven can be enabled or disabled independently. | six on by default; the weather outlook is opt-in |
 
@@ -197,7 +203,10 @@ live in the saved JSON config at
 `~/.signalk/plugin-config-data/signalk-openrouter-companion.json`.
 
 Advanced OpenRouter settings, edited in the saved JSON config under
-`openrouter`:
+`openrouter`. Leave the `provider` block unset and your OpenRouter account
+settings govern where prompts are routed and how long providers retain them,
+which matters because the prompts carry vessel telemetry. Tight routing can
+also leave no eligible provider and fail a run:
 
 | Key | Meaning | Default |
 | ----- | --------- | --------- |
@@ -205,7 +214,7 @@ Advanced OpenRouter settings, edited in the saved JSON config under
 | `provider.sort` | Routing preference: `price`, `throughput`, or `latency`. | unset |
 | `provider.maxPrice` | Per-call price ceiling. `prompt` and `completion` are USD per million tokens; `request` is a flat USD per request. | unset |
 | `provider.allowFallbacks` | When `false`, a run fails rather than substituting another provider. | unset; OpenRouter default: `true` |
-| `provider.dataCollection` | Set to `deny` to route only to providers that do not retain request data. Also available as a panel toggle. | unset; OpenRouter default: `allow` |
+| `provider.dataCollection` | Set to `deny` to route only to providers that do not retain request data. Also available in the panel. | unset; OpenRouter default: `allow` |
 | `provider.zdr` | Require zero-data-retention providers. | unset; OpenRouter default: `false` |
 
 Token use and estimated cost per day are shown in the panel status block, and
@@ -215,8 +224,13 @@ that figure reflects only OpenRouter's fee, not the upstream provider charge,
 so it understates true spend.
 
 A tight provider configuration (a low `maxPrice`, `dataCollection: deny`,
-`zdr: true`, or `allowFallbacks: false`) can leave no eligible provider; the
-run then fails fast with OpenRouter's routing message rather than retrying.
+`zdr: true`, or `allowFallbacks: false`) can leave no eligible provider.
+OpenRouter reports that as a 503, the same status it uses for an overloaded
+provider, and the plugin tells the two apart by the error body. An overloaded
+provider is retried with the same backoff as a rate limit, honoring
+`Retry-After` up to one minute. A routing failure is not retried: the run
+fails fast with OpenRouter's routing message, and the failure report reminds
+you to check the provider preferences above and the model list.
 
 ## Analyzers
 
@@ -254,7 +268,9 @@ co-installed
 [`signalk-nmea2000-emitter-cannon`](https://github.com/NearlCrews/signalk-nmea2000-emitter-cannon)
 can forward to a NMEA 2000 chartplotter. The `forecast` analyzer publishes
 its outlook at `state: nominal` and escalates to an alert state when the
-predicted severity meets the configured floor.
+predicted severity meets the configured floor. A grade above `alert` sounds
+only when the observed pressure, wind, or dew point trend corroborates it; an
+uncorroborated grade is capped at `alert` and published visual only.
 
 > [!IMPORTANT]
 > The `alerts` analyzer writes its alert text with an OpenRouter call, so
@@ -277,7 +293,7 @@ predicted severity meets the configured floor.
 ## Development
 
 The published plugin runs on Node 22.18 or newer. Building from source requires
-Node 22.22.2+, Node 24.15+, or Node 26, with TypeScript 6 for development. The
+Node 22.22.2+, Node 24.15+, or Node 26, with TypeScript 7 for development. The
 checked-in `.node-version` selects Node 22.22.2. The primary CI gate runs on
 Node 26 with npm 11.18.0, and Signal K plugin CI checks Node 22, 24, and 26
 across its desktop platforms.

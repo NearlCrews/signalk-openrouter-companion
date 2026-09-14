@@ -57,9 +57,13 @@ those before proposing a structural change.
 
 ## Code style
 
-- TypeScript 6, strict mode, ESM. Use Node 22.22.2+, Node 24.15+, or Node 26
-  when building from source. The published plugin runtime remains compatible
-  with Node 22.18 or newer. The primary CI gate runs on Node 26 with npm
+- TypeScript 7, strict mode, ESM. The native compiler builds and type-checks
+  through `scripts/tsc7.mjs`, and the TypeScript 6 compiler API is installed
+  alongside under the bare `typescript` name for typescript-eslint, Knip, and
+  dependency-cruiser; the development guide's "TypeScript toolchain" section
+  explains the alias layout, and no script may call bare `tsc`. Use Node
+  22.22.2+, Node 24.15+, or Node 26 when building from source. The published
+  plugin runtime remains compatible with Node 22.18 or newer. The primary CI gate runs on Node 26 with npm
   11.18.0, and Signal K plugin CI checks Node 22, 24, and 26. The manifest
   accepts npm 10.9.3 only for the upstream Node 22 bootstrap.
 - Biome handles lint and format, ESLint handles typed and React Hooks rules,

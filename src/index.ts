@@ -59,6 +59,11 @@ const ENGINE_STATE_MAX_RESUME_SEC = 3600;
 const DETECTOR_SAVE_INTERVAL_MS = 60_000;
 // Used when the configured report-log filename is not a plain basename.
 const DEFAULT_LOG_FILENAME = 'reports.jsonl';
+// Ceiling on events held for the router during the deferred init (see
+// withRouter in start). The window is a local budget-file read, so one or two
+// is the realistic worst case; the bound only stops a pathologically stalled
+// init from growing the list without end.
+const MAX_PENDING_STARTUP_EVENTS = 32;
 
 interface ServerApiLike {
   streambundle: {
@@ -286,7 +291,10 @@ export default function createPlugin(app: ServerApiLike): {
                   selfContext: app.selfContext,
                 })
               : null;
-        let historyProbeInFlight = false;
+        // True while any probe of the history source is outstanding, the
+        // initial one included, so the periodic recovery probe never runs a
+        // second one alongside it.
+        let historyProbeInFlight = Boolean(historyCandidate);
         const probePromise: Promise<HistoryProvider | null> = historyCandidate
           ? historyCandidate
               .probe(lifecycle.signal)
@@ -302,6 +310,9 @@ export default function createPlugin(app: ServerApiLike): {
                   'History source unreachable; trend analyzers will skip until it recovers',
                 );
                 return null;
+              })
+              .finally(() => {
+                historyProbeInFlight = false;
               })
           : Promise.resolve(null);
         const publisher = new ReportPublisher({
@@ -325,21 +336,45 @@ export default function createPlugin(app: ServerApiLike): {
         });
 
         let router: TriggerRouter | null = null;
-        void Promise.all([probePromise, budgetPromise])
-          .then(([historyLive, budget]) => {
-            // stop() may have run while probe/budget were still in flight (a
+        // Events raised before the deferred init wires the router. Their
+        // producers clear the state as they emit (the detector ends the
+        // session, the monitor flips the per-bank flag), so one dropped here
+        // never comes back: a resumed engine session whose stop lands in this
+        // window would lose that trip's report for good, and that resume path
+        // is exactly when a stop is likely. Hold them and dispatch once the
+        // router exists.
+        const pendingStartupEvents: Array<(r: TriggerRouter) => void> = [];
+        const withRouter = (dispatch: (r: TriggerRouter) => void): void => {
+          if (router) {
+            dispatch(router);
+            return;
+          }
+          if (pendingStartupEvents.length >= MAX_PENDING_STARTUP_EVENTS) {
+            logger.debug('startup event queue full; dropping an event raised before router init');
+            return;
+          }
+          pendingStartupEvents.push(dispatch);
+        };
+        // The router is built as soon as the budget state (a local file read)
+        // resolves, and the history provider is attached separately when the
+        // probe settles. Waiting for both would leave the router null for the
+        // provider's full 30-second timeout on a configured-but-unreachable
+        // history host, and every engine and battery event raised in that
+        // window would be dropped. Trend analyzers simply skip until the
+        // provider arrives, which is the same degraded mode a history source
+        // that is down at start already produces.
+        void budgetPromise
+          .then(async (budget) => {
+            // stop() may have run while the budget load was still in flight (a
             // disable, or a restart). The abort signal is the lifecycle
             // marker: if it fired, this start() is dead. Bail before writing
             // runtime/router or registering crons, otherwise a late resolve
             // resurrects a stopped plugin's runtime (routes would serve stale
             // data) or clobbers a fresh restart's runtime.
-            if (lifecycle.signal.aborted) {
-              signalReady();
-              return;
-            }
+            if (lifecycle.signal.aborted) return;
             router = new TriggerRouter(analyzers, {
               buffer,
-              history: historyLive,
+              history: null,
               publisher,
               budget,
               llm,
@@ -357,8 +392,8 @@ export default function createPlugin(app: ServerApiLike): {
               },
               llm,
               budget,
-              historyLive,
-              historyProbed: true,
+              historyLive: null,
+              historyProbed: false,
               analyzers,
               apiKeySet: true,
               router,
@@ -407,13 +442,23 @@ export default function createPlugin(app: ServerApiLike): {
               }
             }
             logger.debug('router ready');
-            signalReady();
+            // Anything the engine detector or the battery monitor raised while
+            // the router was still being built goes out now, in arrival order.
+            const built = router;
+            for (const dispatch of pendingStartupEvents.splice(0)) dispatch(built);
+            // Attach the history provider once its probe settles. The router is
+            // already live and serving events by this point; the trend
+            // analyzers were the only thing waiting on it.
+            const historyLive = await probePromise;
+            if (lifecycle.signal.aborted || activeRouter !== built || runtime === null) return;
+            built.setHistory(historyLive);
+            runtime.historyLive = historyLive;
+            runtime.historyProbed = true;
           })
           .catch((err) => {
             // AbortError is the normal stop() path; anything else is a real
             // startup failure that should surface to the admin UI status banner
             // and the SK server log, not get swallowed at debug level.
-            signalReady();
             const isAbort =
               err instanceof Error &&
               (err.name === 'AbortError' || err.message.includes('aborted'));
@@ -423,7 +468,10 @@ export default function createPlugin(app: ServerApiLike): {
             }
             logger.error(err);
             app.setPluginError(`Startup failed: ${stringify(err)}`);
-          });
+          })
+          // _whenReady resolves once the deferred init has settled either way,
+          // router built and history attached, or bailed on a stop.
+          .finally(() => signalReady());
 
         // The detector emits engine-start, engine-stop, and possible-stop.
         // engine-start and engine-stop persist detector state so a restart
@@ -437,12 +485,11 @@ export default function createPlugin(app: ServerApiLike): {
         unsubs.push(
           detector.on('engine-stop', (e: EngineEvent) => {
             void saveDetectorState();
-            // router is wired by the deferred init (probe + budget). An event
-            // in that brief startup window is dropped: an engine stop right at
-            // plugin start is unlikely and the next session is still captured.
-            if (!router) return;
             const sess = e.session;
             if (!sess) return;
+            // The ctx is stamped now, from the session's own timestamps, so a
+            // stop held for the router still narrates the trip that ended, not
+            // the moment the router came up.
             const ctx: TriggerCtx = {
               kind: 'engine-stop',
               firedAt: new Date(sess.sessionEnd),
@@ -453,7 +500,9 @@ export default function createPlugin(app: ServerApiLike): {
                 durationSec: sess.durationSec,
               },
             };
-            void router.dispatch('engine-stop', ctx);
+            withRouter((r) => {
+              void r.dispatch('engine-stop', ctx);
+            });
           }),
         );
 
@@ -466,7 +515,6 @@ export default function createPlugin(app: ServerApiLike): {
         );
 
         const dispatchBatteryEvent = (e: BatteryEvent): void => {
-          if (!router) return;
           const batteryEvent =
             e.kind === 'low-soc-enter' || e.kind === 'low-soc-exit'
               ? { subkind: e.kind, soc: e.soc }
@@ -477,7 +525,9 @@ export default function createPlugin(app: ServerApiLike): {
             bankId: e.bankId,
             batteryEvent,
           };
-          void router.dispatch('battery-event', ctx, { batterySubkind: e.kind });
+          withRouter((r) => {
+            void r.dispatch('battery-event', ctx, { batterySubkind: e.kind });
+          });
         };
         for (const k of ALERTS_SUPPORTED_EVENTS) unsubs.push(monitor.on(k, dispatchBatteryEvent));
 
@@ -742,10 +792,15 @@ export default function createPlugin(app: ServerApiLike): {
 }
 
 // Reduce a configured log filename to a plain basename, falling back to the
-// default when the configured value was not one already.
+// default when the configured value was not one already. '.' and '..' pass the
+// basename test but name a directory, so every append would fail with EISDIR;
+// reject them alongside the empty string.
 function safeLogFilename(configured: string): string {
   const base = basename(configured);
-  return base === configured && base !== '' ? base : DEFAULT_LOG_FILENAME;
+  if (base !== configured || base === '' || base === '.' || base === '..') {
+    return DEFAULT_LOG_FILENAME;
+  }
+  return base;
 }
 
 function runningStatus(analyzerCount: number): string {
@@ -775,6 +830,19 @@ function putAckFor(outcomes: readonly RunOutcome[]): {
   }
   if (outcomes.includes('already-running')) {
     return { state: 'COMPLETED', statusCode: 409, message: 'a run is already in flight' };
+  }
+  if (outcomes.includes('aborted')) {
+    return { state: 'COMPLETED', statusCode: 503, message: 'the plugin stopped mid-run' };
+  }
+  // A PUT is a replayable trigger, so the router skips rather than defers it
+  // and this branch is unreachable from the PUT path today. It is here so a
+  // deferred run is never answered as "nothing to report".
+  if (outcomes.includes('queued')) {
+    return {
+      state: 'COMPLETED',
+      statusCode: 202,
+      message: 'queued behind a run already in flight',
+    };
   }
   if (outcomes.length === 0) {
     return { state: 'COMPLETED', statusCode: 200, message: 'no analyzer listens on this path' };

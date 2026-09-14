@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { LivenessAnalyzer } from '../src/analyzers/liveness.js';
+import { MAX_PROMPT_PATH_ROWS } from '../src/core/cfg.js';
 import {
   cleanupTmpDir,
   type MockApp,
@@ -120,5 +121,42 @@ describe('LivenessAnalyzer', () => {
     expect(out.user).toContain('300');
     expect(out.user).toContain('STALE');
     expect(out.user).toContain('MULTI-SOURCE');
+  });
+
+  it('bounds the row count, keeping every flagged path and declaring the rest', () => {
+    // Naming stale and duplicate-source paths is this analyzer's whole job, so
+    // a cut must never be what drops one. The rows it does leave out are
+    // declared, so the model reads a partial list as partial rather than
+    // concluding the vessel has nothing else reporting.
+    const paths = Array.from({ length: MAX_PROMPT_PATH_ROWS + 5 }, (_, i) => ({
+      path: `electrical.p${String(i).padStart(4, '0')}`,
+      lastSeenAgeSec: 1,
+      stale: false,
+      sampleCount: 4,
+      sources: ['n2k'],
+      multiSource: false,
+    }));
+    // One stale path at the very end of the sorted list: an alphabetical cut
+    // would have dropped exactly this one.
+    const stalePath = {
+      path: 'zzz.last.path',
+      lastSeenAgeSec: 9000,
+      stale: true,
+      sampleCount: 1,
+      sources: ['n2k'],
+      multiSource: false,
+    };
+    const a = new LivenessAnalyzer(makeCfg());
+    const out = a.buildPrompt({
+      generatedAt: '2026-05-15T08:00:00.000Z',
+      stalenessThresholdSec: 300,
+      paths: [...paths, stalePath],
+    });
+    expect(out.user).toContain('zzz.last.path');
+    expect(out.user).toContain('STALE');
+    expect(out.user).toContain('- 6 further paths omitted from this list.');
+    expect(out.user.split('\n').filter((l) => l.startsWith('- electrical.p'))).toHaveLength(
+      MAX_PROMPT_PATH_ROWS - 1,
+    );
   });
 });

@@ -3,7 +3,7 @@
 // Both configuration surfaces consume this list:
 //  - the JSON Schema (src/schema.ts) exposes it as enum + enumNames metadata,
 //  - the custom React config panel (src/configpanel) renders it as the
-//    schedule <select> in AnalyzerRow.jsx.
+//    schedule <select> in AnalyzerRow.tsx.
 //
 // Every analyzer's default cron pattern MUST appear here. A default that is
 // not a preset renders as a non-selectable "Custom" entry instead of a clean

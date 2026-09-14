@@ -27,5 +27,11 @@ module.exports = {
   options: {
     tsConfig: { fileName: 'tsconfig.json' },
     doNotFollow: { path: 'node_modules' },
+    // Follow `import type` and inline `import('...')` type references too.
+    // They erase at compile time, so the default drops them, and here that hid
+    // roughly 30 percent of the graph: the boundary rules below saw only value
+    // imports, and a type-only cycle between the analyzer contract and the
+    // publisher went unreported until this was turned on.
+    tsPreCompilationDeps: true,
   },
 };

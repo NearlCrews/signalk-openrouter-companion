@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { Analyzer, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import type { Analyzer, BatteryEventKind, TriggerCtx } from '../src/analyzers/Analyzer.js';
+import { AlertAnalyzer } from '../src/analyzers/alerts.js';
 import type { AnalyzerId } from '../src/analyzers/ids.js';
 import { BudgetTracker } from '../src/core/budget.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
@@ -59,7 +60,11 @@ describe('TriggerRouter', () => {
     ).toEqual([]);
   });
 
-  it('skips a second run of an analyzer that is already in flight', async () => {
+  it('skips a second cron run of an analyzer that is already in flight', async () => {
+    // The guard's documented purpose: a cron fire landing on a manual fire, or
+    // a retry ladder outliving the cron interval, must not spend two budget
+    // calls and publish two reports for one event. Cron and PUT are the
+    // replayable kinds, so a skipped one comes round again on its own.
     let releaseFirstRun: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       releaseFirstRun = resolve;
@@ -67,7 +72,7 @@ describe('TriggerRouter', () => {
     let calls = 0;
     const a = makeAnalyzer({
       id: 'a',
-      triggers: [{ kind: 'engine-stop' }],
+      triggers: [{ kind: 'cron', pattern: '0 8 * * *' }],
       collectContext: vi.fn(async () => {
         calls += 1;
         await gate;
@@ -75,7 +80,7 @@ describe('TriggerRouter', () => {
       }),
     });
     const { router, mocks } = makeRouter([a]);
-    const ctx: TriggerCtx = { kind: 'engine-stop', firedAt: new Date() };
+    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
     const first = router.runById('a' as AnalyzerId, ctx);
     const second = await router.runById('a' as AnalyzerId, ctx);
     expect(second).toBe('already-running');
@@ -87,6 +92,71 @@ describe('TriggerRouter', () => {
     expect(mocks.recordCall).toHaveBeenCalledTimes(1);
     // The guard releases when the run settles, so a later trigger runs again.
     expect(await router.runById('a' as AnalyzerId, ctx)).toBe('reported');
+  });
+
+  it('defers an event trigger that lands on an in-flight run of the same subject', async () => {
+    // An event trigger is not replayable: the engine detector ends the session
+    // as it emits, so a skipped engine-stop loses that trip's report for good.
+    // It is deferred and run when the in-flight one settles.
+    let releaseFirstRun: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    let calls = 0;
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'engine-stop' }],
+      collectContext: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) await gate;
+        return { ok: true };
+      }),
+    });
+    const { router, mocks } = makeRouter([a]);
+    const ctx: TriggerCtx = { kind: 'engine-stop', firedAt: new Date() };
+    const first = router.runById('a' as AnalyzerId, ctx);
+    expect(await router.runById('a' as AnalyzerId, ctx)).toBe('queued');
+    releaseFirstRun();
+    expect(await first).toBe('reported');
+    await vi.waitFor(() => expect(mocks.recordCall).toHaveBeenCalledTimes(2));
+    expect(calls).toBe(2);
+  });
+
+  it('keeps one deferred slot per subject, newest trigger winning', async () => {
+    // A burst of events for one subject collapses to the latest state rather
+    // than queueing three runs behind each other: the slot holds one, and the
+    // budget cap is what that bound protects.
+    let releaseFirstRun: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const seen: number[] = [];
+    let calls = 0;
+    const a = makeAnalyzer({
+      id: 'a',
+      triggers: [{ kind: 'engine-stop' }],
+      collectContext: vi.fn(async (ctx) => {
+        calls += 1;
+        seen.push(ctx.firedAt.getTime());
+        if (calls === 1) await gate;
+        return { ok: true };
+      }),
+    });
+    const { router } = makeRouter([a]);
+    const first = router.runById('a' as AnalyzerId, {
+      kind: 'engine-stop',
+      firedAt: new Date(1000),
+    });
+    for (const ms of [2000, 3000, 4000]) {
+      expect(
+        await router.runById('a' as AnalyzerId, { kind: 'engine-stop', firedAt: new Date(ms) }),
+      ).toBe('queued');
+    }
+    releaseFirstRun();
+    await first;
+    await vi.waitFor(() => expect(calls).toBe(2));
+    // The run that follows is the newest trigger, not the oldest deferred one.
+    expect(seen).toEqual([1000, 4000]);
   });
 
   it('skips LLM call when collectContext returns null', async () => {
@@ -205,7 +275,10 @@ describe('TriggerRouter', () => {
     const outcome = await router.runById('alerts', { kind: 'engine-stop', firedAt: new Date() });
     expect(mocks.recordUsage).not.toHaveBeenCalled();
     expect(mocks.publishFailure).not.toHaveBeenCalled();
-    expect(outcome).toBe('no-input');
+    // 'aborted', not 'no-input': the run reached the LLM and spent a budget
+    // call, so a caller reading the outcome must not be told there was nothing
+    // to report.
+    expect(outcome).toBe('aborted');
   });
 
   it('isolates per-analyzer failures via Promise.allSettled', async () => {
@@ -245,7 +318,7 @@ describe('TriggerRouter', () => {
     expect(mocks.complete).toHaveBeenCalled();
     expect(mocks.publishFailure).not.toHaveBeenCalled();
     expect(mocks.error).not.toHaveBeenCalled();
-    expect(outcome).toBe('no-input');
+    expect(outcome).toBe('aborted');
   });
 
   it('matches put triggers by path', async () => {
@@ -472,5 +545,108 @@ describe('TriggerRouter', () => {
       model: 'anthropic/claude-haiku-4.5',
       usage: { totalTokens: 15, cachedTokens: 4, cost: 0.001 },
     });
+  });
+
+  it('bills a timed-out retry and refuses one past the daily cap', async () => {
+    // recordCall runs once per run, before the LLM await. A client-side timeout
+    // abandons a request the provider may already have billed, so without this
+    // one recorded call could cover four generations. The router answers the
+    // client's beforeRetry: it charges a timed-out retry, and stops the ladder
+    // once the cap is spent.
+    const a = makeAnalyzer({ id: 'health', triggers: [] });
+    const { deps, mocks } = makeRouterDeps();
+    let approve: ((previous: { timedOut: boolean }) => Promise<boolean>) | undefined;
+    mocks.complete.mockImplementation(async (args) => {
+      approve = (args as { beforeRetry?: typeof approve }).beforeRetry;
+      return {
+        text: 'ok',
+        model: 'stub',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, cost: 0 },
+      };
+    });
+    const router = new TriggerRouter([a], deps);
+    await router.runById('health', { kind: 'cron', firedAt: new Date() });
+    expect(mocks.recordCall).toHaveBeenCalledTimes(1);
+    if (!approve) throw new Error('the router did not pass a beforeRetry hook');
+    // A 429 or gateway fault produced no generation: free, and not re-checked.
+    expect(await approve({ timedOut: false })).toBe(true);
+    expect(mocks.recordCall).toHaveBeenCalledTimes(1);
+    // A timeout may have been billed upstream: count it.
+    expect(await approve({ timedOut: true })).toBe(true);
+    expect(mocks.recordCall).toHaveBeenCalledTimes(2);
+    // Past the cap, the ladder ends rather than spending further.
+    mocks.canSpend.mockReturnValue(false);
+    expect(await approve({ timedOut: true })).toBe(false);
+    expect(mocks.recordCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('loses neither a second bank alarm nor a recovery while one bank is in flight', async () => {
+    // The sequence that made the guard unsafe: the house bank crosses the
+    // low-SoC threshold and its run sits awaiting the model for as long as the
+    // retry ladder runs, while the console bank crosses too and the house bank
+    // then recovers. Keying the guard on the analyzer id dropped both: the
+    // console bank raised no alarm at all, and the house recovery was lost, so
+    // the audible alert on the house bank's path latched Active until the bank
+    // happened to re-enter and re-exit the band. An alarm a crew cannot clear
+    // is how a crew learns to ignore alarms.
+    const alerts = new AlertAnalyzer({
+      triggers: {
+        cron: { enabled: false, pattern: '', timezone: '' },
+        put: { enabled: false },
+        events: ['low-soc-enter', 'low-soc-exit'],
+      },
+    });
+    const { deps, mocks } = makeRouterDeps();
+    let releaseHouseEnter: () => void = () => {};
+    const houseGate = new Promise<void>((resolve) => {
+      releaseHouseEnter = resolve;
+    });
+    let completions = 0;
+    mocks.complete.mockImplementation(async () => {
+      completions += 1;
+      // The first run, the house alarm, holds the model call open. This stands
+      // in for a slow or retrying provider, where the window reaches minutes.
+      if (completions === 1) await houseGate;
+      return {
+        text: 'Bank threshold crossed',
+        model: 'stub',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, cost: 0 },
+      };
+    });
+    const router = new TriggerRouter([alerts], deps);
+    const fire = (bankId: string, subkind: BatteryEventKind, ms: number) =>
+      router.dispatch(
+        'battery-event',
+        {
+          kind: 'battery-event',
+          firedAt: new Date(ms),
+          bankId,
+          batteryEvent: { subkind, soc: 0.2 },
+        },
+        { batterySubkind: subkind },
+      );
+
+    const houseEnter = fire('house', 'low-soc-enter', 1000);
+    // A different bank is a different subject: it must not contend at all.
+    expect(await fire('console', 'low-soc-enter', 1100)).toEqual(['reported']);
+    // The same bank and kind is the same subject, so the recovery serializes
+    // behind the alarm it clears rather than racing or vanishing.
+    expect(await fire('house', 'low-soc-exit', 1200)).toEqual(['queued']);
+    releaseHouseEnter();
+    expect(await houseEnter).toEqual(['reported']);
+
+    await vi.waitFor(() => expect(mocks.publishOnPath).toHaveBeenCalledTimes(3));
+    const published = mocks.publishOnPath.mock.calls.map((c) => {
+      const override = c[2] as { path: string; state: string };
+      return `${override.state} ${override.path}`;
+    });
+    // Ordering matters as much as arrival: the house recovery lands after the
+    // house alarm, on the same path and the same emitter cache slot, so it
+    // cannot be overtaken by the alert it is there to clear.
+    expect(published).toEqual([
+      'alert notifications.electrical.batteries.console.lowSoc',
+      'alert notifications.electrical.batteries.house.lowSoc',
+      'normal notifications.electrical.batteries.house.lowSoc',
+    ]);
   });
 });

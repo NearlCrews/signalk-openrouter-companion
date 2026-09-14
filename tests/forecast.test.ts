@@ -59,6 +59,22 @@ function baselineResult(rows: Array<{ path: string; mean: number }>) {
 
 const cronCtx: TriggerCtx = { kind: 'cron', firedAt: FIRED_AT };
 
+// A ForecastInput whose observed trend corroborates a severe grade: the 3-hour
+// barometric tendency is past the deepening-system threshold the system prompt
+// itself quotes. Pass `pressureTendencyHpa: null` (and no wind or dew point
+// rows) for the uncorroborated case.
+function makeForecastInput(overrides: Partial<ForecastInput> = {}): ForecastInput {
+  return {
+    generatedAt: FIRED_AT.toISOString(),
+    trendWindowHours: 12,
+    tendencyHours: 3,
+    pressureTendencyHpa: -6,
+    hasHistoryBaseline: false,
+    trends: [],
+    ...overrides,
+  };
+}
+
 describe('ForecastAnalyzer', () => {
   let dir: string;
   let app: MockApp;
@@ -324,7 +340,6 @@ describe('ForecastAnalyzer', () => {
             family: 'canonical',
             label: 'barometric pressure',
             unit: 'Pa',
-            source: 'accuweather',
             current: 100_700,
             buckets: [null, null, null, null, null, null, null, null, 101_300, null, null, 100_700],
             baselineMean: null,
@@ -375,15 +390,123 @@ describe('ForecastAnalyzer', () => {
         'SEVERITY: severe\nDeepening low approaching; expect gale-force wind within hours.',
         cronCtx,
         makeAnalyzerDeps(app, buf, { publisher }),
+        undefined,
+        // A 6 hPa fall over 3 hours: the model's grade and the barometer agree.
+        makeForecastInput(),
       );
       expect(app.published).toHaveLength(1);
       const v = firstNotificationValue(app.published[0]?.delta);
       expect(v.path).toBe(REPORT_PATH);
       expect(v.state).toBe('alarm');
+      expect(v.method).toEqual(['visual', 'sound']);
       // The SEVERITY line is stripped; only the prose body reaches the consumer.
       expect(v.message).toBe('Deepening low approaching; expect gale-force wind within hours.');
       const line = (await readFile(join(dir, 'reports.jsonl'), 'utf-8')).trim();
       expect(JSON.parse(line).analyzer).toBe('forecast');
+    });
+
+    it('caps an uncorroborated grade at alert and does not sound the alarm', async () => {
+      // The defect this guards: the model's SEVERITY line was the sole input to
+      // an audible helm alarm. The configured floor only decides which grades
+      // publish, never whether the readings support one, so a single
+      // hallucinated line on settled data was enough to beep. Repeated false
+      // alarms are how a crew learns to mute the channel.
+      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const publisher = makePublisher();
+      const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
+      await a.publishOutput?.(
+        'SEVERITY: severe\nGale developing overnight.',
+        cronCtx,
+        makeAnalyzerDeps(app, buf, { publisher }),
+        undefined,
+        makeForecastInput({ pressureTendencyHpa: 0.2 }),
+      );
+      const v = firstNotificationValue(app.published[0]?.delta);
+      expect(v.state).toBe('alert');
+      expect(v.method).toEqual(['visual']);
+      // The outlook still publishes and stays readable; only the alarm is held.
+      expect(v.message).toBe('Gale developing overnight.');
+    });
+
+    it('honors a severe grade corroborated by a wind shift alone', async () => {
+      // Any one of the three indicators is enough: no usable barometric
+      // tendency, but the wind has backed 90 degrees across the window.
+      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const publisher = makePublisher();
+      const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
+      await a.publishOutput?.(
+        'SEVERITY: severe\nFront passing through.',
+        cronCtx,
+        makeAnalyzerDeps(app, buf, { publisher }),
+        undefined,
+        makeForecastInput({
+          pressureTendencyHpa: null,
+          trends: [
+            {
+              path: 'environment.wind.directionTrue',
+              family: 'canonical',
+              label: 'wind direction (true)',
+              unit: 'rad',
+              current: Math.PI,
+              buckets: [
+                Math.PI / 2,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Math.PI,
+              ],
+              baselineMean: null,
+            },
+          ],
+        }),
+      );
+      const v = firstNotificationValue(app.published[0]?.delta);
+      expect(v.state).toBe('alarm');
+      expect(v.method).toEqual(['visual', 'sound']);
+    });
+
+    it('publishes the recovery after a raised outlook as normal, not nominal', async () => {
+      // Signal K separates `nominal` ("never alarmed") from `normal`
+      // ("recovered"), and `signalk-nmea2000-emitter-cannon` suppresses the PGN
+      // for `nominal`, so a recovery published as `nominal` never clears the
+      // chartplotter alert the raised outlook set.
+      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const publisher = makePublisher();
+      const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
+      const deps = makeAnalyzerDeps(app, buf, { publisher });
+      await a.publishOutput?.(
+        'SEVERITY: severe\nDeepening low approaching.',
+        cronCtx,
+        deps,
+        undefined,
+        makeForecastInput(),
+      );
+      await a.publishOutput?.(
+        'SEVERITY: none\nConditions settled.',
+        cronCtx,
+        deps,
+        undefined,
+        makeForecastInput({ pressureTendencyHpa: 0 }),
+      );
+      await a.publishOutput?.(
+        'SEVERITY: none\nStill settled.',
+        cronCtx,
+        deps,
+        undefined,
+        makeForecastInput({ pressureTendencyHpa: 0 }),
+      );
+      const states = app.published.map((p) => firstNotificationValue(p.delta).state);
+      expect(states).toEqual(['alarm', 'normal', 'nominal']);
+      // The recovery is visible; the settled outlook after it is silent again.
+      expect(firstNotificationValue(app.published[1]?.delta).method).toEqual(['visual']);
+      expect(firstNotificationValue(app.published[2]?.delta).method).toEqual([]);
     });
 
     it('publishes at state nominal when the grade is below the floor', async () => {

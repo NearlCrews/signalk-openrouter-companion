@@ -1,9 +1,9 @@
-import type { BatteryEventKind } from '../analyzers/Analyzer.js';
 import { TypedEmitter } from './emitter.js';
 import type { Logger } from './logger.js';
 import { evictStaleSpan, fuseMin } from './readings.js';
+import type { BatteryEventKind } from './triggerContext.js';
 
-export type { BatteryEventKind } from '../analyzers/Analyzer.js';
+export type { BatteryEventKind } from './triggerContext.js';
 
 export type BatteryEvent =
   | { kind: 'low-soc-enter'; bankId: string; ts: number; soc: number }

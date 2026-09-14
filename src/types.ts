@@ -31,6 +31,20 @@ export const AGING_DEFAULT_SHORT_DAYS = 30;
 export const AGING_DEFAULT_LONG_DAYS = 90;
 export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
 
+// Ceiling on the daily OpenRouter call cap. The cap is the plugin's only hard
+// spend bound, so it needs a top as well as a floor: a hand-edited config with
+// 1e9 there removes the bound entirely. 1000 calls a day is far beyond any
+// realistic analyzer schedule (the shipped default is 20) while still leaving
+// room for a busy vessel with every analyzer on a short cron. Source of truth
+// for both the runtime clamp and the schema's `maximum`.
+export const MAX_CALLS_PER_DAY_CEILING = 1000;
+
+// Number of whitespace-separated fields in a standard cron pattern. Croner also
+// accepts a 6-field form with a leading seconds column, so an unvalidated
+// '* * * * * *' from a hand-edited config would fire every second and empty the
+// daily call cap in under a minute.
+const CRON_FIELD_COUNT = 5;
+
 // Liveness-analyzer default: a watched path with no sample newer than this
 // many seconds is reported stale. Source-of-truth for the schema default and
 // the analyzer constructor's clamp fallback.
@@ -43,7 +57,13 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 // with the panel); these aliases are kept for backward-compat with the
 // analyzer constructor and the existing config shape.
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
-import { clampMin, clampRange, finiteOr, normalizeOpenRouterBaseUrl } from './core/cfg.js';
+import {
+  clampMin,
+  clampPositiveInt,
+  clampRange,
+  finiteOr,
+  normalizeOpenRouterBaseUrl,
+} from './core/cfg.js';
 import { DEFAULT_SEVERITY_FLOOR_VALUE, type SeverityFloorPresetValue } from './severityFloors.js';
 
 export type SeverityFloor = SeverityFloorPresetValue;
@@ -52,8 +72,10 @@ export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = DEFAULT_SEVERITY_F
 
 // Signal K notification states (the full ALARM_STATE enum). The publisher's
 // typed `state` argument and per-analyzer publish overrides both resolve to
-// one of these strings.
-const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
+// one of these strings. Declared in the spec's severity order, least to most,
+// which the publisher relies on to keep a failure notice from lowering a
+// standing alarm on the same path.
+export const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
 export type NotificationState = (typeof ALARM_STATES)[number];
 
 // OpenRouter provider-routing controls, mirrored 1:1 onto the request body's
@@ -390,10 +412,26 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
   const influxdb = history.influxdb;
   cfg.openrouter = {
     ...or,
+    // A blank model reaches OpenRouter as a 400 on every run: each one records
+    // a budget call, publishes a failure notification, and leaves the status
+    // banner reading "Running". Fall back to the shipped slug so a cleared
+    // field costs nothing instead of a day's cap.
+    model: typeof or.model === 'string' && or.model.trim() ? or.model.trim() : d.openrouter.model,
     baseUrl: normalizeOpenRouterBaseUrl(or.baseUrl, d.openrouter.baseUrl),
-    maxCallsPerDay: clampMin(or.maxCallsPerDay, 1, d.openrouter.maxCallsPerDay),
+    // clampPositiveInt, not clampMin: the cap is a count, so it truncates the
+    // fraction, and it takes the ceiling that keeps this a real spend bound.
+    maxCallsPerDay: clampPositiveInt(or.maxCallsPerDay, d.openrouter.maxCallsPerDay, {
+      min: 1,
+      max: MAX_CALLS_PER_DAY_CEILING,
+    }),
     requestTimeoutMs: clampMin(or.requestTimeoutMs, 1000, d.openrouter.requestTimeoutMs),
   };
+  for (const id of ANALYZER_IDS) {
+    const cron = cfg.analyzers[id].triggers.cron;
+    if (cron.pattern && !isFiveFieldCron(cron.pattern)) {
+      cron.pattern = d.analyzers[id].triggers.cron.pattern;
+    }
+  }
   cfg.history = {
     source:
       history.source === 'none' || history.source === 'questdb' || history.source === 'influxdb'
@@ -452,6 +490,13 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
     imbalanceSettleSec: clampMin(a.imbalanceSettleSec, 1, d.analyzers.alerts.imbalanceSettleSec),
   };
   return cfg;
+}
+
+// Whether a cron pattern has the standard five fields. Anything else falls back
+// to the analyzer's shipped pattern: nothing downstream rejects a 6-field one,
+// and the status banner would still read "Running" while it fired every second.
+function isFiveFieldCron(pattern: string): boolean {
+  return pattern.trim().split(/\s+/).length === CRON_FIELD_COUNT;
 }
 
 function clone<T>(v: T): T {

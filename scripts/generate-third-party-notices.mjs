@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 /**
  * The configuration panel is a Module Federation remote whose dependency tree
@@ -23,8 +24,11 @@ const checkOnly = process.argv.includes('--check');
 const HEADER_MARKER = '<!-- generated-for-signalk-nearlcrews-ui:';
 
 const packageJson = JSON.parse(readFileSync(new URL('package.json', repositoryDir), 'utf8'));
-const sharedUiVersion = packageJson.devDependencies?.['signalk-nearlcrews-ui'];
-if (!sharedUiVersion) throw new Error('signalk-nearlcrews-ui is not a development dependency.');
+// The marker records the shared UI release the notices were generated against.
+// It is the installed version, resolved the way the bundler resolves it;
+// `snui-check-consumer` separately proves the pin equals that version.
+const require = createRequire(repositoryDir);
+const sharedUiVersion = require('signalk-nearlcrews-ui/package.json').version;
 
 /**
  * Packages webpack actually pulled into the panel chunks, read from the stats

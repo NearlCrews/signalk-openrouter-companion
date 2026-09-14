@@ -13,6 +13,7 @@ export default tseslint.config(
     ignores: [
       '.claude/**',
       '.remember/**',
+      '.tmp/**',
       'coverage/**',
       'dist/**',
       'docs/superpowers/**',
@@ -20,7 +21,6 @@ export default tseslint.config(
       'playwright-report/**',
       'public/**',
       'test-results/**',
-      'tmp/**',
     ],
   },
   {
