@@ -6,6 +6,183 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v076"></a>
+
+## [0.7.6] - 2026-09-13
+
+### Changed
+
+- The configuration panel is rebuilt on `signalk-nearlcrews-ui` 0.11.1 and
+  drops the scaffolding the library now provides. The panel frame is the
+  shared `PanelShell`, which runs the browser preflight, places the theme
+  toggle, and wraps the panel in an error boundary that offers "Try again"
+  and "Reload page" instead of a blank card. Save and Discard, the status
+  line beside them, and the focus handoff after either press come from the
+  shared `SaveActionBar`: the two buttons keep their place in the tab order
+  while a validation problem blocks a save, the bar refuses the press and
+  says why, the status line reads "All changes saved" once a save has
+  landed, and the saved confirmation stays up until the plugin reports its
+  restart rather than retiring on a timer. The discard confirmation renders
+  above the bar, and after "Keep editing" focus returns to the status line.
+  The maximum calls per day field is the shared `NumberField`: clearing it
+  still means "use the plugin default", anything below 1 still commits 1,
+  and a wheel over the focused field still blurs it instead of spinning the
+  value. The reports and prompt drawers ride on the shared disclosure hook
+  and reveal a region named `Reports for <analyzer>` or `Prompt for
+  <analyzer>`, so a screen reader announces where focus landed. Relative
+  ages, visually hidden labels, muted metadata, and monospace identifiers
+  use the library's `RelativeAge`, `VisuallyHidden`, `Text`, and `Code`, and
+  the prompt editor uses `Textarea`'s `monospace` and `minRows`. The theme
+  selector carries its "Panel theme" label, and its two automatic choices
+  read "Match Admin" and "Match device" instead of Auto and System, with a
+  note under them saying what Match Admin follows. An age of a day or more
+  counts in numbers, so a report stamped yesterday reads "1 day ago", and an
+  age the panel cannot work out reads "Unknown". Every field error leads
+  with a tone mark and a spoken tone word, so an error no longer depends on
+  color alone. One thing moves on screen: Save now comes before Discard in
+  the button row, the order the shared save bar defines. The shipped
+  screenshots are refreshed to match.
+- The panel reserves room below its content for the docked save bar, so the
+  theme selector at the foot of the panel is no longer covered by the bar at
+  the end of a scrolled page.
+- A save the host rejects now stays visible as an alert beside the save bar
+  until the next save or discard, instead of clearing after six seconds.
+- The panel build uses webpack's native CSS pipeline and emits one panel
+  chunk plus one stylesheet, so the plugin-specific styles arrive as a linked
+  stylesheet instead of a style tag injected at runtime. The Module Federation
+  share map is read from `signalk-nearlcrews-ui/federation` rather than
+  copied. `style-loader` and `css-loader` are no longer dependencies.
+- `npm run check:panel` runs the library's `snui-check-consumer`, which
+  asserts the exact pin against the installed version, the bundled version
+  stamp, the absence of a React runtime, the published share map, and the
+  panel size against `scripts/panel-size-baseline.json`, which allows 5
+  percent of growth. That baseline now records this release at 48,869 gzip
+  bytes rather than the 0.8.2 measurement of 38,232: the panel grew when it
+  took on the shared composites, and again when 0.11.1 added the panel
+  announcer, the label bundle, and the rest of that line's primitives, which
+  the panel carries whether or not it calls them. The local pin check and the
+  flat 40 kB size-limit entry are gone, and the third-party notices are
+  stamped with the installed library version. Dependabot proposes
+  `signalk-nearlcrews-ui` updates in their own pull request.
+- Development dependencies are current. TypeScript 7 compiles and
+  type-checks through the `@typescript/native` alias and `scripts/tsc7.mjs`,
+  while the bare `typescript` specifier is aliased to `@typescript/typescript6`
+  so typescript-eslint, Knip, and dependency-cruiser keep the 6.x compiler
+  API; `npm run check` runs both type checks. Vitest and its v8 coverage
+  provider move to 5.0.0, and Biome, Playwright, ESLint, typescript-eslint,
+  cspell, Knip, Linkinator, webpack, and the React types take their latest
+  minor and patch releases. `@types/node` stays on 22 to match the runtime
+  floor. `npm run cruise` now follows type-only imports, which had kept about
+  a third of the module graph out of the boundary rules.
+- The OpenRouter client now reads `error.metadata.error_type` on a 503 instead
+  of treating every 503 as terminal. A `provider_overloaded` answer is
+  transient: it is retried through the same jittered ladder as a 429, honoring
+  `Retry-After` up to the 60 second cap. Any other 503, including one with no
+  body, still fails fast on the first attempt, and its failure message now
+  ends with a reminder to check the provider preferences (`maxPrice`,
+  `dataCollection`, `zdr`, and `allowFallbacks`) and the model list.
+- A trigger that lands while the same analyzer is already running is no longer
+  always dropped. A cron fire or a PUT is still skipped, because the schedule
+  comes round again and the operator can press again, but a vessel event is
+  deferred and runs when the in-flight run settles: the producer of an event
+  clears the state that raised it as it emits, so a dropped `low-soc-exit`
+  never comes back and the alert it would have cleared stays active. One
+  deferred trigger is held per subject, newest wins, and it passes the daily
+  cap check like any other run. Battery alerts serialize per bank and per
+  alert kind rather than per analyzer, so two banks crossing the same
+  threshold inside one call window are independent runs while an alert and
+  the recovery that clears it still publish in order. A PUT that lands on a
+  run in flight still answers 409, and a run the plugin shutdown interrupted
+  now answers 503 rather than reporting nothing to do.
+- A retry after a client-side request timeout now counts against the daily
+  call cap. OpenRouter does not bill an attempt that produced no generation,
+  so a 429 or a gateway fault still retries for free, but a timeout abandons a
+  request the provider may already be generating and billing: without this,
+  one run could bill four generations against a single recorded call.
+- The assembled prompts are bounded and labeled. Every per-path list stops at
+  250 rows and states how many rows it left out, so an unbounded
+  `extraWatchedPaths` cannot grow the user turn into a terminal 400 that
+  spends a budget call for nothing; the liveness list keeps every stale and
+  multi-source path when it cuts, because naming those is the whole point of
+  that report. An engine notification slot renders `state`, `message`, and
+  `method` under separate length budgets, so a long message can no longer
+  carry the state past the cut, and a value that was shortened now says so
+  rather than ending mid-word.
+- The weather outlook is weighed against the vessel's own telemetry before it
+  can sound. A graded severity above `alert` publishes at its full state only
+  when the observed trend supports it: a barometric tendency of 3 hPa or more
+  either way, a wind shift of 45 degrees or more across the window, or air
+  temperature closing to within 1 K of the dew point. An uncorroborated
+  outlook still publishes, capped at `alert` and visual only, so it stays
+  readable in the Data Browser without beeping at the helm. The first
+  below-floor outlook after a raised one publishes as `normal` rather than
+  `nominal`, which is the state `signalk-nmea2000-emitter-cannon` needs to
+  clear an alert it has already put on a chartplotter.
+- The report log rotates. `reports.jsonl` moves to `reports.jsonl.1` once it
+  passes 8 MB and one generation is kept, so the file the panel's report list
+  reads stays bounded however long the plugin has been running.
+- The panel's "Test API key" button is bounded. Presses that overlap an
+  in-flight test share the one upstream call, and for five seconds after a
+  test finishes the next press is refused, so a held or repeated button
+  cannot bill in a loop. The route still runs outside the daily cap by
+  design, and the schema, the README, and the security policy now say so and
+  note that a test carries the same 2000-token completion bound as every
+  other call.
+- The daily call cap accepts 1 to 1000 and the runtime clamps anything
+  outside that range, so a hand-edited config cannot remove the plugin's only
+  hard spend bound. A cron pattern that is not the standard five fields falls
+  back to the analyzer's shipped pattern, which keeps croner's optional
+  seconds column from turning `* * * * * *` into a run every second, and a
+  blank model slug falls back to the shipped slug instead of failing every run
+  with a 400.
+
+### Fixed
+
+- Engine and battery events raised during the plugin's startup window are no
+  longer lost. The router is built as soon as the budget file is read instead
+  of waiting on the history probe, which could hold it back for that
+  provider's full 30 second timeout against an unreachable host, and events
+  raised before it exists are held and dispatched once it is up. An engine
+  stop in that window used to cost that trip's report for good, and a resumed
+  session is exactly when a stop is likely.
+- A failed run no longer lowers a standing alarm. `forecast` publishes its
+  outlook and its failures on the same notification path, so a rate-limited
+  call hours after a gale alarm used to replace that alarm with a `warn` and
+  drop its `sound` method. A failure notice now holds the standing state when
+  that state is the more severe of the two, and the failure is still recorded
+  in the report log and on the server log.
+- A report log filename of `.` or `..` no longer makes every append fail with
+  EISDIR. Both now fall back to `reports.jsonl` alongside the other names that
+  are not a plain basename.
+- Two admin tabs polling the model list no longer cancel each other. A stop
+  that aborted one caller's request used to reject the other caller's wait on
+  the same shared fetch as a 502, for a request it never cancelled.
+- The fallback model list trims its entries, so a slug pasted with stray
+  spaces reaches the request body clean.
+- The maximum calls per day field shows the cap that leaving it empty actually
+  applies. The empty field suggested 50 while the plugin has always applied 20,
+  so anyone reading it to decide whether to set a cap of their own was told the
+  wrong number. A test now fails when the two disagree.
+- The prompt editor renders at its intended eight-row minimum. The previous
+  local minimum height competed with the library's scoped rule and lost, so
+  the editor opened at the six-line default. A test now fails when a panel
+  class that styles a shared UI component is not written to win that
+  comparison.
+- The Analyzer interface snippet in the development guide now shows
+  `failureAudible`, `runKey`, and the `run` and `input` parameters of
+  `publishOutput`, matching the interface in `src/analyzers/Analyzer.ts`.
+
+### Security
+
+- The saved InfluxDB credentials travel only to the saved host. A probe that
+  names a different URL must carry its own credentials, an empty string being
+  a legitimate "no auth", so an admin-authenticated request can no longer post
+  the vessel's InfluxDB token to a host of its choosing.
+- The weather prompt no longer carries `$source`. That string is
+  producer-controlled free text chosen by any client with Signal K write
+  access, the forecast never reasons about which sensor produced a reading,
+  and this is the one prompt whose answer decides a notification state.
+
 <a id="v075"></a>
 
 ## [0.7.5] - 2026-08-22
@@ -626,7 +803,7 @@ settle guarantee are also fixed.
 
 <a id="v053"></a>
 
-## [0.5.3] - 2026-05-25
+## 0.5.3 - 2026-05-25
 
 A Signal K conformance release. The headlines: the plugin's seven REST
 routes were unauthenticated and could be hit by any caller on the SK admin
@@ -1549,7 +1726,7 @@ The changes were derived from a study of
 
 <a id="v010"></a>
 
-## [0.1.0] - 2026-05-10
+## 0.1.0 - 2026-05-10
 
 ### Added
 
@@ -1557,7 +1734,14 @@ The changes were derived from a study of
 - Plugin core: rolling buffer, engine-session detector, trigger router, OpenRouter HTTP client, optional QuestDB enrichment, default publisher (SK notification + JSONL log), per-day budget cap.
 - Maintenance analyzer: engine-stop trigger and PUT-on-demand trigger, plain-English session reports with engine alarm snapshot and battery state.
 
-[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.5...HEAD
+<!--
+  0.1.0 and 0.5.3 carry no link: neither was ever tagged, released, or
+  published, so there is no endpoint to compare against. 0.2.0 is the first
+  real tag, and 0.5.4 compares straight back to 0.5.2.
+-->
+
+[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.6...HEAD
+[0.7.6]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.2...v0.7.3
@@ -1569,8 +1753,7 @@ The changes were derived from a study of
 [0.5.7]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.4...v0.5.5
-[0.5.4]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.3...v0.5.4
-[0.5.3]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.2...v0.5.3
+[0.5.4]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.2...v0.5.4
 [0.5.2]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.4.2...v0.5.0
@@ -1581,5 +1764,4 @@ The changes were derived from a study of
 [0.3.1]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.1.0
+[0.2.0]: https://github.com/NearlCrews/signalk-openrouter-companion/releases/tag/v0.2.0
