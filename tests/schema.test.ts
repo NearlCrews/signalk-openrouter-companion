@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_CALLS_PER_DAY_CEILING } from '../src/callBudget.js';
 import {
   buildSchema,
   buildUiSchema,
@@ -6,7 +7,7 @@ import {
   type EnabledGatedNode,
   type TriggerSchemaNode,
 } from '../src/schema.js';
-import { DEFAULT_OPTIONS, MAX_CALLS_PER_DAY_CEILING, mergeWithDefaults } from '../src/types.js';
+import { DEFAULT_OPTIONS, mergeWithDefaults } from '../src/types.js';
 
 /**
  * Index into a Record by key, asserting the key is present. Narrows away the

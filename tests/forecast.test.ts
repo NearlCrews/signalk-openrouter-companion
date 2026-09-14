@@ -20,6 +20,7 @@ import {
   makeMockApp,
   makeQuestDBStub,
   makeRouterDeps,
+  makeRunMeta,
   makeTmpDir,
 } from './_mocks.js';
 
@@ -390,7 +391,7 @@ describe('ForecastAnalyzer', () => {
         'SEVERITY: severe\nDeepening low approaching; expect gale-force wind within hours.',
         cronCtx,
         makeAnalyzerDeps(app, buf, { publisher }),
-        undefined,
+        makeRunMeta(),
         // A 6 hPa fall over 3 hours: the model's grade and the barometer agree.
         makeForecastInput(),
       );
@@ -418,7 +419,7 @@ describe('ForecastAnalyzer', () => {
         'SEVERITY: severe\nGale developing overnight.',
         cronCtx,
         makeAnalyzerDeps(app, buf, { publisher }),
-        undefined,
+        makeRunMeta(),
         makeForecastInput({ pressureTendencyHpa: 0.2 }),
       );
       const v = firstNotificationValue(app.published[0]?.delta);
@@ -438,7 +439,7 @@ describe('ForecastAnalyzer', () => {
         'SEVERITY: severe\nFront passing through.',
         cronCtx,
         makeAnalyzerDeps(app, buf, { publisher }),
-        undefined,
+        makeRunMeta(),
         makeForecastInput({
           pressureTendencyHpa: null,
           trends: [
@@ -485,21 +486,21 @@ describe('ForecastAnalyzer', () => {
         'SEVERITY: severe\nDeepening low approaching.',
         cronCtx,
         deps,
-        undefined,
+        makeRunMeta(),
         makeForecastInput(),
       );
       await a.publishOutput?.(
         'SEVERITY: none\nConditions settled.',
         cronCtx,
         deps,
-        undefined,
+        makeRunMeta(),
         makeForecastInput({ pressureTendencyHpa: 0 }),
       );
       await a.publishOutput?.(
         'SEVERITY: none\nStill settled.',
         cronCtx,
         deps,
-        undefined,
+        makeRunMeta(),
         makeForecastInput({ pressureTendencyHpa: 0 }),
       );
       const states = app.published.map((p) => firstNotificationValue(p.delta).state);
@@ -517,6 +518,8 @@ describe('ForecastAnalyzer', () => {
         'SEVERITY: minor\nA slight deterioration is possible later.',
         cronCtx,
         makeAnalyzerDeps(app, buf, { publisher }),
+        makeRunMeta(),
+        makeForecastInput(),
       );
       const v = firstNotificationValue(app.published[0]?.delta);
       expect(v.path).toBe(REPORT_PATH);
@@ -529,7 +532,13 @@ describe('ForecastAnalyzer', () => {
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'minor' }));
       const text = 'Conditions settled; no significant change expected overnight.';
-      await a.publishOutput?.(text, cronCtx, makeAnalyzerDeps(app, buf, { publisher }));
+      await a.publishOutput?.(
+        text,
+        cronCtx,
+        makeAnalyzerDeps(app, buf, { publisher }),
+        makeRunMeta(),
+        makeForecastInput(),
+      );
       const v = firstNotificationValue(app.published[0]?.delta);
       expect(v.state).toBe('nominal');
       expect(v.message).toBe(text);
@@ -542,7 +551,13 @@ describe('ForecastAnalyzer', () => {
         model: 'anthropic/claude-haiku-4.5',
         usage: { totalTokens: 50, cachedTokens: 0, cost: 0.0005 },
       };
-      await a.publishOutput?.('SEVERITY: severe\nDeepening low approaching.', cronCtx, deps, run);
+      await a.publishOutput?.(
+        'SEVERITY: severe\nDeepening low approaching.',
+        cronCtx,
+        deps,
+        run,
+        makeForecastInput(),
+      );
       expect(mocks.publishOnPath).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ run }),

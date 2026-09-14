@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Mock, vi } from 'vitest';
-import type { Analyzer, AnalyzerDeps } from '../src/analyzers/Analyzer.js';
+import type { Analyzer, AnalyzerDeps, PublishRunMeta } from '../src/analyzers/Analyzer.js';
 import type { PluginRuntime } from '../src/core/api.js';
 import { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
@@ -350,6 +350,31 @@ export function firstNotificationValue(
   const entry = d.updates?.[0]?.values?.[0];
   if (!entry) throw new Error('expected at least one notification value in delta');
   return { ...entry.value, path: entry.path };
+}
+
+// A JSON Response for a stubbed fetch, with the content type every JSON
+// upstream sends. Shared so a test that stubs one states only the status and
+// the body it cares about.
+export function jsonResponse(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json', ...headers },
+  });
+}
+
+// What a completed LLM call cost, for a test that calls publishOutput directly.
+// The router always has one by the time it publishes, so the parameter is
+// required; a test that does not care about the numbers passes this.
+export function makeRunMeta(overrides: Partial<PublishRunMeta> = {}): PublishRunMeta {
+  return {
+    model: 'test/model',
+    usage: { totalTokens: 0, cachedTokens: 0, cost: 0 },
+    ...overrides,
+  };
 }
 
 export async function makeTmpDir(): Promise<string> {

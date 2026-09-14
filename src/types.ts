@@ -33,11 +33,6 @@ export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
 
 // Ceiling on the daily OpenRouter call cap. The cap is the plugin's only hard
 // spend bound, so it needs a top as well as a floor: a hand-edited config with
-// 1e9 there removes the bound entirely. 1000 calls a day is far beyond any
-// realistic analyzer schedule (the shipped default is 20) while still leaving
-// room for a busy vessel with every analyzer on a short cron. Source of truth
-// for both the runtime clamp and the schema's `maximum`.
-export const MAX_CALLS_PER_DAY_CEILING = 1000;
 
 // Number of whitespace-separated fields in a standard cron pattern. Croner also
 // accepts a 6-field form with a leading seconds column, so an unvalidated
@@ -50,6 +45,7 @@ const CRON_FIELD_COUNT = 5;
 // the analyzer constructor's clamp fallback.
 export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 
+import { Cron } from 'croner';
 // Forecast-analyzer severity floor: the lowest LLM-graded outlook severity
 // that raises an alarm on the forecast notification. Below the floor the
 // outlook still publishes, with state 'nominal', so it stays readable in the
@@ -57,6 +53,7 @@ export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
 // with the panel); these aliases are kept for backward-compat with the
 // analyzer constructor and the existing config shape.
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
+import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY_CEILING } from './callBudget.js';
 import {
   clampMin,
   clampPositiveInt,
@@ -72,11 +69,19 @@ export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = DEFAULT_SEVERITY_F
 
 // Signal K notification states (the full ALARM_STATE enum). The publisher's
 // typed `state` argument and per-analyzer publish overrides both resolve to
-// one of these strings. Declared in the spec's severity order, least to most,
-// which the publisher relies on to keep a failure notice from lowering a
-// standing alarm on the same path.
-export const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
+// one of these strings. Declared in the spec's severity order, least to most.
+// The array itself stays module-private: `severityRank` below is the only way
+// to read that order, so nothing can compare two states by a rule of its own.
+const ALARM_STATES = ['nominal', 'normal', 'alert', 'warn', 'alarm', 'emergency'] as const;
 export type NotificationState = (typeof ALARM_STATES)[number];
+
+// Where a state sits on that ladder, as a number two states on one path can be
+// compared by. Declared beside the array it reads, so a reordered or extended
+// ALARM_STATES has one ranking rule to keep honest rather than an indexOf
+// spelled out wherever two states meet.
+export function severityRank(state: NotificationState): number {
+  return ALARM_STATES.indexOf(state);
+}
 
 // OpenRouter provider-routing controls, mirrored 1:1 onto the request body's
 // `provider` object (see core/openrouter.ts::buildProvider). Shared by the
@@ -186,7 +191,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
     apiKey: '',
     model: 'anthropic/claude-haiku-4.5',
     baseUrl: 'https://openrouter.ai/api/v1',
-    maxCallsPerDay: 20,
+    maxCallsPerDay: DEFAULT_MAX_CALLS_PER_DAY,
     requestTimeoutMs: 60_000,
   },
   history: {
@@ -428,7 +433,7 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
   };
   for (const id of ANALYZER_IDS) {
     const cron = cfg.analyzers[id].triggers.cron;
-    if (cron.pattern && !isFiveFieldCron(cron.pattern)) {
+    if (cron.pattern && !isRunnableCron(cron.pattern)) {
       cron.pattern = d.analyzers[id].triggers.cron.pattern;
     }
   }
@@ -492,11 +497,27 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
   return cfg;
 }
 
-// Whether a cron pattern has the standard five fields. Anything else falls back
-// to the analyzer's shipped pattern: nothing downstream rejects a 6-field one,
-// and the status banner would still read "Running" while it fired every second.
-function isFiveFieldCron(pattern: string): boolean {
-  return pattern.trim().split(/\s+/).length === CRON_FIELD_COUNT;
+// Whether a cron pattern is one this plugin will actually run on the schedule
+// it advertises. Anything else falls back to the analyzer's shipped pattern.
+//
+// The field count is a rule of its own because croner accepts a 6-field form
+// with a leading seconds column, which would fire every second and empty the
+// daily call cap in under a minute while the status banner still read
+// "Running". The parse covers what counting fields cannot: an out-of-range
+// value ('99 * * * *'), an illegal character ('a b c d e'), and a pattern with
+// no next occurrence at all ('0 0 30 2 *'), each of which would otherwise reach
+// the scheduler and leave that analyzer silently never running. Validating with
+// the parser that will run the pattern is what keeps the two in step.
+function isRunnableCron(pattern: string): boolean {
+  const trimmed = pattern.trim();
+  if (trimmed.split(/\s+/).length !== CRON_FIELD_COUNT) return false;
+  try {
+    // No callback, so nothing is scheduled: this only parses and asks when the
+    // pattern would next fire.
+    return new Cron(trimmed).nextRun() !== null;
+  } catch {
+    return false;
+  }
 }
 
 function clone<T>(v: T): T {

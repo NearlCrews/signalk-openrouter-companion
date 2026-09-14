@@ -1,4 +1,5 @@
 import type { BatteryEventKind } from './analyzers/Analyzer.js';
+import { MAX_CALLS_PER_DAY_CEILING } from './callBudget.js';
 import { CRON_PRESETS } from './cronPresets.js';
 import { SEVERITY_FLOOR_PRESETS } from './severityFloors.js';
 import {
@@ -6,7 +7,6 @@ import {
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
   MAINTENANCE_SUPPORTED_EVENTS,
-  MAX_CALLS_PER_DAY_CEILING,
   type MaintenanceEventKind,
   NO_EVENTS,
 } from './types.js';

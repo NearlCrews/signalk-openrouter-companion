@@ -1,5 +1,5 @@
 import { resolveSystemPrompt, sanitizeProducerString } from '../core/cfg.js';
-import { clampAtWord, fmtRatio, fmtUnit } from '../core/format.js';
+import { clampAtWord, compositeKey, fmtRatio, fmtUnit } from '../core/format.js';
 import {
   alertIdFor,
   BATTERIES_PARENT_PATH,
@@ -103,7 +103,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
   runKey(ctx: TriggerCtx): string | null {
     const subkind = ctx.batteryEvent?.subkind;
     if (!subkind || !ctx.bankId) return null;
-    return `${ctx.bankId}\u0000${ALERT_ROUTING[subkind].kind}`;
+    return compositeKey(ctx.bankId, ALERT_ROUTING[subkind].kind);
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {
@@ -140,7 +140,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     text: string,
     ctx: TriggerCtx,
     deps: AnalyzerDeps,
-    run?: PublishRunMeta,
+    run: PublishRunMeta,
   ): Promise<void> {
     const subkind = ctx.batteryEvent?.subkind;
     const bankId = ctx.bankId;

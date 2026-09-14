@@ -14,6 +14,7 @@ import {
   makeBuffer,
   makeMockApp,
   makeRouterDeps,
+  makeRunMeta,
   makeTmpDir,
 } from './_mocks.js';
 
@@ -120,7 +121,12 @@ describe('AlertAnalyzer', () => {
       bankId: 'house',
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     };
-    await a.publishOutput?.('SoC is at 25%, check house bank.', ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.(
+      'SoC is at 25%, check house bank.',
+      ctx,
+      makeDeps(app, buf, publisher),
+      makeRunMeta(),
+    );
     expect(app.published).toHaveLength(1);
     const v = firstNotificationValue(app.published[0]?.delta);
     expect(v.path).toBe('notifications.electrical.batteries.house.lowSoc');
@@ -149,7 +155,7 @@ describe('AlertAnalyzer', () => {
     };
     const longText = `House bank SoC dropped to 25%. ${'Voltage trending down across all cells with no detectable charging source connected. '.repeat(10)}`;
     expect(longText.length).toBeGreaterThan(220);
-    await a.publishOutput?.(longText, ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.(longText, ctx, makeDeps(app, buf, publisher), makeRunMeta());
     const sent = firstNotificationValue(app.published[0]?.delta).message;
     // Cap is 64 chars; the previous 200 assertion was a no-op (the wire spec
     // ceiling, not the plugin's truncation budget).
@@ -173,7 +179,7 @@ describe('AlertAnalyzer', () => {
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     };
     const short = 'House bank SoC dropped to 25%, check charging source.';
-    await a.publishOutput?.(short, ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.(short, ctx, makeDeps(app, buf, publisher), makeRunMeta());
     expect(firstNotificationValue(app.published[0]?.delta).message).toBe(short);
   });
 
@@ -191,7 +197,12 @@ describe('AlertAnalyzer', () => {
       bankId: 'house',
       batteryEvent: { subkind: 'low-soc-exit', soc: 0.4 },
     };
-    await a.publishOutput?.('SoC recovered to 40%.', ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.(
+      'SoC recovered to 40%.',
+      ctx,
+      makeDeps(app, buf, publisher),
+      makeRunMeta(),
+    );
     const v = firstNotificationValue(app.published[0]?.delta);
     // Exit re-uses the same canonical per-bank path as enter, with state=normal.
     expect(v.path).toBe('notifications.electrical.batteries.house.lowSoc');
@@ -243,7 +254,12 @@ describe('AlertAnalyzer', () => {
       bankId: 'starter',
       batteryEvent: { subkind: 'cell-imbalance-enter', imbalanceV: 0.12 },
     };
-    await a.publishOutput?.('Starter cell imbalance 0.12 V.', ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.(
+      'Starter cell imbalance 0.12 V.',
+      ctx,
+      makeDeps(app, buf, publisher),
+      makeRunMeta(),
+    );
     expect(app.published).toHaveLength(1);
     const v = firstNotificationValue(app.published[0]?.delta);
     // Cell-imbalance events route to their own per-bank canonical path, distinct
@@ -268,7 +284,12 @@ describe('AlertAnalyzer', () => {
       bankId: 'starter',
       batteryEvent: { subkind: 'cell-imbalance-exit', imbalanceV: 0.01 },
     };
-    await a.publishOutput?.('Starter cells balanced.', ctx, makeDeps(app, buf, publisher));
+    await a.publishOutput?.(
+      'Starter cells balanced.',
+      ctx,
+      makeDeps(app, buf, publisher),
+      makeRunMeta(),
+    );
     const v = firstNotificationValue(app.published[0]?.delta);
     // Exit re-uses the same cellImbalance path as enter, with state=normal.
     expect(v.path).toBe('notifications.electrical.batteries.starter.cellImbalance');
@@ -318,7 +339,7 @@ describe('AlertAnalyzer', () => {
       firedAt: new Date(),
       bankId: 'starter',
     };
-    await a.publishOutput?.('text that should be discarded', ctx, deps);
+    await a.publishOutput?.('text that should be discarded', ctx, deps, makeRunMeta());
     expect(app.published).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('missing subkind or bankId'));
   });

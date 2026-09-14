@@ -1,6 +1,6 @@
 import {
+  capPromptRows,
   clampPositiveInt,
-  MAX_PROMPT_PATH_ROWS,
   omittedPathsLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
@@ -94,7 +94,11 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
     lines.push(`## Generated ${input.generatedAt}`);
     lines.push(`## Staleness threshold: ${input.stalenessThresholdSec}s`);
     lines.push('');
-    const { rows, omitted } = capPathRows(input.paths);
+    // Stale and multi-source paths are what this analyzer exists to name, so
+    // they are the rows a cut must keep.
+    const { rows, omitted } = capPromptRows(input.paths, {
+      priority: (p) => p.stale || p.multiSource,
+    });
     for (const p of rows) {
       // Show sub-second precision below 60s so a freshly-arrived sample reads
       // as "0.2s ago" rather than the misleading "0s ago"; integer seconds
@@ -118,25 +122,4 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
     if (omitted > 0) lines.push(omittedPathsLine(omitted));
     return { system: this.systemPrompt, user: lines.join('\n') };
   }
-}
-
-// Bound the row count, keeping every flagged path. Naming stale and
-// duplicate-source paths is this analyzer's whole job, so those must never be
-// the rows a cut drops; the survivors keep the sorted order collectContext
-// gave them.
-function capPathRows(paths: ReadonlyArray<PathLiveness>): {
-  rows: ReadonlyArray<PathLiveness>;
-  omitted: number;
-} {
-  if (paths.length <= MAX_PROMPT_PATH_ROWS) return { rows: paths, omitted: 0 };
-  const keep = new Set<PathLiveness>();
-  for (const p of paths) {
-    if (keep.size >= MAX_PROMPT_PATH_ROWS) break;
-    if (p.stale || p.multiSource) keep.add(p);
-  }
-  for (const p of paths) {
-    if (keep.size >= MAX_PROMPT_PATH_ROWS) break;
-    keep.add(p);
-  }
-  return { rows: paths.filter((p) => keep.has(p)), omitted: paths.length - keep.size };
 }

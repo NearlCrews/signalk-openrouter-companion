@@ -14,11 +14,11 @@ import {
 import { buildTriggers } from '../core/triggers.js';
 import { isSeverityFloor, SEVERITY_GRADES, type SeverityGrade } from '../severityFloors.js';
 import {
-  ALARM_STATES,
   type AnalyzerTriggerCfg,
   FORECAST_DEFAULT_SEVERITY_FLOOR,
   type NotificationState,
   type SeverityFloor,
+  severityRank,
 } from '../types.js';
 import type {
   AnalysisInput,
@@ -70,6 +70,7 @@ const GRADE_STATE: Record<SeverityGrade, NotificationState> = {
 // in the data browser without beeping. Repeated false alarms are how a crew
 // learns to mute a channel, which is the cost that actually matters.
 const UNCORROBORATED_CEILING: NotificationState = 'alert';
+const UNCORROBORATED_CEILING_RANK = severityRank(UNCORROBORATED_CEILING);
 
 // The corroborating thresholds, all read from the observed trend, all named by
 // the system prompt as the leading indicators the model is asked to weigh:
@@ -80,10 +81,6 @@ const UNCORROBORATED_CEILING: NotificationState = 'alert';
 const CORROBORATING_TENDENCY_HPA = 3;
 const CORROBORATING_WIND_SHIFT_RAD = Math.PI / 4;
 const CORROBORATING_DEW_POINT_SPREAD_K = 1;
-
-// Visual-only notification method, the same escape hatch publishFailure uses.
-// `methodFor` would otherwise give every non-nominal state 'sound'.
-const VISUAL_ONLY_METHOD = ['visual'];
 
 type PathFamily = 'canonical' | 'extension';
 
@@ -194,10 +191,6 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   readonly watchedPaths: ReadonlyArray<string> = ALL_WEATHER_PATHS;
   private readonly systemPrompt: string;
   private readonly severityFloor: SeverityFloor;
-  // Whether the last published outlook raised a non-nominal state, so the
-  // recovery that follows publishes as `normal` rather than `nominal`. See
-  // resolveRecovery.
-  private raised = false;
 
   constructor(cfg: ForecastCfg) {
     this.triggers = buildTriggers(this.id, cfg.triggers);
@@ -310,8 +303,8 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     text: string,
     ctx: TriggerCtx,
     deps: AnalyzerDeps,
-    run?: PublishRunMeta,
-    input?: ForecastInput,
+    run: PublishRunMeta,
+    input: ForecastInput,
   ): Promise<void> {
     const { grade, body, severityLineParsed } = parseForecast(text);
     if (!severityLineParsed) {
@@ -320,54 +313,39 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
       );
     }
     const graded = resolveForecastState(grade, this.severityFloor);
-    // No input means no telemetry to check the grade against, so the outlook
-    // is treated as uncorroborated. The router always passes the input it
-    // collected; only a direct caller can reach this branch.
-    const corroborated = input != null && hasCorroboratingTelemetry(input);
+    const corroborated = hasCorroboratingTelemetry(input);
     const capped = corroborated ? graded : capUncorroborated(graded);
     if (capped !== graded) {
       deps.logger.debug(
         `forecast: graded ${grade} but the observed trend does not support it; publishing ${capped}, visual only`,
       );
     }
-    const state = this.resolveRecovery(capped);
     await deps.publisher.publishOnPath(
       body.length > 0 ? body : text.trim(),
       { analyzerId: this.id, ctx, run },
       {
         path: notificationReportPath(this.id),
-        state,
-        // Leave `nominal` on its empty method: it is the informational
-        // no-action state, and forcing a method there would start raising
-        // visuals for every settled outlook.
-        ...(corroborated || state === 'nominal' ? {} : { method: VISUAL_ONLY_METHOD }),
+        state: capped,
+        // An outlook the vessel's own telemetry does not support stays
+        // readable without sounding the helm alarm. The publisher owns the rest
+        // of the mapping, including the `normal` that clears a standing alarm
+        // once the weather settles.
+        audible: corroborated,
       },
     );
   }
+}
 
-  // Signal K separates `nominal` ("no action needed", and never alarmed) from
-  // `normal` ("recovered after an alarm"), and `signalk-nmea2000-emitter-cannon`
-  // has no alertTypes entry for `nominal`, so it suppresses the PGN: a recovery
-  // published as `nominal` emits nothing on the bus and never clears the
-  // chartplotter's alert. The first below-floor outcome after a raised one is
-  // that recovery; every one after it is plain `nominal`. The router serializes
-  // the runs of one analyzer, so a plain field is safe here.
-  private resolveRecovery(state: NotificationState): NotificationState {
-    if (state !== 'nominal') {
-      this.raised = true;
-      return state;
-    }
-    if (!this.raised) return 'nominal';
-    this.raised = false;
-    return 'normal';
-  }
+// The one place a trend row is looked up by path, so a change to how a row is
+// keyed is a change to this line. The corroboration indicators read three
+// paths out of the same list and build an index instead.
+function trendFor(trends: ReadonlyArray<PathTrend>, path: string): PathTrend | undefined {
+  return trends.find((t) => t.path === path);
 }
 
 // Cap a state at the ceiling an uncorroborated grade may publish at.
 function capUncorroborated(state: NotificationState): NotificationState {
-  return ALARM_STATES.indexOf(state) > ALARM_STATES.indexOf(UNCORROBORATED_CEILING)
-    ? UNCORROBORATED_CEILING
-    : state;
+  return severityRank(state) > UNCORROBORATED_CEILING_RANK ? UNCORROBORATED_CEILING : state;
 }
 
 // Whether the observed trend supports an outlook above the uncorroborated
@@ -377,17 +355,20 @@ function capUncorroborated(state: NotificationState): NotificationState {
 function hasCorroboratingTelemetry(input: ForecastInput): boolean {
   const tendency = input.pressureTendencyHpa;
   if (tendency != null && Math.abs(tendency) >= CORROBORATING_TENDENCY_HPA) return true;
-  const shift = windShiftRad(input.trends);
+  // One index for the three named paths the indicators read, so a fourth
+  // indicator is a fourth lookup rather than a fourth scan of the same list.
+  const byPath = new Map(input.trends.map((t) => [t.path, t]));
+  const shift = windShiftRad(byPath);
   if (shift != null && shift >= CORROBORATING_WIND_SHIFT_RAD) return true;
-  const spread = dewPointSpreadK(input.trends);
+  const spread = dewPointSpreadK(byPath);
   return spread != null && spread <= CORROBORATING_DEW_POINT_SPREAD_K;
 }
 
 // Smallest angular separation between the oldest and newest populated wind
 // direction bucket, in radians, so a shift across the 0/2pi wrap reads as the
 // small change it is. null when the window holds fewer than two buckets.
-function windShiftRad(trends: ReadonlyArray<PathTrend>): number | null {
-  const buckets = trends.find((t) => t.path === WIND_DIRECTION_PATH)?.buckets;
+function windShiftRad(byPath: ReadonlyMap<string, PathTrend>): number | null {
+  const buckets = byPath.get(WIND_DIRECTION_PATH)?.buckets;
   if (!buckets) return null;
   const populated = buckets.filter((b): b is number => b != null);
   const first = populated[0];
@@ -400,9 +381,9 @@ function windShiftRad(trends: ReadonlyArray<PathTrend>): number | null {
 // Air temperature minus dew point at the latest observation, in K. null when
 // either path has no current reading, which is the absent-telemetry case the
 // caller treats as uncorroborated.
-function dewPointSpreadK(trends: ReadonlyArray<PathTrend>): number | null {
-  const air = trends.find((t) => t.path === AIR_TEMPERATURE_PATH)?.current;
-  const dew = trends.find((t) => t.path === DEW_POINT_PATH)?.current;
+function dewPointSpreadK(byPath: ReadonlyMap<string, PathTrend>): number | null {
+  const air = byPath.get(AIR_TEMPERATURE_PATH)?.current;
+  const dew = byPath.get(DEW_POINT_PATH)?.current;
   if (air == null || dew == null) return null;
   return air - dew;
 }
@@ -468,7 +449,7 @@ function latestEntry(entries: ReadonlyArray<BufferEntry>): BufferEntry | null {
 // hourly buckets: the most recent bucket minus the bucket TENDENCY_HOURS
 // earlier. null when either bucket is empty.
 function pressureTendency(trends: ReadonlyArray<PathTrend>): number | null {
-  const pressure = trends.find((t) => t.path === WEATHER_PRESSURE_PATH);
+  const pressure = trendFor(trends, WEATHER_PRESSURE_PATH);
   if (!pressure) return null;
   const { buckets } = pressure;
   let latestIdx = -1;

@@ -1,6 +1,6 @@
 import type { BufferSummary } from '../core/buffer.js';
 import {
-  MAX_PROMPT_PATH_ROWS,
+  capPromptRows,
   omittedPathsLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
@@ -157,21 +157,23 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     lines.push(`Duration: ${session.durationSec} s`);
     lines.push('');
     lines.push('## Telemetry');
-    const reported = Object.keys(telemetry)
-      .sort()
-      .filter((path) => (telemetry[path]?.count ?? 0) > 0);
-    for (const path of reported.slice(0, MAX_PROMPT_PATH_ROWS)) {
-      const s = telemetry[path];
-      if (!s) continue;
+    // Entries rather than keys: the summary the row renders comes back with
+    // the path, so the record is read once per row and the loop needs no guard
+    // for an entry the filter has already proved present.
+    const reported = Object.entries(telemetry)
+      .filter(([, s]) => s.count > 0)
+      // Code-unit order, the comparator Array.prototype.sort applies to the
+      // bare key list this replaced, so the rendered order does not move.
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const { rows, omitted } = capPromptRows(reported);
+    for (const [path, s] of rows) {
       const unit = unitForPath(path);
       const unitSuffix = unit ? ` ${unit}` : '';
       lines.push(
         `- ${path}: min=${f(s.min)} max=${f(s.max)} mean=${f(s.mean)}${unitSuffix} count=${f(s.count)} sources=${JSON.stringify(s.sources.map((source) => sanitizeProducerString(source)))}`,
       );
     }
-    if (reported.length > MAX_PROMPT_PATH_ROWS) {
-      lines.push(omittedPathsLine(reported.length - MAX_PROMPT_PATH_ROWS));
-    }
+    if (omitted > 0) lines.push(omittedPathsLine(omitted));
     lines.push('');
     lines.push('## Engine notification slots');
     for (const [slot, value] of Object.entries(engineNotifications)) {

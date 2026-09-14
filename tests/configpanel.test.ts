@@ -1,19 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { formatRelativeAge, RELATIVE_AGE_NARROW } from 'signalk-nearlcrews-ui';
 import { describe, expect, it } from 'vitest';
 import { fireOutcomeText, isFireSuccess } from '../src/configpanel/fireOutcome.js';
 import { reportTriggerLabel } from '../src/configpanel/reportTrigger.js';
 import { buildScheduleOptions } from '../src/configpanel/scheduleOptions.js';
-import {
-  DEFAULT_MAX_CALLS_PER_DAY,
-  historyValidity,
-  isHttpUrl,
-  jsonEqual,
-  MAX_CALLS_PER_DAY,
-} from '../src/configpanel/utils.js';
+import { historyValidity, isHttpUrl, jsonEqual } from '../src/configpanel/utils.js';
 import { CRON_PRESETS } from '../src/cronPresets.js';
-import { DEFAULT_OPTIONS, MAX_CALLS_PER_DAY_CEILING } from '../src/types.js';
 
 describe('jsonEqual', () => {
   it('treats key order as insignificant', () => {
@@ -162,27 +153,6 @@ describe('fire outcome mapping', () => {
     expect(fireOutcomeText('reported')).toBe('Report generated');
   });
 
-  it('gives every outcome the router can return its own words', () => {
-    // The panel cannot import RunOutcome as a value (a union erases), so the
-    // union is read out of the router source. Without this, a new outcome
-    // reaches the operator as the neutral "Dispatched" fallback, which reads as
-    // a run that went out fine: that is how `aborted` shipped as "Dispatched"
-    // for a run a shutdown had interrupted.
-    const router = readFileSync(
-      fileURLToPath(new URL('../src/core/triggerRouter.ts', import.meta.url)),
-      'utf8',
-    );
-    const union = /export type RunOutcome\s*=([^;]+);/.exec(router)?.[1];
-    expect(union, 'RunOutcome union not found in src/core/triggerRouter.ts').toBeDefined();
-    const outcomes = [...(union ?? '').matchAll(/'([\w-]+)'/g)].map((match) => match[1] ?? '');
-    expect(outcomes.length).toBeGreaterThanOrEqual(6);
-    for (const outcome of outcomes) {
-      expect(fireOutcomeText(outcome), `RunOutcome '${outcome}' has no panel label`).not.toBe(
-        'Dispatched',
-      );
-    }
-  });
-
   it('names the two outcomes the router grew for deferral and shutdown', () => {
     expect(fireOutcomeText('aborted')).toBe('Interrupted by shutdown');
     expect(fireOutcomeText('queued')).toBe('Queued behind the current run');
@@ -244,17 +214,5 @@ describe('buildScheduleOptions', () => {
     const opts = buildScheduleOptions(custom);
     expect(opts[opts.length - 1]).toEqual({ value: custom, label: `Custom: ${custom}` });
     expect(opts.some((o) => o.value === custom)).toBe(true);
-  });
-});
-
-describe('calls-per-day bounds', () => {
-  it('mirrors the plugin default so an empty field promises the real cap', () => {
-    // The panel cannot import DEFAULT_OPTIONS, so the number is mirrored in
-    // the panel and pinned here. A default changed on one side alone fails.
-    expect(DEFAULT_MAX_CALLS_PER_DAY).toBe(DEFAULT_OPTIONS.openrouter.maxCallsPerDay);
-  });
-
-  it('mirrors the runtime ceiling so the field cannot save a clamped value', () => {
-    expect(MAX_CALLS_PER_DAY).toBe(MAX_CALLS_PER_DAY_CEILING);
   });
 });

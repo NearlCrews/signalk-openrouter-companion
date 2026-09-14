@@ -72,15 +72,17 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   // `state: 'nominal'`. Override only when an analyzer needs a different
   // path or state, e.g. `alerts` uses `deps.publisher.publishOnPath` with
   // a per-event canonical path and explicit alert state.
-  // `input` is what `collectContext` returned for this run, so an analyzer
-  // that has to check the model's answer against the telemetry behind it
-  // (forecast weighs a graded outlook against the observed trend) reads the
-  // numbers here rather than stashing them on the instance.
+  // `run` and `input` are what the run produced and what `collectContext`
+  // returned for it. Both are always supplied: the router is the only caller
+  // and holds both by the time it publishes, so an analyzer that has to check
+  // the model's answer against the telemetry behind it (forecast weighs a
+  // graded outlook against the observed trend) reads the numbers here rather
+  // than carrying a branch for a state that cannot occur.
   publishOutput?(
     text: string,
     ctx: TriggerCtx,
     deps: AnalyzerDeps,
-    run?: PublishRunMeta,
-    input?: I,
+    run: PublishRunMeta,
+    input: I,
   ): Promise<void>;
 }

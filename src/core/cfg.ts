@@ -46,21 +46,20 @@ export function resolveSystemPrompt(custom: string | undefined, fallback: string
   return trimmed ? trimmed : fallback;
 }
 
+// A run of anything a prompt row must not carry: whitespace, so the value stays
+// on one line, and the Unicode control category, which is the C0 range, DELETE,
+// and the C1 range. One run collapses to a single space, which is both rules in
+// one native pass. The value is producer-controlled and can be large, so this
+// must not walk it code point by code point.
+const PROMPT_UNSAFE_RUN = /[\s\p{Cc}]+/gu;
+
 /**
  * Bound producer-controlled labels before including them in an LLM prompt.
  * This keeps each value on one line, removes control characters, and prevents
  * an unexpectedly large bus value from dominating the prompt.
  */
 export function sanitizeProducerString(raw: unknown, maxLength = 256): string {
-  const normalized = [...String(raw)]
-    .map((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? ' ' : character;
-    })
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return normalized.slice(0, maxLength);
+  return String(raw).replace(PROMPT_UNSAFE_RUN, ' ').trim().slice(0, maxLength);
 }
 
 // Appended wherever a clamp can cut real content out of a prompt. Spelled out
@@ -76,8 +75,7 @@ const TRUNCATION_MARKER = '...(truncated)';
  * outside that budget.
  */
 export function sanitizeForPrompt(raw: unknown, maxLength: number): string {
-  // One character of headroom is all it takes to know the value was longer,
-  // without normalizing an arbitrarily large bus value in full.
+  // One character of headroom is all it takes to know the value was longer.
   const normalized = sanitizeProducerString(raw, maxLength + 1);
   return normalized.length > maxLength
     ? `${normalized.slice(0, maxLength)}${TRUNCATION_MARKER}`
@@ -95,6 +93,37 @@ export const MAX_PROMPT_PATH_ROWS = 250;
 /** The line a prompt uses to declare rows it left out. */
 export function omittedPathsLine(count: number): string {
   return `- ${count} further path${count === 1 ? '' : 's'} omitted from this list.`;
+}
+
+/**
+ * Bound a prompt's per-path rows at MAX_PROMPT_PATH_ROWS and report how many
+ * were left out, so every prompt cuts the same way. `priority` names the rows
+ * a cut must not drop: naming stale and multi-source paths is the liveness
+ * analyzer's whole job, so those survive a truncation that would otherwise cut
+ * alphabetically. Survivors keep the order the caller gave them.
+ */
+export function capPromptRows<T>(
+  items: ReadonlyArray<T>,
+  opts: { priority?: (item: T) => boolean } = {},
+): { rows: ReadonlyArray<T>; omitted: number } {
+  if (items.length <= MAX_PROMPT_PATH_ROWS) return { rows: items, omitted: 0 };
+  const { priority } = opts;
+  if (!priority) {
+    return {
+      rows: items.slice(0, MAX_PROMPT_PATH_ROWS),
+      omitted: items.length - MAX_PROMPT_PATH_ROWS,
+    };
+  }
+  const keep = new Set<T>();
+  for (const item of items) {
+    if (keep.size >= MAX_PROMPT_PATH_ROWS) break;
+    if (priority(item)) keep.add(item);
+  }
+  for (const item of items) {
+    if (keep.size >= MAX_PROMPT_PATH_ROWS) break;
+    keep.add(item);
+  }
+  return { rows: items.filter((item) => keep.has(item)), omitted: items.length - keep.size };
 }
 
 /** Normalize the raw-JSON-only OpenRouter base URL or return the safe default. */

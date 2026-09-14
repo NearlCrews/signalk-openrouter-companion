@@ -1,6 +1,6 @@
 import { appendFile, rename, stat } from 'node:fs/promises';
 import { SKVersion } from '@signalk/server-api';
-import { ALARM_STATES, type NotificationState } from '../types.js';
+import { type NotificationState, severityRank } from '../types.js';
 import { clampAtWord } from './format.js';
 import { stringify } from './logger.js';
 import { notificationReportPath } from './paths.js';
@@ -36,9 +36,14 @@ const AUDIBLE_STATES: ReadonlySet<NotificationState> = new Set([
 // method array tells downstream consumers "no user-facing notification".
 // The daily/weekly narrative reports (health/aging/drift/liveness/forecast)
 // land at `nominal`, so a strict SK client should not pop a visual for them.
-function methodFor(state: NotificationState): string[] {
-  if (AUDIBLE_STATES.has(state)) return ['visual', 'sound'];
+// `audible` is the caller's choice for a state that would otherwise sound the
+// helm alarm: a failure notice and an outlook the vessel's own telemetry does
+// not corroborate both stay readable without beeping. It is the only thing a
+// caller may say about the method, so the state-to-method mapping stays here,
+// and each entry point states its own default rather than inheriting one.
+function methodFor(state: NotificationState, audible: boolean): string[] {
   if (state === 'nominal') return [];
+  if (audible && AUDIBLE_STATES.has(state)) return ['visual', 'sound'];
   return ['visual'];
 }
 
@@ -51,12 +56,6 @@ const HEADLINE_MAX_CHARS = 140;
 // is worth seeing, but it is never itself a hazard, so it must not outrank the
 // report it replaces.
 const FAILURE_STATE: NotificationState = 'warn';
-
-// Where a state sits on the Signal K severity ladder, from the spec-ordered
-// list in types.ts. Used only to compare two states on one path.
-function severityRank(state: NotificationState): number {
-  return ALARM_STATES.indexOf(state);
-}
 
 const FAILURE_STATE_RANK = severityRank(FAILURE_STATE);
 
@@ -144,6 +143,10 @@ export class ReportPublisher {
   // fail against a state this map has forgotten.
   private readonly lastReportState = new Map<string, NotificationState>();
 
+  // Bytes in the current log generation, or null until the first append of this
+  // process stats the file. See rotateIfOversized.
+  private logBytes: number | null = null;
+
   constructor(private cfg: PublisherCfg) {}
 
   // Failure notifications always publish on the canonical report path
@@ -175,14 +178,18 @@ export class ReportPublisher {
     } else {
       this.cfg.app.handleMessage(
         this.cfg.pluginId,
+        // A failure notice is silent unless the analyzer asked otherwise: a
+        // failed monthly summary must not sound the helm alarm.
         this.makeDelta(headlineOf(message), FAILURE_STATE, now, path, {
-          method: opts.audible ? ['visual', 'sound'] : ['visual'],
+          audible: opts.audible === true,
         }),
         SKVersion.v1,
       );
       // What stands on the path now is this failure, not the report it
-      // replaced, so a second failure republishes rather than being held.
-      this.lastReportState.delete(path);
+      // replaced. `warn` does not outrank itself, so a second failure
+      // republishes rather than being held, and the next successful report
+      // publishes the `normal` that clears this notice.
+      this.lastReportState.set(path, FAILURE_STATE);
     }
     await this.appendLog({
       ...this.buildEntry(message, { analyzerId, ctx }, now),
@@ -196,10 +203,11 @@ export class ReportPublisher {
   // analyzer truncates the message to fit PGN 126985 but the full LLM report
   // belongs in the log so an operator reviewing history sees the reasoning,
   // not just the headline.
-  // `method` overrides the state's default audible/visual mapping. The forecast
-  // analyzer uses it to publish an outlook the vessel's own telemetry does not
-  // corroborate as visual-only, so a graded severity the sensors do not support
-  // stays readable without sounding the helm alarm.
+  // `audible` is the same choice `publishFailure` takes: false keeps a state
+  // that would otherwise sound the helm alarm visual-only. The forecast
+  // analyzer publishes an outlook its own telemetry does not corroborate that
+  // way, so a graded severity the sensors do not support stays readable
+  // without beeping.
   async publishOnPath(
     displayText: string,
     meta: PublishMeta,
@@ -208,20 +216,40 @@ export class ReportPublisher {
       state: NotificationState;
       alertId?: number;
       logText?: string;
-      method?: string[];
+      audible?: boolean;
     },
   ): Promise<void> {
     const now = new Date();
+    const state = this.resolveRecovery(override.path, override.state);
     this.cfg.app.handleMessage(
       this.cfg.pluginId,
-      this.makeDelta(headlineOf(displayText), override.state, now, override.path, {
+      this.makeDelta(headlineOf(displayText), state, now, override.path, {
         alertId: override.alertId,
-        method: override.method,
+        // A report publishes at its state's own method unless the caller says
+        // otherwise: the alerts analyzer's per-bank alarm is meant to be heard.
+        audible: override.audible ?? true,
       }),
       SKVersion.v1,
     );
-    this.lastReportState.set(override.path, override.state);
+    this.lastReportState.set(override.path, state);
     await this.appendLog(this.buildEntry(override.logText ?? displayText, meta, now));
+  }
+
+  // Signal K separates `nominal` ("no action needed", and never alarmed) from
+  // `normal` ("recovered after an alarm"), and
+  // `signalk-nmea2000-emitter-cannon` has no alertTypes entry for `nominal`, so
+  // it suppresses the PGN: a recovery published as `nominal` emits nothing on
+  // the bus and never clears the chartplotter's alert. This class already knows
+  // what stands on each path, so the first `nominal` after anything that raised
+  // becomes that recovery and every analyzer gets the behavior without keeping
+  // a flag of its own. `normal` is itself the recovery, so the one after it is
+  // a plain `nominal` again.
+  private resolveRecovery(path: string, state: NotificationState): NotificationState {
+    if (state !== 'nominal') return state;
+    const standing = this.lastReportState.get(path);
+    return standing === undefined || standing === 'nominal' || standing === 'normal'
+      ? state
+      : 'normal';
   }
 
   // Default state is 'nominal' (informational): per SK 1.8.2, 'nominal' is the
@@ -249,14 +277,11 @@ export class ReportPublisher {
     state: NotificationState,
     now: Date,
     path: string,
-    opts: { alertId?: number; method?: string[] } = {},
+    opts: { alertId?: number; audible: boolean },
   ): SignalKNotificationDelta {
     const value: SignalKNotificationValue = {
       state,
-      // `method` defaults to the state's audible/visual mapping; callers that
-      // need a state's normal mapping overridden (failures stay visual-only)
-      // pass an explicit method.
-      method: opts.method ?? methodFor(state),
+      method: methodFor(state, opts.audible),
       message: text,
     };
     if (opts.alertId !== undefined) {
@@ -308,32 +333,40 @@ export class ReportPublisher {
   // report as an analysis failure and overwrite it with a warn. Surface the
   // failure on the server log instead of swallowing it.
   private async appendLog(entry: JsonlEntry): Promise<void> {
+    const line = `${JSON.stringify(entry)}\n`;
     try {
       await this.rotateIfOversized();
-      await appendFile(this.cfg.logPath, `${JSON.stringify(entry)}\n`);
+      await appendFile(this.cfg.logPath, line);
+      this.logBytes = (this.logBytes ?? 0) + Buffer.byteLength(line);
     } catch (err) {
+      // A failed append leaves the running total where it was, which is what
+      // the file still holds.
       this.cfg.app.error(`report log append failed: ${stringify(err)}`);
     }
   }
 
-  // Keep the report log bounded. Nothing else trims it, and `tailReports` reads
-  // the whole file per request, so an unbounded log would eventually cost both
-  // disk and an admin request proportional to the plugin's whole history. One
-  // generation is kept as `<log>.1`; the panel reads only the current file, so
-  // history immediately after a rotation is short rather than lost. Cheap at
-  // this rate: at most a few hundred appends a day.
+  // Keep the report log bounded. Nothing else trims it, so an unbounded log
+  // would eventually cost both disk and a growing admin request. One generation
+  // is kept as `<log>.1`; the panel reads only the current file, so history
+  // immediately after a rotation is short rather than lost.
+  //
+  // The size is stat'd once per plugin start and then tracked by what this
+  // publisher writes, because the rotation fires about once a year at a few
+  // hundred rows a day and a stat before every append is a filesystem round
+  // trip that learns nothing. The plugin is the sole writer of this file.
   private async rotateIfOversized(): Promise<void> {
-    const max = this.cfg.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
-    let size: number;
-    try {
-      size = (await stat(this.cfg.logPath)).size;
-    } catch {
-      // No log yet (the first append creates it), or it is unreadable; either
-      // way there is nothing to rotate and the append below reports any real
-      // fault.
-      return;
+    if (this.logBytes === null) {
+      try {
+        this.logBytes = (await stat(this.cfg.logPath)).size;
+      } catch {
+        // No log yet (the first append creates it), or it is unreadable; either
+        // way there is nothing to rotate and the append reports any real fault.
+        this.logBytes = 0;
+        return;
+      }
     }
-    if (size < max) return;
+    if (this.logBytes < (this.cfg.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES)) return;
     await rename(this.cfg.logPath, `${this.cfg.logPath}.1`);
+    this.logBytes = 0;
   }
 }

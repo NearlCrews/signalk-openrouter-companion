@@ -4,6 +4,17 @@
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 
+// Join the parts of a composite map key. The separator is NUL because no
+// analyzer id, Signal K path segment, cron pattern, or IANA timezone name can
+// contain one, so two different part lists cannot collide into one key.
+// Written once here rather than interpolated at each call site, so the
+// separator is a decision the code states rather than a comment beside it.
+const KEY_SEPARATOR = '\x00';
+
+export function compositeKey(...parts: string[]): string {
+  return parts.join(KEY_SEPARATOR);
+}
+
 interface FmtOpts {
   digits?: number;
   nan?: string;
