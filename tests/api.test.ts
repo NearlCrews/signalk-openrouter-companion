@@ -229,6 +229,12 @@ describe('plugin REST API', () => {
   });
 
   describe('/api/openrouter/test handler', () => {
+    // The route's coalescing slot and cooldown are module state, so each case
+    // starts from a clean one rather than inheriting the previous test's ping.
+    beforeEach(() => {
+      _resetOpenRouterModelsCache();
+    });
+
     const okLlm = {
       complete: async () => ({
         text: 'OK',
@@ -258,6 +264,45 @@ describe('plugin REST API', () => {
       const r = await call(routes, 'post', '/api/openrouter/test');
       expect(r.status).toBe(400);
       expect(r.body).toEqual({ ok: false, error: 'API key not configured' });
+    });
+
+    it('coalesces concurrent pings onto one billable completion', async () => {
+      // The route is deliberately outside the daily budget, which makes it the
+      // one place a real completion is unmetered. Two presses must not be two
+      // billed generations.
+      let completes = 0;
+      let releasePing: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releasePing = resolve;
+      });
+      const rt = makePluginRuntime({
+        llm: {
+          complete: async () => {
+            completes += 1;
+            await gate;
+            return { text: 'OK', model: 'm', usage: { totalTokens: 6 } };
+          },
+        } as never,
+      });
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      const first = call(routes, 'post', '/api/openrouter/test');
+      const second = call(routes, 'post', '/api/openrouter/test');
+      releasePing();
+      const [a, b] = await Promise.all([first, second]);
+      expect(completes).toBe(1);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+    });
+
+    it('throttles a ping that follows one too closely', async () => {
+      const rt = makePluginRuntime({ llm: okLlm });
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, () => rt);
+      expect((await call(routes, 'post', '/api/openrouter/test')).status).toBe(200);
+      const r = await call(routes, 'post', '/api/openrouter/test');
+      expect(r.status).toBe(429);
+      expect(r.body).toEqual({ ok: false, error: 'a test just ran; wait a few seconds' });
     });
 
     it('passes through OpenRouter HTTP status on error', async () => {
@@ -570,6 +615,41 @@ describe('plugin REST API', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it('does not reject a second models waiter when the first caller aborts', async () => {
+      // Concurrent polls share one upstream fetch. Binding that fetch to
+      // whichever caller arrived first let a stop() that aborts caller 1 fail
+      // caller 2 with a 502, for a request caller 2 never cancelled.
+      let releaseFetch: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              releaseFetch = resolve;
+            }),
+        ),
+      );
+      const controller = new AbortController();
+      const withSignal = makeRecordingRouter();
+      registerApiRoutes(withSignal.router, () => makePluginRuntime({ signal: controller.signal }));
+      const withoutSignal = makeRecordingRouter();
+      registerApiRoutes(withoutSignal.router, () => null);
+
+      const aborting = call(withSignal.routes, 'get', '/api/openrouter/models');
+      const other = call(withoutSignal.routes, 'get', '/api/openrouter/models');
+      controller.abort();
+      expect((await aborting).status).toBe(502);
+      releaseFetch(
+        new Response(JSON.stringify({ data: [{ id: 'a/b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const survived = await other;
+      expect(survived.status).toBe(200);
+      expect((survived.body as { data: Array<{ id: string }> }).data[0]?.id).toBe('a/b');
+    });
+
     it('returns 502 when upstream is unreachable', async () => {
       vi.stubGlobal(
         'fetch',
@@ -814,6 +894,58 @@ describe('plugin REST API', () => {
         `Basic ${Buffer.from('saved-user:saved-token').toString('base64')}`,
       );
       expect(requestInit?.redirect).toBe('error');
+    });
+
+    it('does not send the saved credentials to a URL the request overrode', async () => {
+      // Overriding the URL alone used to inherit the saved username and
+      // password, which turns one admin-authenticated probe into "post the
+      // vessel's InfluxDB token to a host of my choosing". The admin gate keeps
+      // that away from an unauthenticated caller; it should not be within reach
+      // of an authenticated one either.
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(JSON.stringify({ results: [{}] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, makeRuntime);
+
+      const r = await call(routes, 'post', '/api/influxdb/test', {
+        body: { url: 'http://attacker.example:8086' },
+      });
+
+      expect(r.status).toBe(200);
+      const [rawUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+      expect(String(rawUrl)).toContain('attacker.example');
+      expect(String(rawUrl)).not.toContain('saved-token');
+      expect(new Headers(requestInit?.headers).get('authorization')).toBeNull();
+    });
+
+    it('still sends the saved credentials when the request names the saved URL', async () => {
+      // Re-probing the configured host from the panel, with the URL echoed back
+      // in the body, must keep working without the operator retyping the token.
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(JSON.stringify({ results: [{}] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { router, routes } = makeRecordingRouter();
+      registerApiRoutes(router, makeRuntime);
+
+      await call(routes, 'post', '/api/influxdb/test', {
+        body: { url: 'http://saved-influx:8086/' },
+      });
+
+      const [, requestInit] = fetchMock.mock.calls[0] ?? [];
+      expect(new Headers(requestInit?.headers).get('authorization')).toBe(
+        `Basic ${Buffer.from('saved-user:saved-token').toString('base64')}`,
+      );
     });
 
     it('uses request settings instead of the saved settings', async () => {
