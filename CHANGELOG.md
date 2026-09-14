@@ -6,6 +6,46 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- A report that follows an alert now publishes `state: normal` on its
+  notification path, whichever analyzer wrote it. Signal K separates `nominal`
+  ("no action needed") from `normal` ("recovered after an alarm"), and a
+  chartplotter bridge has no alert type for `nominal`, so a recovery published
+  that way never cleared the alert it was meant to clear. The publisher tracks
+  what stands on each path, so the first settled report after an alert, or
+  after a failure notice, is the recovery and the one after that is plain
+  `nominal` again. The forecast analyzer no longer keeps that memory itself.
+- The reports drawer reads only the tail of the report log rather than the
+  whole file. The log rotates at 8 MB, and parsing all of it to show ten rows
+  cost seconds of blocked event loop on a Raspberry Pi with a drawer open per
+  analyzer.
+- The configuration panel speaks every status change through one pair of live
+  regions the panel frame mounts, instead of a region beside each message.
+  Screen readers announce a region that already existed when its text changed,
+  so the fire outcome, the two connection tests, the model-list failure, the
+  drawer contents, and a rejected save all announce from there. A fire that
+  ends the same way twice is still read out twice, and the announcement no
+  longer carries the completion time it only needed to make the words differ.
+- A configured report-log filename is accepted only when it is a plain
+  filename of letters, digits, dot, dash, and underscore. Anything else,
+  including a name made only of dots, falls back to `reports.jsonl` instead of
+  being checked against a list of known-bad values.
+
+### Fixed
+
+- A cron pattern is now validated by the scheduler that will run it, so a
+  pattern with an out-of-range field (`99 * * * *`), an illegal character, or
+  no next occurrence at all falls back to the analyzer's shipped schedule
+  instead of reaching the scheduler and leaving that analyzer silently never
+  running while the status banner still read "Running". The five-field rule
+  stays: a six-field pattern would fire every second and empty the daily call
+  cap in under a minute.
+- The InfluxDB probe route compares the request's URL with the saved one
+  after both go through the normalization the client itself applies, so
+  re-probing a saved host whose URL carries embedded credentials keeps using
+  the stored username and password instead of silently probing without them.
+
 <a id="v076"></a>
 
 ## [0.7.6] - 2026-09-13

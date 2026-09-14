@@ -184,7 +184,7 @@ untrusted prompt input. Keep them bounded and on one line with
 
 ```bash
 npm run build          # clean + declarations + esbuild bundle + webpack panel + panel check
-npm run build:types    # scripts/tsc7.mjs --emitDeclarationOnly --declaration --outDir dist
+npm run build:types    # scripts/tsc.mjs --emitDeclarationOnly --declaration --outDir dist
 npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
 npm run build:panel    # node scripts/build-panel.mjs (admin UI panel + build stats)
 npm run check:panel    # shared consumer check (pin, version stamp, share map, size baseline) plus the ESM container and React module graph checks
@@ -267,7 +267,7 @@ The unit and integration suite covers:
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), and both history providers (probe, query, decode, and error paths).
 - `tests/api.test.ts` covers all eight REST route families: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), QuestDB test, and InfluxDB test.
 - `tests/integration.test.ts` exercises the plugin end-to-end with a mocked SK server and `vi.stubGlobal('fetch')` for OpenRouter.
-- `tests/panelStyles.test.ts` walks the panel sources for CSS Modules classes that land on a shared UI component and requires each one to repeat its own name. The library ships its rules inside a native CSS scope, so at equal specificity the scoped rule wins whatever the stylesheet order and a single-class override would be dropped without a warning.
+- `tests/panelStyles.test.ts` requires every class declared in the panel's CSS Modules to repeat its own name. The library ships its rules inside a native CSS scope, so at equal specificity the scoped rule wins whatever the stylesheet order and a single-class override on a library component would be dropped without a warning. Doubling costs nothing on a class that lands on a native element, so the rule is read straight off the stylesheets rather than off the markup that uses them.
 
 The shared test mocks live in `tests/_mocks.ts`:
 
@@ -315,12 +315,17 @@ Two TypeScript compilers are installed on purpose, through npm aliases in
 
 - `@typescript/native` is the real `typescript` package at 7.x. `npm run
   build:types` and `npm run type-check` run its compiler by path through
-  `scripts/tsc7.mjs`. Both aliases declare a `tsc` binary and npm links
+  `scripts/tsc.mjs`. Both aliases declare a compiler binary and npm links
   `node_modules/.bin/tsc` to whichever it installed last, so a bare `tsc` call
   could silently compile with TypeScript 6 after a fresh install; never call
   bare `tsc` from a script.
 - `typescript` is aliased to `@typescript/typescript6`, which provides the
-  TypeScript 6 JavaScript compiler API plus a `tsc6` binary.
+  TypeScript 6 JavaScript compiler API plus a `tsc6` binary. `npm run
+  type-check:ts6` runs it through the same script with `--ts6`.
+
+`scripts/tsc.mjs` also owns the list of type-check projects: `--all` runs the
+backend, tests, panel, and browser-tooling configurations in turn, so adding a
+fifth one is a single edit rather than two script chains kept in step by eye.
 
 The alias exists because tools that import the compiler API, most importantly
 typescript-eslint, do not yet run under TypeScript 7. Resolving the bare

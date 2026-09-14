@@ -58,7 +58,7 @@ those before proposing a structural change.
 ## Code style
 
 - TypeScript 7, strict mode, ESM. The native compiler builds and type-checks
-  through `scripts/tsc7.mjs`, and the TypeScript 6 compiler API is installed
+  through `scripts/tsc.mjs`, and the TypeScript 6 compiler API is installed
   alongside under the bare `typescript` name for typescript-eslint, Knip, and
   dependency-cruiser; the development guide's "TypeScript toolchain" section
   explains the alias layout, and no script may call bare `tsc`. Use Node
