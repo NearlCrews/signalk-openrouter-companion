@@ -89,8 +89,14 @@ When using this plugin:
    (`propulsion.*`, `electrical.batteries.*`), they can influence the
    model's input, and the published prose could carry attacker text. The
    output is only published as Signal K notifications, never executed.
-5. **Monitor disk usage**: the JSONL report log is not pruned, so reports
-   accumulate in `reports.jsonl` indefinitely on a constrained device.
+   Producer-controlled strings reach a prompt bounded and labeled: each
+   per-path list stops at 250 rows and states what it left out, free text
+   is clamped per field and marked when it was cut, and the weather prompt
+   carries no `$source` at all, because that prompt's answer decides a
+   notification state.
+5. **Monitor disk usage**: the JSONL report log rotates at 8 MB and keeps
+   one previous generation as `reports.jsonl.1`, so it costs at most twice
+   that on a constrained device. Nothing prunes the rotated file.
 6. **Keep Updated**: always use the latest version, and keep your Node.js
    runtime up to date. There is no outbound TLS pinning; the plugin
    trusts the system CA store for openrouter.ai and any HTTPS history-provider
@@ -133,8 +139,9 @@ npm run audit:runtime
   or API token is stored in the same Signal K plugin configuration. The panel
   renders the secret as a password field, passes it to Signal K's configuration
   callback when saving, and sends it to the authenticated connection-test route.
-  Runtime InfluxDB queries send it only in the authorization header. Status and
-  error responses do not include it.
+  The saved credential travels only to the saved host: a test that names a
+  different URL has to carry its own. Runtime InfluxDB queries send it only in
+  the authorization header. Status and error responses do not include it.
 
 ## Signal K Security
 
