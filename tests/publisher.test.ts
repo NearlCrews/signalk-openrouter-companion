@@ -231,6 +231,62 @@ describe('ReportPublisher', () => {
     expect(entry.model).toBeUndefined();
     expect(entry.totalTokens).toBeUndefined();
   });
+
+  it('does not lower a standing alarm on the path when a later run fails', async () => {
+    // The forecast analyzer publishes its outlook and its failures on the same
+    // path, so a rate-limited call hours after a gale alarm would otherwise
+    // replace that alarm with a `warn` and drop the `sound` method. Nothing
+    // about the weather changed because a request failed.
+    const ctx = { kind: 'cron' as const, firedAt: new Date('2026-05-10T10:00:00Z') };
+    const path = 'notifications.openrouter-companion.forecast.report';
+    await publisher.publishOnPath(
+      'Gale developing overnight',
+      { analyzerId: 'forecast', ctx },
+      { path, state: 'alarm' },
+    );
+    await publisher.publishFailure('forecast', ctx, new Error('HTTP 429 rate limited'));
+    expect(app.published).toHaveLength(1);
+    expect(firstNotificationValue(app.published[0]?.delta).state).toBe('alarm');
+    // The failure is still recorded where the panel and the server log read it.
+    expect(app.appErrorMessages.join(' ')).toContain('HTTP 429 rate limited');
+    const lines = (await readFile(logPath, 'utf-8')).trim().split('\n');
+    expect(JSON.parse(lines[1] ?? '{}').failure).toContain('HTTP 429 rate limited');
+  });
+
+  it('publishes a failure over a report that does not outrank it, and republishes after', async () => {
+    // A `warn` failure outranks the `alert` a minor outlook publishes, and
+    // outranks the failure standing on the path from the previous run, so
+    // neither is held: only a live alarm or emergency is.
+    const ctx = { kind: 'cron' as const, firedAt: new Date('2026-05-10T10:00:00Z') };
+    const path = 'notifications.openrouter-companion.forecast.report';
+    await publisher.publishOnPath(
+      'A slight deterioration is possible',
+      { analyzerId: 'forecast', ctx },
+      { path, state: 'alert' },
+    );
+    await publisher.publishFailure('forecast', ctx, new Error('HTTP 429'));
+    await publisher.publishFailure('forecast', ctx, new Error('HTTP 500'));
+    const states = app.published.map((p) => firstNotificationValue(p.delta).state);
+    expect(states).toEqual(['alert', 'warn', 'warn']);
+  });
+
+  it('rotates the report log once it passes its size bound', async () => {
+    // Nothing else trims the log and the reports route reads the whole file, so
+    // an unbounded log costs both disk and an admin request proportional to the
+    // plugin's entire history.
+    const rotating = new ReportPublisher({ app, pluginId: 'orc', logPath, maxLogBytes: 200 });
+    const ctx = { kind: 'cron' as const, firedAt: new Date('2026-05-10T10:00:00Z') };
+    for (let i = 0; i < 6; i += 1) {
+      await rotating.publishReport('health', ctx, `report ${i}`);
+    }
+    const current = (await readFile(logPath, 'utf-8')).trim().split('\n');
+    const rolled = (await readFile(`${logPath}.1`, 'utf-8')).trim().split('\n');
+    // The current file restarted well short of six entries, and the entries it
+    // no longer holds are in the rolled generation rather than gone.
+    expect(current.length).toBeLessThan(6);
+    expect(current.length + rolled.length).toBe(6);
+    expect(JSON.parse(current[current.length - 1] ?? '{}').report).toBe('report 5');
+  });
 });
 
 describe('headlineOf', () => {

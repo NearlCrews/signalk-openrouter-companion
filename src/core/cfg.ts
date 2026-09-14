@@ -63,6 +63,40 @@ export function sanitizeProducerString(raw: unknown, maxLength = 256): string {
   return normalized.slice(0, maxLength);
 }
 
+// Appended wherever a clamp can cut real content out of a prompt. Spelled out
+// rather than an ellipsis because the reader is a model: it has to be able to
+// tell a complete value from a shortened one, and the marker is what says so.
+const TRUNCATION_MARKER = '...(truncated)';
+
+/**
+ * Bound a producer-controlled string for a prompt and say so when it cuts.
+ * `sanitizeProducerString` slices silently, which is right for an identifier
+ * that is either short or meaningless past the cut, and wrong for free text
+ * whose tail carries meaning. `maxLength` bounds the content; the marker sits
+ * outside that budget.
+ */
+export function sanitizeForPrompt(raw: unknown, maxLength: number): string {
+  // One character of headroom is all it takes to know the value was longer,
+  // without normalizing an arbitrarily large bus value in full.
+  const normalized = sanitizeProducerString(raw, maxLength + 1);
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}${TRUNCATION_MARKER}`
+    : normalized;
+}
+
+// Ceiling on the per-path rows one prompt renders. The path list grows with
+// Signal K discovery plus the operator's unbounded extraWatchedPaths, and
+// nothing else bounds the assembled user turn; an oversized prompt is a
+// terminal OpenRouter 400 that burns the budget call it already recorded. Past
+// this the prompt states how many rows it left out, so the model reads a
+// partial list as partial. Far above a real vessel's path count.
+export const MAX_PROMPT_PATH_ROWS = 250;
+
+/** The line a prompt uses to declare rows it left out. */
+export function omittedPathsLine(count: number): string {
+  return `- ${count} further path${count === 1 ? '' : 's'} omitted from this list.`;
+}
+
 /** Normalize the raw-JSON-only OpenRouter base URL or return the safe default. */
 export function normalizeOpenRouterBaseUrl(raw: unknown, fallback: string): string {
   if (typeof raw !== 'string') return fallback;

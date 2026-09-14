@@ -1,5 +1,18 @@
 import type { PanelConfig } from './types.js';
 
+// The plugin's own daily call cap, mirrored here so an empty field can show
+// what leaving it empty will apply. The panel cannot read DEFAULT_OPTIONS
+// itself: `src/types.ts` reaches into the Node-only core, and the panel keeps
+// its own configuration mirror on purpose. A case in tests/configpanel.test.ts
+// pins this number to the plugin default so the two cannot drift.
+export const DEFAULT_MAX_CALLS_PER_DAY = 20;
+
+// The ceiling the runtime clamps to (MAX_CALLS_PER_DAY_CEILING in src/types.ts,
+// and the schema's `maximum`). Mirrored here for the same reason as the default
+// above, and pinned to it by the same test, so the panel refuses a value the
+// plugin would silently rewrite rather than accepting it and looking saved.
+export const MAX_CALLS_PER_DAY = 1000;
+
 // Structural equality used to detect a dirty edit buffer and to skip
 // redundant status-state updates. Order-insensitive on object keys: the panel
 // edit buffer and the saved JSON can be structurally equal but key-ordered

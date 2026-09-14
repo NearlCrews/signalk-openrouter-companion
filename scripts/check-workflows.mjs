@@ -1,5 +1,16 @@
 import { readdir, readFile } from 'node:fs/promises';
 
+const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
+// The published floor, as a major: ">=22.18" reads as 22. The primary CI lane
+// must run on that major or newer, which is the invariant. Which exact major
+// it runs is a Node LTS decision, not a release invariant, so asserting one
+// literal would turn every routine Node bump into a gate failure.
+const engineFloorMajor = Number(/(\d+)/.exec(packageJson.engines.node)?.[1]);
+if (!Number.isInteger(engineFloorMajor)) {
+  console.error('package.json engines.node must start with a major version number.');
+  process.exit(1);
+}
+
 const workflowDirectory = '.github/workflows';
 const workflowPaths = (await readdir(workflowDirectory))
   .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
@@ -17,8 +28,16 @@ for (const path of workflowPaths) {
 }
 
 const ci = await readFile('.github/workflows/ci.yml', 'utf8');
-if (!ci.includes('node-version: 26') || !ci.includes('run verify:release')) {
-  failures.push('ci.yml must retain Node 26 and the release verification gate.');
+const ciNodeMajors = [...ci.matchAll(/node-version:\s*'?(\d+)/g)].map((match) => Number(match[1]));
+if (ciNodeMajors.length === 0) {
+  failures.push('ci.yml must declare a node-version.');
+} else if (ciNodeMajors.some((major) => major < engineFloorMajor)) {
+  failures.push(
+    `ci.yml runs Node ${ciNodeMajors.join(', ')}, below the engines.node floor of ${engineFloorMajor}.`,
+  );
+}
+if (!ci.includes('run verify:release')) {
+  failures.push('ci.yml must retain the release verification gate.');
 }
 
 const pluginCi = await readFile('.github/workflows/plugin-ci.yml', 'utf8');

@@ -5,6 +5,10 @@
 // runtimes supplied by Signal K Admin.
 const path = require('node:path');
 const { ModuleFederationPlugin } = require('webpack').container;
+// The share map ships with the shared UI release the panel bundles, so this
+// file cannot drift from it. `hostNotes` on the same entry records why the
+// shares are non-strict singletons.
+const { shared } = require('signalk-nearlcrews-ui/federation');
 const pkg = require('./package.json');
 
 const containerName = pkg.name.replace(/[-@/]/g, '_');
@@ -19,15 +23,24 @@ module.exports = {
   // `.get` / `.init` exports. The legacy `library: { type: 'var' }`
   // path requires a classic script tag so the federation container var
   // lands on `window`, which never happens for ESM packages.
-  experiments: { outputModule: true },
+  // Native CSS support emits the CSS Modules as a stylesheet asset the
+  // remote links at runtime, instead of a style tag injected by a loader.
+  experiments: { css: true, outputModule: true },
   output: {
     path: path.resolve(__dirname, 'public'),
     clean: true,
     filename: '[name].js',
     chunkFilename: '[name].[contenthash].mjs',
+    cssChunkFilename: '[name].[contenthash].css',
     module: true,
     chunkFormat: 'module',
     uniqueName: containerName,
+  },
+  optimization: {
+    // Keep the exposed panel and the bundled shared UI in one async chunk. The
+    // remote still loads lazily, and one chunk avoids a second compression
+    // dictionary and module wrapper across panel and library code.
+    splitChunks: false,
   },
   module: {
     rules: [
@@ -54,21 +67,15 @@ module.exports = {
       },
       {
         test: /\.module\.css$/,
-        use: [
-          {
-            loader: 'style-loader',
-            options: { injectType: 'singletonStyleTag' },
-          },
-          {
-            loader: 'css-loader',
-            options: {
-              modules: {
-                localIdentName: 'orc_[name]__[local]--[hash:base64:5]',
-                namedExport: false,
-              },
-            },
-          },
-        ],
+        type: 'css/module',
+        parser: {
+          container: false,
+          dashedIdents: false,
+          namedExports: false,
+        },
+        generator: {
+          localIdentName: 'orc_[local]--[hash:base64:5]',
+        },
       },
     ],
   },
@@ -88,26 +95,7 @@ module.exports = {
       exposes: {
         './PluginConfigurationPanel': './src/configpanel/PluginConfigurationPanel',
       },
-      // Signal K Admin owns both stateful React runtimes. The shared UI can use
-      // React DOM for portals, so consuming both host singletons prevents a
-      // second renderer from crossing the host/component boundary. No
-      // strictVersion: the Admin registers its shares with a hardcoded version
-      // that understates the React it actually ships (2.24.0 registers 19.0.0
-      // while bundling 19.2.4), and with import: false a strict rejection
-      // leaves the panel unable to mount at all. A mismatch warns and
-      // continues instead.
-      shared: {
-        react: {
-          singleton: true,
-          requiredVersion: '^19.2.0',
-          import: false,
-        },
-        'react-dom': {
-          singleton: true,
-          requiredVersion: '^19.2.0',
-          import: false,
-        },
-      },
+      shared,
     }),
   ],
 };

@@ -1,4 +1,3 @@
-import type { RefObject } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import type { AnalyzerConfig, PanelConfig, PanelStatus, SavedNotice } from '../types.js';
 import { useConfig } from './useConfig.js';
@@ -16,11 +15,11 @@ export interface UseSaveLifecycle {
   setAnalyzerCfg: (id: string, patch: Partial<AnalyzerConfig>) => void;
   setSchedule: (id: string, pattern: string) => void;
   // The save lifecycle: the in-flight latch, the two-phase notice and its
-  // rendered text, the focus target beside the Save button, and the actions.
+  // rendered text, and the actions. Focus after Save and Discard belongs to
+  // the shared save bar, which moves it to its status line.
   saving: boolean;
   savedNotice: SavedNotice | null;
   noticeText: string;
-  savedNoticeRef: RefObject<HTMLDivElement | null>;
   onSave: () => void;
   onDiscard: () => void;
 }
@@ -40,15 +39,12 @@ export function useSaveLifecycle(
 
   // Latches between Save click and the next host configuration push so a rapid
   // double-click cannot fire two saves before the host resyncs. Cleared on the
-  // host's resync (below), by showSaveError, or by the fallback timer.
+  // host's resync (below), by a save failure, or by the fallback timer.
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState<SavedNotice | null>(null);
   // While awaiting a post-save restart, holds { prior: startedAt-at-save-time }.
   // Null when not awaiting one.
   const restartWatchRef = useRef<{ prior: number } | null>(null);
-  // Focus target when the Save button self-disables: the always-mounted save
-  // notice (a role=status live region), so focus does not drop to <body>.
-  const savedNoticeRef = useRef<HTMLDivElement>(null);
   // The 30s save-latch fallback timer, tracked so it is cleared on unmount.
   const latchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -85,9 +81,11 @@ export function useSaveLifecycle(
 
   // Auto-clear the saved-confirmation notice. A completed restart ("done")
   // clears quickly; one still showing "restarting" clears only on a generous
-  // fallback, so a stuck or failed restart does not pin the notice forever.
+  // fallback, so a stuck or failed restart does not pin the notice forever. A
+  // failure stays until the next save or discard: a message that disappears
+  // cannot be re-read.
   useEffect(() => {
-    if (!savedNotice) return;
+    if (!savedNotice || savedNotice.error) return;
     const handle = setTimeout(
       () => setSavedNotice(null),
       savedNotice.phase === NOTICE_DONE ? 6000 : 30000,
@@ -98,6 +96,7 @@ export function useSaveLifecycle(
   const onSave = (): void => {
     if (saving) return;
     setSaving(true);
+    const requestedAt = Date.now();
     try {
       save(cfg);
     } catch (err) {
@@ -108,11 +107,10 @@ export function useSaveLifecycle(
       }
       restartWatchRef.current = null;
       setSavedNotice({
-        at: new Date().toLocaleTimeString(),
+        requestedAt,
         phase: NOTICE_DONE,
         error: err instanceof Error ? err.message : String(err),
       });
-      savedNoticeRef.current?.focus();
       return;
     }
     // Arm the restart watcher only when a startedAt is known. With status null
@@ -121,29 +119,27 @@ export function useSaveLifecycle(
     // disarmed and let the auto-clear retire the notice instead.
     restartWatchRef.current =
       typeof status?.startedAt === 'number' ? { prior: status.startedAt } : null;
-    setSavedNotice({ at: new Date().toLocaleTimeString(), phase: NOTICE_RESTARTING });
+    setSavedNotice({ requestedAt, phase: NOTICE_RESTARTING });
     // Fallback: if the host never pushes a fresh configuration prop (the only
     // other path that clears `saving`), drop the latch after a generous timeout
     // so the Save button is not pinned forever on a silent failure.
     if (latchTimerRef.current) clearTimeout(latchTimerRef.current);
     latchTimerRef.current = setTimeout(() => setSaving((s) => (s ? false : s)), 30_000);
-    // The Save button is about to disable itself; move focus to the notice
-    // region so it does not drop to <body> and the result is announced.
-    savedNoticeRef.current?.focus();
   };
 
   const onDiscard = (): void => {
     discard();
-    // Discard self-disables once the buffer is clean; keep focus in the save bar.
-    savedNoticeRef.current?.focus();
+    // The reverted edits are what any pending notice described.
+    setSavedNotice(null);
   };
 
+  const at = savedNotice ? new Date(savedNotice.requestedAt).toLocaleTimeString() : '';
   const noticeText = savedNotice
     ? savedNotice.error
-      ? `Save failed at ${savedNotice.at}: ${savedNotice.error}`
+      ? `Save failed at ${at}: ${savedNotice.error}`
       : savedNotice.phase === NOTICE_DONE
-        ? `Saved at ${savedNotice.at}. Plugin restarted.`
-        : `Save requested at ${savedNotice.at}. Plugin restarting...`
+        ? `Saved at ${at}. Plugin restarted.`
+        : `Save requested at ${at}. Plugin restarting…`
     : '';
 
   return {
@@ -155,7 +151,6 @@ export function useSaveLifecycle(
     saving,
     savedNotice,
     noticeText,
-    savedNoticeRef,
     onSave,
     onDiscard,
   };

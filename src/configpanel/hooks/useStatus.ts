@@ -13,9 +13,10 @@ export interface UseStatus {
   // True while polling is stalled: a poll failed, or the last good snapshot has
   // aged past the threshold. Flips back false on the next success.
   stale: boolean;
-  // Age (ms) of the last good snapshot, defined only while stale and after at
-  // least one success. Stays live because the interval re-renders while stale.
-  staleAgeMs: number | undefined;
+  // Epoch milliseconds of the last good snapshot, published when the stale
+  // marker appears and null before the first success. RelativeAge owns the
+  // clock from there, so nothing here re-renders to advance the age text.
+  lastSuccessAt: number | null;
 }
 
 // Polls /status on an interval, deep-equality-guarding setStatus so an unchanged
@@ -25,26 +26,25 @@ export interface UseStatus {
 // suppress writes after unmount and from an older request that resolves late.
 //
 // The healthy steady state produces no re-render for an unchanged payload: the
-// success timestamp lives in a ref, and each state setter receives its existing
-// value. Only while stale does the interval refresh the displayed snapshot age.
+// success timestamp lives in a ref and reaches state only when the stale marker
+// appears, and each state setter receives its existing value.
 export function useStatus(): UseStatus {
   const [status, setStatus] = useState<PanelStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
-  const [staleAgeMs, setStaleAgeMs] = useState<number | undefined>(undefined);
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
   const lastSuccessRef = useRef<number | null>(null);
-  // Mirror of `stale` readable from the interval without re-arming it.
-  const staleRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     let latestRequest = 0;
     let activeController: AbortController | null = null;
 
     const markStale = (value: boolean): void => {
-      staleRef.current = value;
       setStale(value);
-      const lastSuccess = lastSuccessRef.current;
-      setStaleAgeMs(value && lastSuccess !== null ? Date.now() - lastSuccess : undefined);
+      // Publish the freshness timestamp only when the marker appears. A repeat
+      // failure sets the same value, which React bails out of, so a stalled
+      // poll costs no renders at all.
+      if (value) setLastSuccessAt(lastSuccessRef.current);
     };
 
     const tick = async (): Promise<void> => {
@@ -81,13 +81,8 @@ export function useStatus(): UseStatus {
       if (document.visibilityState !== 'visible') return;
       const last = lastSuccessRef.current;
       if (last !== null && Date.now() - last > STALE_AFTER_MS) {
-        staleRef.current = true;
         setStale(true);
-      }
-      // While stale the age text must advance even when no other state moves.
-      if (staleRef.current) {
-        const lastSuccess = lastSuccessRef.current;
-        setStaleAgeMs(lastSuccess === null ? undefined : Date.now() - lastSuccess);
+        setLastSuccessAt(last);
       }
       void tick();
     };
@@ -105,5 +100,5 @@ export function useStatus(): UseStatus {
     };
   }, []);
 
-  return { status, statusError, stale, staleAgeMs };
+  return { status, statusError, stale, lastSuccessAt };
 }
