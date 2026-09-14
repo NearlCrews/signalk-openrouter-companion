@@ -1,18 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenRouterClient, OpenRouterError } from '../src/core/openrouter.js';
+import { jsonResponse } from './_mocks.js';
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-
-function jsonResponse(
-  status: number,
-  body: unknown,
-  headers: Record<string, string> = {},
-): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json', ...headers },
-  });
-}
 
 function makeClient(overrides: Partial<ConstructorParameters<typeof OpenRouterClient>[0]> = {}) {
   return new OpenRouterClient({
@@ -676,7 +666,13 @@ describe('OpenRouterClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('retries a 503 marked provider_overloaded, honoring Retry-After', async () => {
+  // random()=1 pins the first ladder rung at its full 500 ms, so the header is
+  // what gates the retry in both cases: a 2 second wait is honored, and an
+  // hour-long one is capped at the 60 second ceiling rather than pinning the run.
+  it.each([
+    ['2', 2_000, 'after-overload'],
+    ['3600', 60_000, 'after-cap'],
+  ])('retries an overloaded 503 with Retry-After %s at %d ms', async (header, firesAt, reply) => {
     vi.useFakeTimers();
     fetchMock
       .mockResolvedValueOnce(
@@ -689,60 +685,23 @@ describe('OpenRouterClient', () => {
               metadata: { error_type: 'provider_overloaded' },
             },
           },
-          { 'retry-after': '2' },
+          { 'retry-after': header },
         ),
       )
       .mockResolvedValueOnce(
         jsonResponse(200, {
-          choices: [{ message: { content: 'after-overload' } }],
+          choices: [{ message: { content: reply } }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
-    // random()=1 pins the first ladder rung at its full 500ms, well under the
-    // 2000ms Retry-After, so the header is what gates the retry.
     const c = makeClient({ random: () => 1 });
     const p = c.complete({ system: 's', user: 'u' });
-    await vi.advanceTimersByTimeAsync(1999);
+    await vi.advanceTimersByTimeAsync(firesAt - 1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const r = await p;
-    expect(r.text).toBe('after-overload');
-    vi.useRealTimers();
-  });
-
-  it('caps the Retry-After of an overloaded 503 at the 60 second ceiling', async () => {
-    vi.useFakeTimers();
-    fetchMock
-      .mockResolvedValueOnce(
-        jsonResponse(
-          503,
-          {
-            error: {
-              code: 503,
-              message: 'Provider overloaded',
-              metadata: { error_type: 'provider_overloaded' },
-            },
-          },
-          { 'retry-after': '3600' },
-        ),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse(200, {
-          choices: [{ message: { content: 'after-cap' } }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        }),
-      );
-    // An hour-long Retry-After is capped, not obeyed: the retry fires at the
-    // 60s ceiling instead of pinning the run for the full hour.
-    const c = makeClient({ random: () => 1 });
-    const p = c.complete({ system: 's', user: 'u' });
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const r = await p;
-    expect(r.text).toBe('after-cap');
+    expect(r.text).toBe(reply);
     vi.useRealTimers();
   });
 

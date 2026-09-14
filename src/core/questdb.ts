@@ -31,6 +31,29 @@ export function stripTrailingSlashes(value: string): string {
   return end === value.length ? value : value.slice(0, end);
 }
 
+// The base URL a history client actually dials: credentials, query, and
+// fragment removed (each client owns authentication and its own query) and no
+// trailing slash, so a path is appended without doubling one. Lives beside the
+// trailing-slash rule both clients already share, so the two clients and the
+// admin probe route normalize a URL the same way by construction rather than
+// by three copies agreeing. An unparseable value is returned trimmed, which
+// preserves the fail-soft path for a hand-edited config: the fetch rejects on
+// probe and the optional provider degrades cleanly.
+export function normalizeBaseUrl(value: string): string {
+  const rawUrl = value.trim();
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    parsed.pathname = stripTrailingSlashes(parsed.pathname);
+    return stripTrailingSlashes(parsed.href);
+  } catch {
+    return stripTrailingSlashes(rawUrl);
+  }
+}
+
 // Quote and escape a set of SignalK paths into a comma-separated list for a
 // SQL `path IN (...)` clause.
 function quotedPathList(paths: readonly string[]): string {
@@ -106,20 +129,7 @@ export class QuestDBClient implements HistoryProvider {
   private readonly baseUrl: string;
 
   constructor(cfg: QuestDBCfg) {
-    const rawUrl = cfg.url.trim();
-    try {
-      const parsed = new URL(rawUrl);
-      parsed.username = '';
-      parsed.password = '';
-      parsed.search = '';
-      parsed.hash = '';
-      parsed.pathname = stripTrailingSlashes(parsed.pathname);
-      this.baseUrl = stripTrailingSlashes(parsed.href);
-    } catch {
-      // Preserve the old fail-soft behavior for a hand-edited invalid config:
-      // fetch rejects during probe, and the optional provider degrades cleanly.
-      this.baseUrl = stripTrailingSlashes(rawUrl);
-    }
+    this.baseUrl = normalizeBaseUrl(cfg.url);
   }
 
   // Resolves false for a reachable server that answers wrongly (non-2xx, or a

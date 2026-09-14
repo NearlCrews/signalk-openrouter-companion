@@ -6,7 +6,7 @@ import type {
   PathWindowSummary,
 } from './history.js';
 import { fetchWithTimeout } from './http.js';
-import { stripTrailingSlashes } from './questdb.js';
+import { normalizeBaseUrl } from './questdb.js';
 
 export type InfluxDBVersion = '1' | '2';
 
@@ -51,21 +51,6 @@ const INFLUXDB_ENGINE_MAX_BYTES = 64 * 1024 * 1024;
 const INFLUXDB_ENGINE_MAX_SAMPLES = 2_000_000;
 const INFLUXDB_ENGINE_TIMEOUT_MS = 60_000;
 const INFLUXDB_ENGINE_BUDGET_ERROR = 'InfluxDB engine history exceeded its bounded query budget';
-
-function normalizeBaseUrl(value: string): string {
-  const rawUrl = value.trim();
-  try {
-    const parsed = new URL(rawUrl);
-    parsed.username = '';
-    parsed.password = '';
-    parsed.search = '';
-    parsed.hash = '';
-    parsed.pathname = stripTrailingSlashes(parsed.pathname);
-    return stripTrailingSlashes(parsed.href);
-  } catch {
-    return stripTrailingSlashes(rawUrl);
-  }
-}
 
 export function escapeInfluxIdentifier(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');

@@ -9,6 +9,31 @@
 // To tell the two abort causes apart after a throw, check the caller's signal:
 // callerSignal?.aborted is true only for a caller abort, and stays false for a
 // timeout (the timeout aborts the combined signal, not the caller's).
+// Settle with `work`, or reject as soon as the caller's signal aborts, with the
+// signal's own reason. Only this caller's wait ends: the work itself is left to
+// finish or time out on its own, which is what a shared in-flight promise needs
+// so one caller walking away cannot cancel another's. `onAbort` releases a
+// resource the wait owned, such as the timer behind a delay.
+export function abortable<T>(
+  work: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void,
+): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) {
+    onAbort?.();
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = (): void => {
+      onAbort?.();
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', handleAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', handleAbort));
+  });
+}
+
 export function fetchWithTimeout(
   url: string,
   init: RequestInit,

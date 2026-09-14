@@ -1,5 +1,5 @@
 import type { ProviderRoutingCfg } from '../types.js';
-import { fetchWithTimeout } from './http.js';
+import { abortable, fetchWithTimeout } from './http.js';
 
 interface OpenRouterCfg {
   apiKey: string;
@@ -344,22 +344,13 @@ function backoffMs(attempt: number, retryAfterMs: number | null, random: () => n
 }
 
 // Resolve after `ms`, or reject early with the caller's abort reason if the
-// signal trips first. Used for the inter-attempt backoff wait.
+// signal trips first. Used for the inter-attempt backoff wait. The abort hook
+// clears the pending timer so a cancelled backoff holds the event loop open no
+// longer than the caller does.
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    let timer: ReturnType<typeof setTimeout>;
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener('abort', onAbort, { once: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const wait = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
   });
+  return abortable(wait, signal, () => clearTimeout(timer));
 }
