@@ -1,7 +1,7 @@
-import type { TriggerCtx, TriggerSpec } from '../analyzers/Analyzer.js';
 import type { AnalyzerId } from '../analyzers/ids.js';
 import type { AnalyzerTriggerCfg } from '../types.js';
 import { pluginPutPath } from './paths.js';
+import type { TriggerCtx, TriggerSpec } from './triggerContext.js';
 
 // Every analyzer wires the same cron + put parsing from its triggers cfg, then
 // optionally maps each event subkind string to an analyzer-specific TriggerSpec.

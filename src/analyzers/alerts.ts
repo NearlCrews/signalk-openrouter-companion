@@ -93,6 +93,19 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, ALERTS_DEFAULT_SYSTEM_PROMPT);
   }
 
+  // One run subject per (bank, alert kind). That pair is exactly what
+  // batteryAlertPath builds, so two banks crossing the same threshold inside
+  // one LLM call window are independent runs and neither is lost. Enter and
+  // exit deliberately share a key: they publish on the same path and the same
+  // `signalk-nmea2000-emitter-cannon` cache slot, so serializing them is what
+  // stops a recovery from overtaking the alert it clears. A run with no battery
+  // event (a manual fire) has no subject and falls back to the analyzer id.
+  runKey(ctx: TriggerCtx): string | null {
+    const subkind = ctx.batteryEvent?.subkind;
+    if (!subkind || !ctx.bankId) return null;
+    return `${ctx.bankId}\u0000${ALERT_ROUTING[subkind].kind}`;
+  }
+
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<AlertInput | null> {
     if (ctx.kind !== 'battery-event' || !ctx.batteryEvent || !ctx.bankId) return null;
     const bankNode = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH))?.[ctx.bankId];

@@ -34,6 +34,42 @@ describe('plugin lifecycle', () => {
     expect(app.registeredPuts.length).toBeGreaterThan(0);
   });
 
+  it.each(['.', '..'])('falls back to the default report log for a %s filename', async (name) => {
+    // Both satisfy basename(x) === x, so both used to pass the guard, and
+    // neither names a file: every append would fail with EISDIR, and the
+    // reports route would answer 500 instead of an empty history.
+    const plugin = createPlugin(app as never);
+    const routes = new Map<string, (req: RouteRequest, res: RouteResponse) => unknown>();
+    plugin.registerWithRouter({
+      get: (path, handler) => routes.set(path, handler),
+      post: (path, handler) => routes.set(path, handler),
+    });
+    plugin.start(
+      { openrouter: { apiKey: 'sk-x' }, output: { logFilename: name } } as never,
+      () => {},
+    );
+    await plugin._whenReady();
+    let code = 200;
+    let payload: unknown;
+    const res: RouteResponse = {
+      status(c) {
+        code = c;
+        return res;
+      },
+      json(body) {
+        payload = body;
+        return res;
+      },
+      send() {
+        return res;
+      },
+    };
+    await routes.get('/api/analyzers/:id/reports')?.({ params: { id: 'health' } }, res);
+    expect(code).toBe(200);
+    expect(payload).toMatchObject({ ok: true, reports: [] });
+    await plugin.stop();
+  });
+
   it('subscribes to discovered engine RPM paths and registers PUT handler', () => {
     app.availablePaths = ['propulsion.port.revolutions', 'propulsion.starboard.revolutions'];
     const plugin = createPlugin(app as never);
@@ -294,6 +330,10 @@ describe('plugin lifecycle', () => {
       () => {},
     );
     await plugin._whenReady();
+    // Startup attaches whatever the first probe answered (null here, the
+    // source was unreachable). This case is about the recovery probe that
+    // settles after stop, so only calls from here on matter.
+    setHistorySpy.mockClear();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(probeSpy).toHaveBeenCalledTimes(2);
 
