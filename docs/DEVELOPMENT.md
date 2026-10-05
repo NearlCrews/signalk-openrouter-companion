@@ -479,10 +479,10 @@ Step by step:
 GitHub Actions workflows under `.github/workflows/`:
 
 - `plugin-ci.yml`: reuses the upstream Signal K plugin workflow on Node 22, 24,
-  and 26 across Linux x64, Linux arm64, macOS, and Windows. The Node 20 armv7
-  lane is disabled because the package now requires Node 22.18 or newer. Its
-  real Signal K server integration lane installs and starts the packed plugin
-  on both Signal K 2.25.0 and the latest server release.
+  and 26 across Linux x64, Linux arm64, macOS, and Windows. The upstream
+  workflow has no armv7 lane, so its results do not cover 32-bit ARM devices.
+  Its real Signal K server integration lane installs and starts the packed
+  plugin on both Signal K 2.25.0 and the latest server release.
 - `ci.yml`: runs the full release gate on Node 26 with npm 11.18.0, including
   Chromium, Firefox, WebKit, package validation, and full and runtime audits.
 - `codeql.yml`: CodeQL static analysis.

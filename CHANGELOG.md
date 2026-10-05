@@ -6,6 +6,13 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed the pinned official Signal K plugin workflow to the 2026-10-04
+  master commit and dropped the retired `enable-armv7` input. The upstream
+  workflow no longer has an armv7 job, and its Node 22 lanes now install with
+  npm 11.
+
 <a id="v080"></a>
 
 ## [0.8.0] - 2026-09-14
