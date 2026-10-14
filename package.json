@@ -92,9 +92,6 @@
   "dependencies": {
     "croner": "^10.0.1"
   },
-  "overrides": {
-    "smol-toml": "1.8.0"
-  },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@biomejs/biome": "^2.5.13",
@@ -107,7 +104,7 @@
     "@typescript/native": "npm:typescript@7.0.2",
     "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "5.0.0",
-    "cspell": "10.3.1",
+    "cspell": "10.4.0",
     "dependency-cruiser": "^18.3.0",
     "esbuild": "^0.28.2",
     "esbuild-loader": "^4.5.0",
@@ -116,7 +113,7 @@
     "globals": "^17.12.0",
     "knip": "^6.35.1",
     "linkinator": "8.1.0",
-    "markdownlint-cli2": "0.23.2",
+    "markdownlint": "0.41.1",
     "publint": "0.3.24",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -153,8 +150,8 @@
     "type-check:ts6": "node scripts/tsc.mjs --all --ts6",
     "lint": "npm run lint:code && npm run lint:docs && npm run spellcheck",
     "lint:code": "biome lint . && eslint . --cache --cache-location .cache/eslint",
-    "lint:docs": "markdownlint-cli2 \"*.md\" \".github/*.md\" \"docs/*.md\"",
-    "lint:docs:fix": "markdownlint-cli2 --fix \"*.md\" \".github/*.md\" \"docs/*.md\"",
+    "lint:docs": "node scripts/check-markdown.mjs",
+    "lint:docs:fix": "node scripts/check-markdown.mjs --fix",
     "lint:fix": "biome lint --write . && eslint . --fix --cache --cache-location .cache/eslint",
     "spellcheck": "cspell lint --no-progress --show-suggestions --validate-directives --no-cache README.md CHANGELOG.md THIRD_PARTY_NOTICES.md CLAUDE.md \".github/**/*.{md,yml,yaml}\" \"docs/*.md\"",
     "check:links:local": "linkinator \"*.md\" \"docs/*.md\" \".github/*.md\" --markdown --check-fragments --skip \"^https?://(?!127\\\\.0\\\\.0\\\\.1:)\" --verbosity error",
