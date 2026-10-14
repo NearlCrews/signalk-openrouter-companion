@@ -1,6 +1,8 @@
 #!/bin/sh
-# Full verification gate before a push. Commands run one at a time to stay within
-# the memory budget of smaller Signal K development hosts.
+# Full local gate before a push: static checks, type checks, coverage, builds,
+# and size budgets. Browser suites and the development-tree audit run in CI and
+# in verify:release. Commands run one at a time to stay within the memory
+# budget of smaller Signal K development hosts.
 set -e
 
 if [ "$OPENROUTER_COMPANION_SKIP_PREPUSH" = "1" ]; then
@@ -23,7 +25,7 @@ if [ -n "$STRAY_BRANCHES" ]; then
   echo "$STRAY_BRANCHES" | sed 's/^/    /'
 fi
 
-echo "[pre-push] browser verification"
-npm run --silent verify:browser
+echo "[pre-push] verification"
+npm run --silent verify
 
 echo "[pre-push] all gates green"

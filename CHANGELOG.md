@@ -12,6 +12,30 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   master commit and dropped the retired `enable-armv7` input. The upstream
   workflow no longer has an armv7 job, and its Node 22 lanes now install with
   npm 11.
+- A new CI job installs the packed plugin into Signal K 2.25.0 and the latest
+  server, starts each one, and mounts the production configuration panel
+  through Signal K Admin in a real browser. It replaces the official plugin
+  workflow's server lane, which only checked that the plugin loaded.
+- Pushes and pull requests now gate on the runtime dependency audit the
+  plugin registry scores. The development-tree audit moved to the weekly
+  checks workflow, beside the external link check, and still runs before
+  every release, so an advisory in build tooling no longer fails every CI
+  run.
+- The official plugin workflow also runs weekly. The plugin registry credits
+  a release only while one of that workflow's runs is among the newest 20 on
+  the published commit, and scheduled and Dependabot runs had pushed 0.8.0's
+  run out of that window.
+- The pre-push hook runs `npm run verify`; browser suites run in CI, and
+  `npm run verify:browser` covers panel changes locally. The repository
+  checks now reject relative README links, strict Module Federation shares,
+  and a workflow that runs a Playwright suite without installing every
+  browser it uses.
+- Documentation lint calls the markdownlint library directly instead of
+  markdownlint-cli2, whose file matching pulled in `braces` with a high
+  advisory that has no fixed release. With cspell 10.4.0 and in-range
+  lockfile updates for undici, brace-expansion, source-map-js, and fast-uri,
+  the development-tree audit reports no high or moderate advisories. None of
+  these packages ship in the plugin.
 
 <a id="v080"></a>
 

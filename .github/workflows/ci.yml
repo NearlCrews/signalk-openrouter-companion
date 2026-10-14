@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -27,7 +27,9 @@ jobs:
           cache: npm
       - run: npx --yes npm@11.18.0 ci
       - run: npx playwright install --with-deps chromium firefox webkit
-      - run: npx --yes npm@11.18.0 run verify:release
+      # The development-tree audit runs weekly in weekly.yml and at release;
+      # the runtime audit the plugin registry scores runs here.
+      - run: npx --yes npm@11.18.0 run verify:ci
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
@@ -47,3 +49,70 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  signalk-admin:
+    name: Signal K Admin (${{ matrix.signalk_server }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The documented server floor and the current release.
+        signalk_server: ['2.25.0', 'latest']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npx --yes npm@11.18.0 ci
+      - run: npx --yes npm@11.18.0 run build
+      - name: Pack the plugin
+        run: |
+          mkdir artifacts
+          npx --yes npm@11.18.0 pack --ignore-scripts --pack-destination artifacts
+      - name: Install in Signal K ${{ matrix.signalk_server }}
+        env:
+          SIGNALK_SERVER_VERSION: ${{ matrix.signalk_server }}
+        # zizmor: ignore[adhoc-packages] This job must install the exact matrix server version and
+        # the locally packed tarball because those artifacts are what the integration test validates.
+        run: |
+          mkdir -p "$RUNNER_TEMP/signalk-host"
+          cd "$RUNNER_TEMP/signalk-host"
+          npm init --yes
+          npm install "signalk-server@${SIGNALK_SERVER_VERSION}"
+          npm install "$GITHUB_WORKSPACE"/artifacts/*.tgz --ignore-scripts
+          node "$GITHUB_WORKSPACE/scripts/link-signalk-admin.mjs" "$RUNNER_TEMP/signalk-host"
+          mkdir -p plugin-config-data
+          echo '{"enabled":true,"configuration":{}}' > plugin-config-data/signalk-openrouter-companion.json
+      - name: Mount the production panel in Signal K Admin
+        env:
+          PORT: 3000
+          SIGNALK_BROWSER_CHANNEL: chrome
+          SIGNALK_URL: http://127.0.0.1:3000
+        run: |
+          set -euo pipefail
+          export SIGNALK_NODE_CONFIG_DIR="$RUNNER_TEMP/signalk-host"
+          cd "$SIGNALK_NODE_CONFIG_DIR"
+          npx --no-install signalk-server > "$RUNNER_TEMP/signalk.log" 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid 2>/dev/null || true' EXIT
+          ready=false
+          for _ in $(seq 1 45); do
+            if curl --fail --silent "$SIGNALK_URL/signalk/v1/api/" > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/signalk.log"
+            exit 1
+          fi
+          cd "$GITHUB_WORKSPACE"
+          if ! npx --yes npm@11.18.0 run test:integration; then
+            cat "$RUNNER_TEMP/signalk.log"
+            exit 1
+          fi

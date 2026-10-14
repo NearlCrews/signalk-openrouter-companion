@@ -107,7 +107,8 @@ When using this plugin:
 
 This project uses:
 
-- `npm audit` for full-tree and runtime-only vulnerability scanning in CI
+- `npm audit` for runtime-only vulnerability scanning on every push and pull
+  request, and full-tree scanning in a weekly workflow and before every release
 - Automated dependency updates via Dependabot for security patches
 
 Run a security audit:

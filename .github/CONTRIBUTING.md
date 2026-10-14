@@ -39,17 +39,23 @@ those before proposing a structural change.
    npx playwright install --with-deps chromium firefox webkit
    ```
 
-   Then run `npm run verify`.
-3. Make focused commits with clear messages (see below).
+   Then run `npm run hooks` once to activate the repository hooks, and
+   `npm run verify`.
+3. Make focused commits with clear messages (see below). The commit hook
+   runs `npm run verify:commit`: formatting, lint, documentation, link and
+   repository guard checks, dependency boundaries, and dead code.
 4. Add or update tests under `tests/` and keep the existing suite green.
-5. Run the browser gate locally before pushing:
+5. Push. The push hook runs `npm run verify`, which adds every type check,
+   coverage, the production builds, and size budgets to the commit gate. It
+   must be clean. When the change touches the configuration panel, also run
+   the Chromium panel suite before pushing:
 
    ```bash
    npm run verify:browser
    ```
 
-   This runs formatting, lint, boundary, dead-code, type, coverage, build,
-   size, and production-panel browser checks. It must be clean.
+   CI runs the cross-browser suite, package validation, the runtime
+   dependency audit, and a real Signal K Admin mount of the packed panel.
 
 6. Update documentation (`README.md`, `CHANGELOG.md`, `docs/`) as needed.
 7. Open a pull request against `main` with a clear description, and fill

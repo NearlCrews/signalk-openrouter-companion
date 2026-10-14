@@ -227,8 +227,11 @@ one chunk beside `remoteEntry.js`. `npm run check:panel` runs the library's
 version, the bundled version stamp, the absence of a React runtime, the
 published share map in both the remote and the webpack configuration, and the
 gzip size against `scripts/panel-size-baseline.json`; the local
-`check-panel-bundle.mjs` then asserts the container is a real ES module and
-that the only React module in the graph is the JSX runtime.
+`check-panel-bundle.mjs` then asserts that no share is strict, that the
+container is a real ES module, and that the only React module in the graph is
+the JSX runtime. A strict share, set explicitly or left to webpack's default
+for a non-singleton share with a local fallback, refuses Signal K 2.24 Admin,
+which registers React as 19.0.0, so the panel would never mount there.
 
 ## Tests
 
@@ -240,8 +243,8 @@ npm run test:browser   # current production remote build in Chromium
 npm run test:browser:cross # desktop and mobile Chromium, Firefox, and WebKit
 npm run test:browser:with-build # build, then run Chromium
 npm run test:browser:cross:with-build # build, then run every browser project
-npm run test:host-asset # running Signal K Admin requests the installed remote
-npm run test:integration # unsecured CI server loads the plugin and configurator remote
+npm run test:integration # disposable Signal K server mounts the packed panel in Admin
+npm run test:guards    # unit tests for the repository guard scripts
 ```
 
 The browser fixture uses port 4174 by default. Set `ORC_BROWSER_PORT` to an
@@ -257,9 +260,31 @@ of `assets/icons/` (the 72, 96, and 512 pixel renders and `icon.svg`, the
 vector master they come from) stays in the repository for regenerating the
 192 pixel PNG without adding 36 kB to every install.
 
-`test:integration` targets the unsecured temporary server used by plugin-ci. On
-a secured, installed server, use `test:host-asset` to verify the public Admin UI
-and configurator asset without requesting authenticated plugin metadata.
+`test:integration` checks the packed plugin inside a real Signal K server: the
+server loads and enables it, serves the ESM configurator remote, and Signal K
+Admin mounts the production panel in a browser with the pinned shared UI
+version. It needs a disposable server with security off and reads its address
+from `SIGNALK_URL`, which has no default because port 3000 on a development
+host is usually a live server. The CI `signalk-admin` job builds that host
+from the packed tarball. To reproduce it locally:
+
+1. Run `npm run build`, then `npm pack --ignore-scripts` into an empty
+   directory.
+2. In a fresh temporary directory, run `npm init --yes`, install
+   `signalk-server` at the version under test, install the tarball with
+   `--ignore-scripts`, and run `node scripts/link-signalk-admin.mjs` on that
+   directory.
+3. Write `plugin-config-data/signalk-openrouter-companion.json` there as
+   `{"enabled":true,"configuration":{}}`, and a `settings.json` with
+   `"mdns": false` so the test server does not advertise itself on the
+   vessel network.
+4. Start `npx signalk-server` from that directory with
+   `SIGNALK_NODE_CONFIG_DIR` set to it and `PORT`, `NMEA0183PORT`, and
+   `TCPSTREAMPORT` set to unused ports, then run `npm run test:integration`
+   with `SIGNALK_URL` pointing at it. Stop the server afterwards.
+
+`SIGNALK_BROWSER_CHANNEL` selects an installed browser channel such as
+`chrome`; without it the check uses Playwright's Chromium.
 
 The unit and integration suite covers:
 
@@ -299,7 +324,7 @@ for every edge rather than exempting type ones.
 
 Biome owns formatting and its recommended lint rules. ESLint adds typed promise
 checks and React Hooks rules. The documentation gate uses exact-pinned
-markdownlint-cli2 0.23.2, cspell 10.3.0, and Linkinator 8.1.0. Local files and
+markdownlint 0.41.1, cspell 10.4.0, and Linkinator 8.1.0. Local files and
 fragments block the commit gate. External links run in a scheduled workflow
 with bounded concurrency, retries, and rate-limit warnings because remote rate
 limits and bot protection make them unsuitable for the merge gate. The repo
@@ -353,11 +378,17 @@ declarations in `dist/` are unchanged across that collapse.
   entry is current. Dependabot bumps `devDependencies` and
   never touches `allowScripts`, so a bump PR that skips this step installs with
   an unreviewed-install-script warning.
-- The `overrides` block carries `smol-toml` alone, and it is load-bearing:
-  `markdownlint-cli2` pins `smol-toml` to exactly 1.7.0 while `knip` and
-  `cspell-config-lib` take `^1.8.0`, so without it npm nests a second,
-  vulnerable copy. Do not add an override for a version a dependency already
-  declares: it is a no-op that silently holds the next upgrade back.
+- `npm run lint:docs` calls the `markdownlint` library through
+  `scripts/check-markdown.mjs` (with `--fix` behind `lint:docs:fix`) instead
+  of `markdownlint-cli2`. The wrapper only expands globs, and its glob stack
+  reached `braces` 3.0.3, which carries a high advisory with no fixed
+  release (GHSA-vfj7-8cjw-p6xm as of 2026-10-14). The rules live in
+  `.markdownlint.json`, and the script lints the root, `.github`, and `docs`
+  guides one level deep, so the memos under `docs/superpowers` stay out.
+  Dropping the wrapper also dropped its exact `smol-toml` 1.8.0 pin
+  (GHSA-r4xh-jqrq-34v2), so the manifest needs no `overrides` block. The
+  development-tree audit still reports three lows in `katex`, which
+  markdownlint's math extension holds at 0.16.
 
 ## Verification gates
 
@@ -368,14 +399,26 @@ npm run check:links:external # networked external-link maintenance check
 npm run ci:workflows   # action pins and release-workflow invariants
 npm run verify:fast    # commit gate plus all type checks
 npm run verify         # fast gate, coverage, production build, and size budgets
-npm run verify:browser # full local gate plus Chromium
-npm run verify:release # cross-browser, package, and dependency audit checks
+npm run verify:browser # verify plus Chromium
+npm run verify:ci      # verify, cross-browser, package, and runtime audit checks
+npm run verify:release # verify:ci plus the development-tree audit
 ```
 
-Run `npm run hooks` once to activate the Binnacle-style repository hooks. The
-commit hook runs `verify:commit`, and the push hook runs `verify:browser`.
-`prepublishOnly` and the release workflow both run `verify:release` before npm
-can publish an artifact.
+Run `npm run hooks` once to activate the repository hooks. The commit hook runs
+`verify:commit`, and the push hook runs `verify`; neither runs a browser suite
+or the development-tree audit. Run `verify:browser` as well before pushing a
+panel change. CI runs `verify:ci`, and `prepublishOnly` and the release
+workflow both run `verify:release` before npm can publish an artifact.
+
+`verify:commit` includes the repository guards. `npm run test:guards` unit
+tests the shared policy module, `scripts/guards.mjs`, and `npm run
+ci:workflows` applies it: action pins, cancellation of superseded runs, which
+gates run on push and which run weekly or at release, the script and hook
+vocabulary above, the Signal K server versions the Admin job covers, and a
+Playwright browser install for every engine the configuration's projects use
+in each workflow that runs a suite. `npm run lint:docs` rejects any relative
+link target in `README.md`, since the Signal K App Store renders README links
+unmodified; relative image paths stay allowed.
 
 The panel's size gate lives in `scripts/panel-size-baseline.json`, read by
 `snui-check-consumer` during `npm run check:panel`: the baseline records the
@@ -403,12 +446,10 @@ After each code change, `npm run build && sudo systemctl restart signalk.service
 
 For panel-only iteration: `npm run build:panel && sudo systemctl restart signalk.service` (panel changes do not require the backend to rebuild). After the restart, hard-refresh the admin tab so the browser drops the cached `remoteEntry.js`.
 
-Run `npm run test:host-asset` after the restart to verify that Signal K Admin
-discovers and requests this plugin's production Module Federation asset. This
-is an asset-registration smoke test, not an authenticated configuration-page
-test. The production browser fixture separately initializes and mounts the
-container. Set `SIGNALK_URL` when the test server is not on
-`http://127.0.0.1:3000`.
+Open the plugin's page in Signal K Admin after the restart to confirm the
+panel mounts. The automated equivalent is `npm run test:integration` against
+a disposable server, described under Tests, and the production browser
+fixture separately initializes and mounts the container.
 
 To inspect the served plugin schema:
 
@@ -479,12 +520,23 @@ Step by step:
 GitHub Actions workflows under `.github/workflows/`:
 
 - `plugin-ci.yml`: reuses the upstream Signal K plugin workflow on Node 22, 24,
-  and 26 across Linux x64, Linux arm64, macOS, and Windows. The upstream
-  workflow has no armv7 lane, so its results do not cover 32-bit ARM devices.
-  Its real Signal K server integration lane installs and starts the packed
-  plugin on both Signal K 2.25.0 and the latest server release.
-- `ci.yml`: runs the full release gate on Node 26 with npm 11.18.0, including
-  Chromium, Firefox, WebKit, package validation, and full and runtime audits.
+  and 26 across Linux x64, Linux arm64, macOS, and Windows for install, build,
+  and unit tests. The upstream workflow has no armv7 lane, so its results do
+  not cover 32-bit ARM devices. Its format, coverage, and server integration
+  lanes stay off because `ci.yml` covers each of them once. It also runs
+  weekly: the Signal K plugin registry credits a release only while a run of
+  the reusable workflow is among the newest 20 runs on the published commit,
+  and scheduled and Dependabot runs keep landing on main after a release.
+- `ci.yml`: the `verify` job runs `verify:ci` on Node 26 with npm 11.18.0:
+  every static check, coverage, the production builds, Chromium, Firefox,
+  and WebKit, package validation, and the runtime audit. The `signalk-admin`
+  job packs the plugin, installs the tarball into Signal K 2.25.0 (the
+  documented floor) and the latest server, starts each one, and runs
+  `test:integration`, which mounts the production panel through Signal K
+  Admin in Chrome.
+- `weekly.yml`: the networked external-link check and the development-tree
+  audit, weekly and on demand. They share one workflow so each week adds a
+  single run to main.
 - `codeql.yml`: CodeQL static analysis.
 - `workflow-security.yml`: pinned actionlint and zizmor checks.
 - `publish.yml`: writes the release commit to the package's `gitHead`, verifies
@@ -492,9 +544,9 @@ GitHub Actions workflows under `.github/workflows/`:
   metadata, and publishes the verified artifact when a non-prerelease GitHub
   release is published.
 
-The validation workflows run on pushes and pull requests to `main`, and CodeQL
-also runs weekly. Publishing runs only for a published, non-prerelease GitHub
-release.
+The validation workflows run on pushes and pull requests to `main`; CodeQL,
+workflow security, and plugin CI also run weekly. Publishing runs only for a
+published, non-prerelease GitHub release.
 
 ## Tech stack
 

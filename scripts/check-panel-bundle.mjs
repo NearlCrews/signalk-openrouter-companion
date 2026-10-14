@@ -1,8 +1,25 @@
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { strictShares } from './guards.mjs';
 
 // `snui-check-consumer`, which `check:panel` runs first, owns the exact pin,
 // the shared UI version stamp, the React runtime markers, the published share
 // map, and the size baseline. What stays here is specific to this package.
+
+// The consumer check proves the configured shares equal the published map,
+// not that the map is safe. Signal K 2.24 Admin registers React as 19.0.0, so
+// a strict share refuses a compatible host and the panel never mounts.
+const webpackConfig = createRequire(import.meta.url)('../webpack.config.cjs');
+const federation = webpackConfig.plugins.find(
+  (plugin) => plugin?.constructor?.name === 'ModuleFederationPlugin',
+);
+if (federation === undefined) {
+  throw new Error('webpack.config.cjs must configure the ModuleFederationPlugin.');
+}
+const strict = strictShares(federation.options.shared);
+if (strict.length > 0) {
+  throw new Error(`Module Federation shares must not be strict: ${strict.join(', ')}.`);
+}
 
 // The container must be a real ES module: this package's `"type": "module"`
 // makes Signal K Admin load the remote with `import()` and read `get` and
@@ -45,4 +62,6 @@ if (unexpectedReactModules.length > 0) {
   );
 }
 
-console.log('Panel bundle passed: ESM container, React limited to the JSX runtime.');
+console.log(
+  'Panel bundle passed: non-strict shares, ESM container, React limited to the JSX runtime.',
+);

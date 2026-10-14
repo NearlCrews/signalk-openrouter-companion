@@ -13,5 +13,9 @@
     "fixtures/**/*.{ts,tsx}",
     "scripts/**/*.mjs",
     "*.{ts,js,cjs,mjs}"
-  ]
+  ],
+  // The CI Signal K Admin job installs these into a separate host directory,
+  // where link-signalk-admin.mjs resolves them, so they are never dependencies
+  // of this package.
+  "ignoreDependencies": ["signalk-server", "@signalk/server-admin-ui"]
 }

@@ -7,7 +7,7 @@ description: Use this skill when the user wants to add a new analyzer to signalk
 
 `signalk-openrouter-companion` is **one** npm package. Each monitoring domain is an `Analyzer` module under `src/analyzers/`. Never create a sibling package; always add a new analyzer.
 
-This skill walks you through producing every file and patch needed for a new analyzer that conforms to the framework. Five analyzers already ship and serve as worked examples:
+This skill walks you through producing every file and patch needed for a new analyzer that conforms to the framework. Seven analyzers ship today (`src/analyzers/ids.ts` lists them); these five are the worked examples:
 
 - `src/analyzers/maintenance.ts`: engine sessions, fires on `engine-stop`.
 - `src/analyzers/health.ts`: daily battery summary, fires on cron.
@@ -339,13 +339,10 @@ If the analyzer needs a brand-new event source (similar to `EngineDetector` or `
 After all patches are in place, run from the repo root:
 
 ```
-npm run type-check
-npm test
-npm run lint
-npm run build
+npm run verify
 ```
 
-All four must pass before committing. `npm run prepublishOnly` chains the same four.
+It must pass before you push; the pre-push hook runs the same command. It covers formatting, lint, documentation, dependency boundaries, dead code, both type checks, coverage, the production builds, and size budgets. If the change touches the configuration panel, run `npm run verify:browser` as well. `prepublishOnly` runs `npm run verify:release`, which adds the cross-browser suite, package checks, and both dependency audits.
 
 Confirm the new analyzer is exposed in the served schema:
 

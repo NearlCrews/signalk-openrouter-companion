@@ -1,27 +1,34 @@
 name: plugin-ci
 
+# The Signal K plugin registry credits a release only while a run of the
+# reusable workflow is among the newest 20 runs on the published commit, and
+# scheduled and Dependabot runs keep landing on main HEAD after a release. The
+# weekly run, timed after the other Monday schedules, keeps a current one in
+# that window. No tag trigger: a release tag points at a commit already on
+# main, and that commit's push run covers it.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '37 9 * * 1'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: plugin-ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@faab2be886fa7d52f926e7d2acf91c910623d4d7
+    # ci.yml already checks formatting and coverage once, and its Signal K Admin
+    # job installs the packed tarball into real servers and mounts the panel,
+    # so the reusable format, coverage, and integration lanes stay off.
     with:
       build-command: npm run build
       test-command: npm run test:run
-      format-check-command: npm run format:check
-      coverage-command: npm run test:coverage
       node-versions: '["22", "24", "26"]'
-      enable-signalk-integration: true
-      signalk-server-versions: '["2.25.0", "latest"]'

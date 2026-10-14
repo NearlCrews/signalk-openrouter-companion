@@ -317,8 +317,8 @@ npm run hooks        # enable the repository's commit and push hooks
 npm run clean        # remove dist/ and public/
 ```
 
-Run `npm run verify:browser` before pushing and `npm run verify:release` before
-release approval. See the [development guide](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/docs/DEVELOPMENT.md) for the full
+The push hook runs `npm run verify`. Run `npm run verify:browser` as well when
+the panel changes, and `npm run verify:release` before release approval. See the [development guide](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/docs/DEVELOPMENT.md) for the full
 workflow.
 
 ## License
