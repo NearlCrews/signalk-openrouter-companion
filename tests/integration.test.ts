@@ -17,6 +17,18 @@ function lastLine(jsonl: string): string {
   return line;
 }
 
+// The publisher hands the notification to Signal K before it appends the JSONL
+// entry, so a published delta does not mean the log line is on disk yet.
+function lastLogEntry(dir: string): Promise<Record<string, unknown>> {
+  return vi.waitFor(
+    async () => {
+      const jsonl = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
+      return JSON.parse(lastLine(jsonl)) as Record<string, unknown>;
+    },
+    { timeout: 2000 },
+  );
+}
+
 describe('integration: engine session -> report', () => {
   let dir: string;
   let app: MockApp;
@@ -83,8 +95,7 @@ describe('integration: engine session -> report', () => {
     expect(v.state).toBe('nominal');
     expect(v.message).toContain('Engine session');
 
-    const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
-    const entry = JSON.parse(lastLine(logRaw));
+    const entry = await lastLogEntry(dir);
     expect(entry.analyzer).toBe('maintenance');
     expect(entry.engineId).toBe('port');
 
@@ -136,8 +147,7 @@ describe('integration: engine session -> report', () => {
     expect(v.state).toBe('warn');
     expect(v.message).toContain('report unavailable');
 
-    const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
-    const entry = JSON.parse(lastLine(logRaw));
+    const entry = await lastLogEntry(dir);
     expect(entry.analyzer).toBe('maintenance');
     expect(typeof entry.failure).toBe('string');
 
@@ -196,8 +206,7 @@ describe('integration: engine session -> report', () => {
     expect(v.state).toBe('alert');
     expect(v.message).toContain('25%');
 
-    const logRaw = await readFile(join(dir, 'reports.jsonl'), 'utf-8');
-    const entry = JSON.parse(lastLine(logRaw));
+    const entry = await lastLogEntry(dir);
     expect(entry.analyzer).toBe('alerts');
 
     await plugin.stop();
