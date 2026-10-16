@@ -1,5 +1,6 @@
-import type { ReactElement } from 'react';
+import type { ReactElement, RefObject } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   Banner,
   Button,
@@ -418,50 +419,40 @@ function PanelContent({ configuration, save }: Props): ReactElement {
   const history = historyValidity(cfg.history);
   const badHistoryUrl = history.noUrl || history.invalidUrl;
 
-  // Open the OpenRouter section and move focus to the API key field, so the
-  // first-run callout's button lands the user exactly where they need to type.
-  // The rAF is load-bearing on the blocked-save path and is not redundant with
-  // the save bar's own focus move: SaveActionBar focuses its status line
-  // inline, before it calls onSave, so this frame lands afterwards and wins.
+  // Open a section and hand back the field inside it. The reveal commits inside
+  // flushSync, so the field is connected and visible when the caller focuses it
+  // or returns it to the save bar, which focuses a returned target once the
+  // handler has run.
+  const revealField = (
+    sectionId: string,
+    ref: RefObject<HTMLInputElement | null>,
+  ): RefObject<HTMLInputElement | null> => {
+    flushSync(() => openSection(sectionId));
+    return ref;
+  };
+
+  // The first-run callout's button lands the user exactly where they need to
+  // type.
   const focusApiKey = (): void => {
-    openSection(SECTION_OPENROUTER);
-    requestAnimationFrame(() => {
-      apiKeyRef.current?.focus();
-    });
+    revealField(SECTION_OPENROUTER, apiKeyRef).current?.focus();
   };
 
-  const focusHistoryUrl = (): void => {
-    openSection(SECTION_HISTORY);
-    requestAnimationFrame(() => {
-      historyUrlRef.current?.focus();
-    });
-  };
-
-  const focusHistoryDatabase = (): void => {
-    openSection(SECTION_HISTORY);
-    requestAnimationFrame(() => {
-      historyDatabaseRef.current?.focus();
-    });
-  };
-
-  const handleSave = (): void => {
+  const handleSave = (): RefObject<HTMLInputElement | null> | undefined => {
     if (noApiKey) {
       setValidationTarget('api-key');
-      focusApiKey();
-      return;
+      return revealField(SECTION_OPENROUTER, apiKeyRef);
     }
     if (badHistoryUrl) {
       setValidationTarget('history-url');
-      focusHistoryUrl();
-      return;
+      return revealField(SECTION_HISTORY, historyUrlRef);
     }
     if (history.missingDatabase) {
       setValidationTarget('history-database');
-      focusHistoryDatabase();
-      return;
+      return revealField(SECTION_HISTORY, historyDatabaseRef);
     }
     setValidationTarget(null);
     saveConfiguration();
+    return undefined;
   };
 
   const handleDiscard = (): void => {

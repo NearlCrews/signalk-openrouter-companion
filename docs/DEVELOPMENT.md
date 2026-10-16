@@ -187,7 +187,7 @@ npm run build          # clean + declarations + esbuild bundle + webpack panel +
 npm run build:types    # scripts/tsc.mjs --emitDeclarationOnly --declaration --outDir dist
 npm run build:bundle   # node esbuild.config.mjs (backend ESM bundle)
 npm run build:panel    # node scripts/build-panel.mjs (admin UI panel + build stats)
-npm run check:panel    # shared consumer check (pin, version stamp, share map, size baseline) plus the ESM container and React module graph checks
+npm run check:panel    # shared consumer check (pin, host loading contract, React module graph, CSS overrides, share map, rendered panel, size baseline) plus the strict-share check
 npm run clean          # delete dist/ and public/ via Node fs.rmSync (cross-platform)
 ```
 
@@ -199,7 +199,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.11.1 component library and shares React 19 and React
+`signalk-nearlcrews-ui` 0.14.0 component library and shares React 19 and React
 DOM as Module Federation singletons supplied by the Signal K admin host. The
 share map is read from `signalk-nearlcrews-ui/federation`, so it cannot drift
 from the release the panel bundles. The shares carry no strict version check:
@@ -224,12 +224,14 @@ Signal K admin load the container as an ES module, and with
 `optimization.splitChunks: false` so the panel and the bundled shared UI form
 one chunk beside `remoteEntry.js`. `npm run check:panel` runs the library's
 `snui-check-consumer`, which asserts the exact pin against the installed
-version, the bundled version stamp, the absence of a React runtime, the
-published share map in both the remote and the webpack configuration, and the
-gzip size against `scripts/panel-size-baseline.json`; the local
-`check-panel-bundle.mjs` then asserts that no share is strict, that the
-container is a real ES module, and that the only React module in the graph is
-the JSX runtime. A strict share, set explicitly or left to webpack's default
+version, the bundled version stamp, the host loading contract (an ES module
+container that exports `get` and `init`), the React module graph read from the
+webpack stats, the doubled class overrides in the CSS Modules under
+`src/configpanel`, the published share map in both the remote and the webpack
+configuration, a render of the built panel, and the gzip size against
+`scripts/panel-size-baseline.json`; the local `check-panel-bundle.mjs` then
+asserts that no share is strict.
+A strict share, set explicitly or left to webpack's default
 for a non-singleton share with a local fallback, refuses Signal K 2.24 Admin,
 which registers React as 19.0.0, so the panel would never mount there.
 
@@ -292,7 +294,6 @@ The unit and integration suite covers:
 - Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), and both history providers (probe, query, decode, and error paths).
 - `tests/api.test.ts` covers all eight REST route families: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), QuestDB test, and InfluxDB test.
 - `tests/integration.test.ts` exercises the plugin end-to-end with a mocked SK server and `vi.stubGlobal('fetch')` for OpenRouter.
-- `tests/panelStyles.test.ts` requires every class declared in the panel's CSS Modules to repeat its own name. The library ships its rules inside a native CSS scope, so at equal specificity the scoped rule wins whatever the stylesheet order and a single-class override on a library component would be dropped without a warning. Doubling costs nothing on a class that lands on a native element, so the rule is read straight off the stylesheets rather than off the markup that uses them.
 
 The shared test mocks live in `tests/_mocks.ts`:
 
@@ -424,8 +425,8 @@ The panel's size gate lives in `scripts/panel-size-baseline.json`, read by
 `snui-check-consumer` during `npm run check:panel`: the baseline records the
 panel's JavaScript and CSS assets in gzip bytes at level 9, the way the check
 measures them, and the check allows 5 percent growth over it. Re-record the
-baseline when a library upgrade legitimately grows the panel, as the move to
-shared UI 0.11.1 did, so the gate keeps catching unexpected growth instead of
+baseline when a library upgrade legitimately grows the panel, as earlier
+shared UI releases did, so the gate keeps catching unexpected growth instead of
 sitting near its ceiling. Raise `gzipBytes` to the new measurement, or add
 `approvedCeilingGzipBytes` with the reason, rather than loosening the
 percentage. `npm run size` keeps the
@@ -562,7 +563,7 @@ published, non-prerelease GitHub release.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
 - Webpack 5 with native CSS Modules, esbuild-loader 4, React 19, React DOM
-  19, and `signalk-nearlcrews-ui` 0.11.1
+  19, and `signalk-nearlcrews-ui` 0.14.0
 - Biome 2.5, ESLint 10, dependency-cruiser 18, and Knip 6
 - Vitest 5 with v8 coverage and Playwright cross-browser checks
 

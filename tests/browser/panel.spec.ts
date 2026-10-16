@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, type Page, test } from '@playwright/test';
+import { PANEL_LABEL_DEFAULTS } from 'signalk-nearlcrews-ui';
 import packageJson from '../../package.json' with { type: 'json' };
 
 const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui'];
@@ -8,7 +9,8 @@ const EXPECTED_UI_VERSION = packageJson.devDependencies['signalk-nearlcrews-ui']
 // then a change to these two lines rather than to four scattered ones.
 const saveButton = (page: Page) =>
   page.locator('[data-panel-action-bar]').locator('button', { hasText: 'Save configuration' });
-const saveStatus = (page: Page) => page.locator('[data-panel-action-bar] [tabindex="-1"]');
+const saveStatus = (page: Page) =>
+  page.locator('[data-panel-action-bar] [data-snui-action-bar-status]');
 
 // The shell mounts its polite region before the panel's own content, so it is
 // the first status region in the panel. Every announcement this panel makes
@@ -38,8 +40,9 @@ test('loads the production remote and completes the save flow', async ({ page })
   const panelRoot = page.locator('[data-snui-root]');
   await expect(panelRoot).toHaveAttribute('data-snui-version', EXPECTED_UI_VERSION);
   await expect(panelRoot).not.toHaveAttribute('data-snui-theme');
-  await expect(page.locator('[data-panel-action-bar]')).toHaveClass(
-    /snui-action-bar--sticky-viewport-bottom/,
+  await expect(page.locator('[data-panel-action-bar]')).toHaveAttribute(
+    'data-snui-sticky',
+    'viewport-bottom',
   );
   await expect(page.getByText('12,480')).toBeVisible();
   const maintenanceSection = page.getByRole('button', { name: /Maintenance Advisor/ });
@@ -63,9 +66,9 @@ test('loads the production remote and completes the save flow', async ({ page })
   await expect(apiKey).not.toHaveAttribute('aria-invalid');
   await expect(page.getByText('Enter an OpenRouter API key.')).toBeHidden();
   await expect(apiKey).toHaveAttribute('type', 'password');
-  await page.getByRole('button', { name: 'Show' }).click();
+  await page.getByRole('button', { name: /^Show/ }).click();
   await expect(apiKey).toHaveAttribute('type', 'text');
-  await page.getByRole('button', { name: 'Hide' }).click();
+  await page.getByRole('button', { name: /^Hide/ }).click();
   await expect(apiKey).toHaveAttribute('type', 'password');
   await expect(apiKey).not.toHaveAttribute('descriptionid');
   await expect(apiKey).not.toHaveAttribute('errorid');
@@ -307,7 +310,7 @@ test('confirms before discarding unsaved edits', async ({ page }) => {
   await page.getByRole('button', { name: 'Discard changes' }).click();
   await expect(page.getByText('Discard unsaved changes?')).toBeHidden();
   await expect(apiKey).toHaveValue('');
-  await expect(page.getByText('All changes saved')).toBeVisible();
+  await expect(page.getByText(PANEL_LABEL_DEFAULTS.saveActionBar.clean)).toBeVisible();
 });
 
 test('ignores an older status response that resolves after a newer poll', async ({ page }) => {
@@ -349,7 +352,7 @@ test('defaults a fresh profile to Match Admin without persisting an implicit cho
   await expect(root).not.toHaveAttribute('data-snui-theme');
   await expect(root).toHaveCSS('background-color', 'rgb(244, 246, 248)');
   await expect(root).toHaveCSS('color', 'rgb(24, 32, 44)');
-  await expect(themeGroup.getByRole('radio', { name: 'Match Admin' })).toBeChecked();
+  await expect(themeGroup.locator('[data-snui-theme-choice="auto"]')).toBeChecked();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('signalk-nearlcrews-ui.theme.v1')))
     .toBeNull();
@@ -387,7 +390,7 @@ test('ignores the retired legacy preference and supports every theme', async ({ 
     await expect(page.locator('[data-snui-root]')).toHaveAttribute('data-snui-theme', value);
   }
   await expect(page.locator('[data-snui-root]')).toHaveCSS('background-color', 'rgb(16, 19, 28)');
-  await themeGroup.getByRole('radio', { name: 'Match Admin' }).click();
+  await themeGroup.locator('[data-snui-theme-choice="auto"]').click();
   await expect(page.locator('[data-snui-root]')).not.toHaveAttribute('data-snui-theme');
   await expect(page.locator('[data-snui-root]')).toHaveCSS(
     'background-color',
@@ -583,9 +586,9 @@ test('announces a fire outcome from a region that already existed', async ({ pag
 
   // A second run with the same outcome lands on that same node. The words are
   // read out again rather than passing as an unchanged region, because the
-  // shell's region carries an announcement key that changes per message.
+  // shell's region keeps each message for a few seconds, so both are present.
   await fire.click();
-  await expect(marked).toHaveText('Maintenance Advisor: Report generated.');
+  await expect(marked).toHaveText('Maintenance Advisor: Report generated.'.repeat(2));
 });
 
 test('renders a populated report list without Axe findings or overflow', async ({ page }) => {

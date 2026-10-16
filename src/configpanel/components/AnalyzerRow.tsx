@@ -8,12 +8,14 @@ import {
   Cluster,
   Code,
   CollapsibleSection,
+  formatCount,
   LabeledField,
   RelativeAge,
   Select,
   Stack,
   StatusIndicator,
   Text,
+  usePanelLocale,
   VisuallyHidden,
 } from 'signalk-nearlcrews-ui';
 import { EmptyState, useDisclosure } from 'signalk-nearlcrews-ui/composites';
@@ -61,6 +63,7 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   severityFloor,
   onSeverityFloorChange,
 }: Props): ReactElement {
+  const locale = usePanelLocale();
   const expanded = Boolean(ui.expanded);
   const reportsOpen = Boolean(ui.reportsOpen);
   const promptOpen = Boolean(ui.promptOpen);
@@ -215,7 +218,7 @@ export const AnalyzerRow = memo(function AnalyzerRow({
                       <Text as="div" tone="muted" size="sm">
                         <Code>{report.model}</Code>
                         {typeof report.totalTokens === 'number'
-                          ? ` · ${report.totalTokens.toLocaleString()} tokens`
+                          ? ` · ${formatCount(report.totalTokens, 'token', undefined, { locale })}`
                           : ''}
                         {typeof report.costUsd === 'number'
                           ? ` · $${report.costUsd.toFixed(4)}`

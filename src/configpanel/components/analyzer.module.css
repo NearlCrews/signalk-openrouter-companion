@@ -4,7 +4,8 @@
  * rule whatever the stylesheet order, so a single-class plugin rule silently
  * loses on any class that lands on a library component. Doubling costs nothing
  * on a class that lands on a native element, so the rule is the same for all of
- * them and tests/panelStyles.test.ts reads it straight off this file.
+ * them, and snui-check-consumer --styles fails a class that lands on a library
+ * component undoubled.
  */
 
 .drawer.drawer {

@@ -8,6 +8,18 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ### Changed
 
+- The configuration panel moves to `signalk-nearlcrews-ui` 0.14.0. The Save
+  bar reads "Nothing to save" when there are no edits, a focused Save or
+  Discard button stays focusable until focus leaves it, the API key reveal
+  button is named "Show API key" and "Hide API key", invalid checkboxes draw a
+  dashed outline, and the Light border and disabled text colors are slightly
+  darker. The panel bundle is about 2.5 KB smaller.
+- A blocked save sends focus to the refused field, opening its section first,
+  without waiting a frame. The report drawer's token count follows the panel
+  locale and reads "1 token" for a single token.
+- The panel check also verifies the Signal K host loading contract, the module
+  graph, the CSS overrides, and a render of the built panel, and replaces the
+  repository's own copies of those checks.
 - Refreshed the pinned official Signal K plugin workflow to the 2026-10-04
   master commit and dropped the retired `enable-armv7` input. The upstream
   workflow no longer has an armv7 job, and its Node 22 lanes now install with
