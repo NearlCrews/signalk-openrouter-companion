@@ -37,11 +37,15 @@ import { mergeWithDefaults, type PluginOptions } from './types.js';
 const PLUGIN_NAME = 'OpenRouter Companion';
 
 const BUFFER_MAX_AGE_MS = 26 * HOUR_MS;
+// Raw samples per path. Older samples still read through their minute
+// buckets, so this bounds memory, not the window a report covers.
 const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
-// Ceiling across every buffered path together, so a vessel with many busy
-// electrical and propulsion paths cannot multiply the per-path cap into
-// hundreds of megabytes on a Raspberry Pi. Roughly 40 MB of entries, which
-// still holds well over a day of aggregates for a realistic path count.
+// Ceiling across every buffered path together, raw samples and minute buckets
+// alike, so a vessel with many busy electrical and propulsion paths cannot
+// multiply the per-path cap into hundreds of megabytes on a Raspberry Pi.
+// Roughly 40 MB. One source's full window is about 1,600 minute buckets, so
+// the cap takes raw samples, which fall back to buckets, long before it has
+// to shorten any window.
 const BUFFER_MAX_TOTAL_ENTRIES = 400_000;
 const ENGINE_SOURCE_WINDOW_MS = SECOND_MS;
 const BATTERY_SOURCE_WINDOW_MS = 5000;

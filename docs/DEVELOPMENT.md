@@ -39,7 +39,7 @@ src/
     ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime
     ├── app.ts                PluginApp: the one declaration of the server API slice the plugin calls
     ├── atomicFile.ts         AtomicFileWriter: serialized temporary-file-plus-rename writes
-    ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
+    ├── buffer.ts             Rolling buffer: raw deltas plus per-minute buckets (in-memory)
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
     ├── engineDetector.ts     Per-engine RPM session state machine, persisted across restarts
     ├── emitter.ts            TypedEmitter base used by batteryMonitor and engineDetector
@@ -299,7 +299,7 @@ from the packed tarball. To reproduce it locally:
 The unit and integration suite covers:
 
 - Each analyzer's triggers, `collectContext` null paths, happy path, and `buildPrompt` (including `customSystemPrompt` overrides).
-- Shared infra: buffer eviction (age + amortized count), battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), and both history providers (probe, query, decode, and error paths).
+- Shared infra: buffer eviction (age + amortized count) and the minute buckets reads fall back to, battery monitor state machine, engine detector state machine, trigger router dispatch, cron scheduler, publisher (delta shape + JSONL append), and both history providers (probe, query, decode, and error paths).
 - `tests/api.test.ts` covers all eight REST route families: registration, status payload shape, OpenRouter test (happy/401), fire (404/503/409/500/happy), reports (clamp, filter, missing log), prompt (default/override), models (cache/upstream errors), QuestDB test, and InfluxDB test.
 - `tests/integration.test.ts` exercises the plugin end-to-end with a mocked SK server and `vi.stubGlobal('fetch')` for OpenRouter.
 
