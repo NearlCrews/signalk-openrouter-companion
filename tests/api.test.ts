@@ -73,6 +73,17 @@ async function call(
   return captured;
 }
 
+async function callRoute(
+  getRuntime: () => PluginRuntime | null,
+  method: 'get' | 'post',
+  path: string,
+  req: RouteRequest = {},
+): Promise<CapturedResponse> {
+  const { router, routes } = makeRecordingRouter();
+  registerApiRoutes(router, getRuntime);
+  return call(routes, method, path, req);
+}
+
 function fakeAnalyzer(id: string): Analyzer {
   return { id, title: id, triggers: [] } as unknown as Analyzer;
 }
@@ -93,7 +104,6 @@ describe('plugin REST API', () => {
       const plugin = createPlugin(app as never);
       const { router, routes } = makeRecordingRouter();
       plugin.registerWithRouter(router);
-      expect(app.adminMiddlewarePaths).toEqual(['/plugins/signalk-openrouter-companion/api']);
       expect(routes.map((r) => `${r.method.toUpperCase()} ${r.path}`).sort()).toEqual([
         'GET /api/analyzers/:id/prompt',
         'GET /api/analyzers/:id/reports',
@@ -104,19 +114,6 @@ describe('plugin REST API', () => {
         'POST /api/openrouter/test',
         'POST /api/questdb/test',
       ]);
-    });
-
-    it('registers no routes when the admin middleware is unavailable', () => {
-      app.securityStrategy = undefined;
-      const plugin = createPlugin(app as never);
-      const { router, routes } = makeRecordingRouter();
-
-      plugin.registerWithRouter(router);
-
-      expect(routes).toEqual([]);
-      expect(app.errorMessages).toContainEqual(
-        expect.stringContaining('securityStrategy not available'),
-      );
     });
 
     it('publishes an OpenAPI doc whose operations match the registered routes', () => {
@@ -176,9 +173,8 @@ describe('plugin REST API', () => {
       const r = await call(routes, 'get', '/api/status');
       expect(r.status).toBe(200);
       const body = r.body as {
-        openrouter: { apiKeySet: boolean; model: string; callsToday: number };
+        openrouter: { model: string; callsToday: number };
         history: { source: string; reachable: boolean | null };
-        questdb: { enabled: boolean; reachable: boolean | null };
         analyzers: Array<{
           id: string;
           enabled: boolean;
@@ -186,10 +182,10 @@ describe('plugin REST API', () => {
           cron: { enabled: boolean; pattern: string };
         }>;
       };
-      expect(body.openrouter.apiKeySet).toBe(true);
+      expect(body.openrouter).not.toHaveProperty('apiKeySet');
       expect(body.openrouter.callsToday).toBe(0);
       expect(body.history).toEqual({ source: 'questdb', reachable: true });
-      expect(body.questdb).toEqual({ enabled: true, reachable: true });
+      expect(body).not.toHaveProperty('questdb');
       // The status payload lists every analyzer with its enabled flag. Assert
       // one enabled analyzer is present plus the total count, rather than the
       // full set, to stay resilient to default flips.
@@ -214,11 +210,11 @@ describe('plugin REST API', () => {
 
     it('surfaces tokensToday and costToday in the openrouter block', async () => {
       const rt = makePluginRuntime({
-        budget: { callsToday: () => 0, tokensToday: () => 4096, costToday: () => 0.12 } as never,
+        budget: {
+          snapshot: () => ({ callsToday: 0, tokensToday: 4096, costToday: 0.12 }),
+        } as never,
       });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/status');
+      const r = await callRoute(() => rt, 'get', '/api/status');
       expect(r.status).toBe(200);
       const body = r.body as {
         ok: boolean;
@@ -246,9 +242,7 @@ describe('plugin REST API', () => {
 
     it('returns ok+token usage on a successful ping', async () => {
       const rt = makePluginRuntime({ llm: okLlm });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/openrouter/test');
+      const r = await callRoute(() => rt, 'post', '/api/openrouter/test');
       expect(r.status).toBe(200);
       expect(r.body).toMatchObject({
         ok: true,
@@ -256,15 +250,6 @@ describe('plugin REST API', () => {
         totalTokens: 6,
         text: 'OK',
       });
-    });
-
-    it('returns 400 when no API key is configured', async () => {
-      const rt = makePluginRuntime({ llm: okLlm, apiKeySet: false });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/openrouter/test');
-      expect(r.status).toBe(400);
-      expect(r.body).toEqual({ ok: false, error: 'API key not configured' });
     });
 
     it('coalesces concurrent pings onto one billable completion', async () => {
@@ -314,9 +299,7 @@ describe('plugin REST API', () => {
           },
         } as never,
       });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/openrouter/test');
+      const r = await callRoute(() => rt, 'post', '/api/openrouter/test');
       expect(r.status).toBe(401);
       expect(r.body).toMatchObject({ ok: false, status: 401, error: 'invalid key' });
     });
@@ -343,18 +326,14 @@ describe('plugin REST API', () => {
 
     it('returns 404 for an unknown analyzer id', async () => {
       const { rt } = makeRuntimeWithRouter({ enabledIds: ['health'] });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+      const r = await callRoute(() => rt, 'post', '/api/analyzers/:id/fire', {
         params: { id: 'bogus' },
       });
       expect(r.status).toBe(404);
     });
 
     it('returns 503 before plugin start', async () => {
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => null);
-      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+      const r = await callRoute(() => null, 'post', '/api/analyzers/:id/fire', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(503);
@@ -362,9 +341,7 @@ describe('plugin REST API', () => {
 
     it('returns 409 when the analyzer is disabled', async () => {
       const { rt } = makeRuntimeWithRouter({ enabledIds: ['maintenance'] });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+      const r = await callRoute(() => rt, 'post', '/api/analyzers/:id/fire', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(409);
@@ -373,9 +350,7 @@ describe('plugin REST API', () => {
 
     it('runs the named analyzer with a put-kind ctx on success', async () => {
       const { rt, calls } = makeRuntimeWithRouter({ enabledIds: ['health'] });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+      const r = await callRoute(() => rt, 'post', '/api/analyzers/:id/fire', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(200);
@@ -394,9 +369,7 @@ describe('plugin REST API', () => {
           throw new Error('boom');
         },
       });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+      const r = await callRoute(() => rt, 'post', '/api/analyzers/:id/fire', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(500);
@@ -424,9 +397,7 @@ describe('plugin REST API', () => {
         analyzers: [analyzer],
         router: triggerRouter,
       });
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/analyzers/:id/fire', {
+      const r = await callRoute(() => rt, 'post', '/api/analyzers/:id/fire', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(200);
@@ -446,9 +417,7 @@ describe('plugin REST API', () => {
 
     it('returns 404 for unknown analyzer', async () => {
       const rt = makeRuntimeWithLog('/tmp/missing.jsonl');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/analyzers/:id/reports', {
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/reports', {
         params: { id: 'unknown' },
       });
       expect(r.status).toBe(404);
@@ -456,9 +425,7 @@ describe('plugin REST API', () => {
 
     it('returns empty list when the log file does not exist', async () => {
       const rt = makeRuntimeWithLog(join(dir, 'never-written.jsonl'));
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/analyzers/:id/reports', {
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/reports', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(200);
@@ -475,16 +442,47 @@ describe('plugin REST API', () => {
       ];
       await writeFile(logPath, lines.map((l) => JSON.stringify(l)).join('\n'));
       const rt = makeRuntimeWithLog(logPath);
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
 
-      const r = await call(routes, 'get', '/api/analyzers/:id/reports', {
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/reports', {
         params: { id: 'health' },
         query: { limit: '2' },
       });
       expect(r.status).toBe(200);
       const body = r.body as { reports: Array<{ report: string }> };
       expect(body.reports.map((x) => x.report)).toEqual(['h3', 'h2']);
+    });
+
+    it('widens past the first window and stitches the line it cut', async () => {
+      // A log far larger than the first 256 KB window, with the requested
+      // analyzer's entries only at the very start: the read has to widen, and
+      // the line the first window opened in the middle of must still parse.
+      const logPath = join(dir, 'reports.jsonl');
+      const filler = JSON.stringify({
+        ts: '2026-05-10T00:00:00Z',
+        analyzer: 'maintenance',
+        trigger: 'put',
+        report: 'x'.repeat(2000),
+      });
+      const wanted = [1, 2, 3].map((i) =>
+        JSON.stringify({
+          ts: `2026-05-10T0${i}:00:00Z`,
+          analyzer: 'aging',
+          trigger: 'cron',
+          report: `a${i}`,
+        }),
+      );
+      await writeFile(
+        logPath,
+        [...wanted, ...Array.from({ length: 400 }, () => filler)].join('\n'),
+      );
+      const rt = makeRuntimeWithLog(logPath);
+
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/reports', {
+        params: { id: 'aging' },
+        query: { limit: '10' },
+      });
+      const body = r.body as { reports: Array<{ report: string }> };
+      expect(body.reports.map((x) => x.report)).toEqual(['a3', 'a2', 'a1']);
     });
 
     it('clamps limit into [1, 100]', async () => {
@@ -526,9 +524,7 @@ describe('plugin REST API', () => {
 
     it('returns 404 for unknown analyzer', async () => {
       const rt = makeRuntimeWithPromptOverride('health');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/analyzers/:id/prompt', {
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/prompt', {
         params: { id: 'bogus' },
       });
       expect(r.status).toBe(404);
@@ -536,9 +532,7 @@ describe('plugin REST API', () => {
 
     it('returns default prompt with current=null when no override is set', async () => {
       const rt = makeRuntimeWithPromptOverride('health');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/analyzers/:id/prompt', {
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/prompt', {
         params: { id: 'health' },
       });
       expect(r.status).toBe(200);
@@ -550,9 +544,7 @@ describe('plugin REST API', () => {
 
     it('returns current=<override> when configured', async () => {
       const rt = makeRuntimeWithPromptOverride('health', 'CUSTOM_PROMPT');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/analyzers/:id/prompt', {
+      const r = await callRoute(() => rt, 'get', '/api/analyzers/:id/prompt', {
         params: { id: 'health' },
       });
       expect((r.body as { current: string | null }).current).toBe('CUSTOM_PROMPT');
@@ -584,9 +576,7 @@ describe('plugin REST API', () => {
             }),
         ),
       );
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => null);
-      const r = await call(routes, 'get', '/api/openrouter/models');
+      const r = await callRoute(() => null, 'get', '/api/openrouter/models');
       expect(r.status).toBe(200);
       const body = r.body as { ok: boolean; data: Array<{ id: string }> };
       expect(body.ok).toBe(true);
@@ -614,6 +604,32 @@ describe('plugin REST API', () => {
       const second = await call(routes, 'get', '/api/openrouter/models');
       expect(second.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps only the id and name of each model and skips malformed rows', async () => {
+      const rows = [
+        { id: 'a/b', name: 'A B', pricing: { prompt: '0' } },
+        null,
+        'c/d',
+        { id: 7, name: 'numeric id' },
+        { id: 'e/f', name: 3 },
+      ];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ data: rows }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+        ),
+      );
+      const r = await callRoute(() => null, 'get', '/api/openrouter/models');
+      expect(r.status).toBe(200);
+      expect((r.body as { data: unknown[] }).data).toEqual([
+        { id: 'a/b', name: 'A B' },
+        { id: 'e/f' },
+      ]);
     });
 
     it('does not reject a second models waiter when the first caller aborts', async () => {
@@ -663,9 +679,7 @@ describe('plugin REST API', () => {
         ),
       );
       const rt = emptyRuntime();
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'get', '/api/openrouter/models');
+      const r = await callRoute(() => rt, 'get', '/api/openrouter/models');
       expect(r.status).toBe(502);
       expect(r.body).toMatchObject({ error: 'upstream HTTP 502' });
     });
@@ -682,9 +696,7 @@ describe('plugin REST API', () => {
       });
 
     it('returns 400 when no url and no plugin runtime', async () => {
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => null);
-      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      const r = await callRoute(() => null, 'post', '/api/questdb/test', { body: {} });
       expect(r.status).toBe(400);
     });
 
@@ -704,9 +716,7 @@ describe('plugin REST API', () => {
         'QuestDB base URL must not include a query string or fragment',
       ],
     ])('rejects unsupported QuestDB base URL %s', async (url, error) => {
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => null);
-      const r = await call(routes, 'post', '/api/questdb/test', { body: { url } });
+      const r = await callRoute(() => null, 'post', '/api/questdb/test', { body: { url } });
       expect(r.status).toBe(400);
       expect(r.body).toEqual({ ok: false, error });
     });
@@ -723,9 +733,7 @@ describe('plugin REST API', () => {
         ),
       );
       const rt = makeRuntime('http://qdb:9000');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      const r = await callRoute(() => rt, 'post', '/api/questdb/test', { body: {} });
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true, url: 'http://qdb:9000' });
     });
@@ -740,9 +748,7 @@ describe('plugin REST API', () => {
       );
       vi.stubGlobal('fetch', fetchMock);
       const rt = makeRuntime('http://saved:9000');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/questdb/test', {
+      const r = await callRoute(() => rt, 'post', '/api/questdb/test', {
         body: { url: 'http://override:9000' },
       });
       expect((r.body as { url: string }).url).toBe('http://override:9000');
@@ -756,9 +762,7 @@ describe('plugin REST API', () => {
         vi.fn(async () => new Response('boom', { status: 500 })),
       );
       const rt = makeRuntime('http://qdb:9000');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
-      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      const r = await callRoute(() => rt, 'post', '/api/questdb/test', { body: {} });
       expect(r.status).toBe(200);
       const body = r.body as { ok: boolean; error?: string };
       expect(body.ok).toBe(false);
@@ -774,10 +778,8 @@ describe('plugin REST API', () => {
       );
       vi.stubGlobal('fetch', fetchMock);
       const rt = makeRuntime('http://qdb:9000');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
 
-      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      const r = await callRoute(() => rt, 'post', '/api/questdb/test', { body: {} });
 
       const [, requestInit] = fetchMock.mock.calls[0] ?? [];
       expect(requestInit?.redirect).toBe('error');
@@ -790,10 +792,8 @@ describe('plugin REST API', () => {
         vi.fn(async () => new Response('<html>private response</html>', { status: 200 })),
       );
       const rt = makeRuntime('http://qdb:9000');
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => rt);
 
-      const r = await call(routes, 'post', '/api/questdb/test', { body: {} });
+      const r = await callRoute(() => rt, 'post', '/api/questdb/test', { body: {} });
 
       expect(r.status).toBe(502);
       expect(r.body).toEqual({
@@ -843,10 +843,7 @@ describe('plugin REST API', () => {
     };
 
     it('requires both a URL and database when no saved configuration exists', async () => {
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => null);
-
-      const r = await call(routes, 'post', '/api/influxdb/test', {
+      const r = await callRoute(() => null, 'post', '/api/influxdb/test', {
         body: { url: 'http://influx:8086' },
       });
 
@@ -873,10 +870,7 @@ describe('plugin REST API', () => {
         'unsupported InfluxDB version',
       ],
     ])('rejects invalid InfluxDB settings %#', async (body, error) => {
-      const { router, routes } = makeRecordingRouter();
-      registerApiRoutes(router, () => null);
-
-      const r = await call(routes, 'post', '/api/influxdb/test', { body });
+      const r = await callRoute(() => null, 'post', '/api/influxdb/test', { body });
 
       expect(r.status).toBe(400);
       expect(r.body).toEqual({ ok: false, error });

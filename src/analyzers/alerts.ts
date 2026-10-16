@@ -1,4 +1,8 @@
-import { resolveSystemPrompt, sanitizeProducerString } from '../core/cfg.js';
+import {
+  BATTERY_SI_UNITS_INSTRUCTION,
+  resolveSystemPrompt,
+  sanitizeProducerString,
+} from '../core/cfg.js';
 import { clampAtWord, compositeKey, fmtRatio, fmtUnit } from '../core/format.js';
 import {
   alertIdFor,
@@ -8,12 +12,14 @@ import {
 } from '../core/paths.js';
 import { asTreeMap, readBankSnapshot } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
-import { ALERTS_SUPPORTED_EVENTS, type AnalyzerTriggerCfg } from '../types.js';
+import { ALERTS_SUPPORTED_EVENTS } from '../types.js';
 import type {
   AnalysisInput,
   Analyzer,
+  AnalyzerBaseCfg,
   AnalyzerDeps,
   BatteryEventKind,
+  PromptPair,
   PublishRunMeta,
   TriggerCtx,
   TriggerSpec,
@@ -48,10 +54,7 @@ const ALERT_ROUTING: Record<
   'cell-imbalance-exit': { kind: 'cellImbalance', state: 'normal' },
 };
 
-export interface AlertCfg {
-  triggers: AnalyzerTriggerCfg;
-  customSystemPrompt?: string;
-}
+export type AlertCfg = AnalyzerBaseCfg;
 
 // Built once at module load using the MAX_ALERT_MESSAGE_CHARS constant so
 // bumping the constant updates the prompt automatically. Custom overrides
@@ -60,7 +63,7 @@ export const ALERTS_DEFAULT_SYSTEM_PROMPT = [
   'You are a marine electrical specialist reading raw battery telemetry from a Signal K server.',
   'A battery bank just crossed a state threshold.',
   `Write a very short headline (under ${MAX_ALERT_MESSAGE_CHARS} characters) that will display on a chartplotter's NMEA 2000 alert. Lead with the bank id and what crossed, e.g., "House SoC 38%" or "Starter cell imbalance 0.12 V".`,
-  'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
+  BATTERY_SI_UNITS_INSTRUCTION,
   'Stick to facts present in the data. Do not speculate beyond the numbers.',
   'Output is rendered on a chartplotter and in the Signal K data browser. Plain prose, no markdown, no headers, no bullets. One short sentence.',
 ].join(' ');
@@ -121,7 +124,7 @@ export class AlertAnalyzer implements Analyzer<AlertInput> {
     };
   }
 
-  buildPrompt(input: AlertInput): { system: string; user: string } {
+  buildPrompt(input: AlertInput): PromptPair {
     const lines = [`Event: ${input.subkind}`, `Bank: ${sanitizeProducerString(input.bankId)}`];
     const ed = input.eventData;
     if (typeof ed.soc === 'number') lines.push(`Triggering SoC: ${fmtRatio(ed.soc)}`);

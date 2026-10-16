@@ -1,11 +1,12 @@
 import { asFiniteNumber } from './format.js';
-import type {
-  EngineBinHistory,
-  EngineWindowRequest,
-  HistoryProvider,
-  PathWindowSummary,
+import {
+  type EngineBinHistory,
+  type EngineWindowRequest,
+  emptyEngineBins,
+  type HistoryProvider,
+  type PathWindowSummary,
 } from './history.js';
-import { fetchWithTimeout } from './http.js';
+import { discardBody, fetchWithTimeout, normalizeBaseUrl } from './http.js';
 
 interface QuestDBCfg {
   url: string;
@@ -25,35 +26,6 @@ export function escapeSqlLiteral(s: string): string {
   return s.replace(/'/g, "''");
 }
 
-export function stripTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
-  return end === value.length ? value : value.slice(0, end);
-}
-
-// The base URL a history client actually dials: credentials, query, and
-// fragment removed (each client owns authentication and its own query) and no
-// trailing slash, so a path is appended without doubling one. Lives beside the
-// trailing-slash rule both clients already share, so the two clients and the
-// admin probe route normalize a URL the same way by construction rather than
-// by three copies agreeing. An unparseable value is returned trimmed, which
-// preserves the fail-soft path for a hand-edited config: the fetch rejects on
-// probe and the optional provider degrades cleanly.
-export function normalizeBaseUrl(value: string): string {
-  const rawUrl = value.trim();
-  try {
-    const parsed = new URL(rawUrl);
-    parsed.username = '';
-    parsed.password = '';
-    parsed.search = '';
-    parsed.hash = '';
-    parsed.pathname = stripTrailingSlashes(parsed.pathname);
-    return stripTrailingSlashes(parsed.href);
-  } catch {
-    return stripTrailingSlashes(rawUrl);
-  }
-}
-
 // Quote and escape a set of SignalK paths into a comma-separated list for a
 // SQL `path IN (...)` clause.
 function quotedPathList(paths: readonly string[]): string {
@@ -62,18 +34,18 @@ function quotedPathList(paths: readonly string[]): string {
 
 // signalk-questdb writes the self vessel's rows with the literal context
 // 'self', not the full `vessels.urn:mrn:...` value that app.selfContext
-// returns. Analyzer queries must filter on this or they match no rows.
+// returns. Every query this client builds must filter on this or it matches no
+// rows.
 const QUESTDB_SELF_CONTEXT = 'self';
 
-// Pre-escaped form for embedding directly in a SQL `context = '...'` clause.
-// Escaped once here so the trend analyzers single-source it instead of each
-// calling escapeSqlLiteral(QUESTDB_SELF_CONTEXT) per query.
+// Pre-escaped form for embedding directly in a SQL `context = '...'` clause,
+// escaped once here rather than once per query.
 const QUESTDB_SELF_CONTEXT_SQL = escapeSqlLiteral(QUESTDB_SELF_CONTEXT);
 
 // Collapse a multi-line template-literal SQL string to a single space-separated
-// line before sending it over the /exec query string. The trend analyzers all
-// author SQL as indented template literals for readability; this is the shared
-// flatten so the regex cannot drift between them.
+// line before sending it over the /exec query string. Every query here is
+// authored as an indented template literal for readability; this is the one
+// flatten they share.
 function flattenSql(sql: string): string {
   return sql.trim().replace(/\s+/g, ' ');
 }
@@ -90,14 +62,12 @@ export function indexColumns(r: QueryResult): Map<string, number> {
 }
 
 // Decode a path-keyed GROUP BY result into a Map keyed by the `path` column.
-// Shared by the trend analyzers, which all run `... GROUP BY path` and then
+// Shared by the per-path queries, which all run `... GROUP BY path` and then
 // fold each row into a per-path summary. Two-stage: `build` receives the
 // column index map once and returns the per-row decoder, so callers resolve
 // their aggregate-column indexes once per result instead of once per row.
 // The decoder returning null drops that row from the Map. A result missing
-// the `path` column yields an empty Map rather than throwing, matching the
-// per-analyzer bail that returned the empty accumulator when the path index
-// was negative.
+// the `path` column yields an empty Map rather than throwing.
 function decodePathKeyed<T>(
   res: QueryResult,
   build: (cols: ReadonlyMap<string, number>) => (row: readonly unknown[]) => T | null,
@@ -143,7 +113,10 @@ export class QuestDBClient implements HistoryProvider {
       QUESTDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
     );
-    if (!r.ok) return false;
+    if (!r.ok) {
+      discardBody(r);
+      return false;
+    }
     const j = (await r.json()) as Partial<QueryResult>;
     return Array.isArray(j.dataset);
   }
@@ -157,7 +130,10 @@ export class QuestDBClient implements HistoryProvider {
       QUESTDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
     );
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      discardBody(r);
+      throw new Error(`HTTP ${r.status}`);
+    }
     const body = (await r.json()) as QueryResult;
     return { columns: body.columns ?? [], dataset: body.dataset ?? [] };
   }
@@ -273,12 +249,7 @@ export class QuestDBClient implements HistoryProvider {
     if (binIdx < 0 || fuelCountIdx < 0 || sogCountIdx < 0 || fuelIdx < 0 || sogIdx < 0) {
       return null;
     }
-    const out = new Map<string, EngineBinHistory>(
-      request.bins.map(({ key }) => [
-        key,
-        { fuelCount: 0, sogCount: 0, meanFuelRate: null, meanSog: null },
-      ]),
-    );
+    const out = emptyEngineBins(request);
     for (const row of result.dataset) {
       const key = row[binIdx];
       if (typeof key !== 'string' || !out.has(key)) continue;

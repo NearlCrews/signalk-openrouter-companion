@@ -1,9 +1,9 @@
-import { appendFile, rename, stat } from 'node:fs/promises';
-import { SKVersion } from '@signalk/server-api';
 import { type NotificationState, severityRank } from '../types.js';
+import type { PluginApp } from './app.js';
 import { clampAtWord } from './format.js';
 import { stringify } from './logger.js';
 import { notificationReportPath } from './paths.js';
+import { type JsonlEntry, ReportLog } from './reportLog.js';
 import type { PublishRunMeta, TriggerCtx } from './triggerContext.js';
 
 export interface SignalKNotificationValue {
@@ -59,12 +59,6 @@ const FAILURE_STATE: NotificationState = 'warn';
 
 const FAILURE_STATE_RANK = severityRank(FAILURE_STATE);
 
-// Size at which the JSONL report log rotates. One generation is kept, so the
-// log costs at most twice this on disk, and `tailReports` still reads a bounded
-// file. Sized so a plugin running at the daily call ceiling holds weeks of
-// history before the first rotation.
-const DEFAULT_MAX_LOG_BYTES = 8 * 1024 * 1024;
-
 // The chartplotter alert text. Analyzer reports lead with a short headline
 // line followed by the full narrative; this returns just that first line
 // (clamped at a word boundary), leaving the full text for the JSONL log.
@@ -91,16 +85,12 @@ interface SignalKNotificationDelta {
 // a no-op function rather than relying on the publisher to defend missing
 // methods.
 interface PublisherCfg {
-  app: {
-    handleMessage(pluginId: string, delta: unknown, skVersion?: SKVersion): void;
-    selfContext?: string;
-    error(msg: string): void;
-  };
+  app: Pick<PluginApp, 'handleMessage' | 'selfContext' | 'error'>;
   pluginId: string;
   logPath: string;
-  // Rotation threshold for the report log, in bytes. Defaults to
-  // DEFAULT_MAX_LOG_BYTES; the plugin never sets it and tests use it to reach
-  // the rotation path without writing megabytes.
+  // Rotation threshold for the report log, in bytes. Defaults to the log's own
+  // ceiling; the plugin never sets it and tests use it to reach the rotation
+  // path without writing megabytes.
   maxLogBytes?: number;
 }
 
@@ -110,27 +100,10 @@ interface PublishMeta {
   run?: PublishRunMeta;
 }
 
-// JsonlEntry is the on-disk log row shape; api.ts also reads it to render
-// per-analyzer report history, hence the export.
-export interface JsonlEntry {
-  ts: string;
-  analyzer: string;
-  trigger: string;
-  engineId?: string;
-  sessionStart?: string;
-  sessionEnd?: string;
-  durationSec?: number;
-  report: string;
-  failure?: string;
-  model?: string;
-  totalTokens?: number;
-  cachedTokens?: number;
-  costUsd?: number;
-}
-
-// All notification paths this plugin emits are SK v1 (`notifications.*`).
-// A future v2-shaped path must pass `SKVersion.v2` to keep it out of the v1
-// full data model.
+// All notification paths this plugin emits are SK v1 (`notifications.*`),
+// which is also the only version a plugin's handleMessage can publish: the
+// server's plugin wrapper forwards the id and the delta and drops anything
+// after them.
 export class ReportPublisher {
   // The state each notification path last carried from a successful report.
   // A failure notice must not lower a standing non-nominal state on the same
@@ -143,11 +116,11 @@ export class ReportPublisher {
   // fail against a state this map has forgotten.
   private readonly lastReportState = new Map<string, NotificationState>();
 
-  // Bytes in the current log generation, or null until the first append of this
-  // process stats the file. See rotateIfOversized.
-  private logBytes: number | null = null;
+  private readonly reportLog: ReportLog;
 
-  constructor(private cfg: PublisherCfg) {}
+  constructor(private cfg: PublisherCfg) {
+    this.reportLog = new ReportLog(cfg.logPath, cfg.maxLogBytes);
+  }
 
   // Failure notifications always publish on the canonical report path
   // (notifications.openrouter-companion.<id>.report). For a default analyzer
@@ -183,7 +156,6 @@ export class ReportPublisher {
         this.makeDelta(headlineOf(message), FAILURE_STATE, now, path, {
           audible: opts.audible === true,
         }),
-        SKVersion.v1,
       );
       // What stands on the path now is this failure, not the report it
       // replaced. `warn` does not outrank itself, so a second failure
@@ -229,7 +201,6 @@ export class ReportPublisher {
         // otherwise: the alerts analyzer's per-bank alarm is meant to be heard.
         audible: override.audible ?? true,
       }),
-      SKVersion.v1,
     );
     this.lastReportState.set(override.path, state);
     await this.appendLog(this.buildEntry(override.logText ?? displayText, meta, now));
@@ -333,40 +304,10 @@ export class ReportPublisher {
   // report as an analysis failure and overwrite it with a warn. Surface the
   // failure on the server log instead of swallowing it.
   private async appendLog(entry: JsonlEntry): Promise<void> {
-    const line = `${JSON.stringify(entry)}\n`;
     try {
-      await this.rotateIfOversized();
-      await appendFile(this.cfg.logPath, line);
-      this.logBytes = (this.logBytes ?? 0) + Buffer.byteLength(line);
+      await this.reportLog.append(entry);
     } catch (err) {
-      // A failed append leaves the running total where it was, which is what
-      // the file still holds.
       this.cfg.app.error(`report log append failed: ${stringify(err)}`);
     }
-  }
-
-  // Keep the report log bounded. Nothing else trims it, so an unbounded log
-  // would eventually cost both disk and a growing admin request. One generation
-  // is kept as `<log>.1`; the panel reads only the current file, so history
-  // immediately after a rotation is short rather than lost.
-  //
-  // The size is stat'd once per plugin start and then tracked by what this
-  // publisher writes, because the rotation fires about once a year at a few
-  // hundred rows a day and a stat before every append is a filesystem round
-  // trip that learns nothing. The plugin is the sole writer of this file.
-  private async rotateIfOversized(): Promise<void> {
-    if (this.logBytes === null) {
-      try {
-        this.logBytes = (await stat(this.cfg.logPath)).size;
-      } catch {
-        // No log yet (the first append creates it), or it is unreadable; either
-        // way there is nothing to rotate and the append reports any real fault.
-        this.logBytes = 0;
-        return;
-      }
-    }
-    if (this.logBytes < (this.cfg.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES)) return;
-    await rename(this.cfg.logPath, `${this.cfg.logPath}.1`);
-    this.logBytes = 0;
   }
 }

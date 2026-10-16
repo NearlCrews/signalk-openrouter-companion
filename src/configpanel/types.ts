@@ -1,7 +1,12 @@
 // Panel-facing types. These describe only the slices of the plugin config and
-// the REST payloads the panel actually reads, kept local so the panel bundle
-// stays decoupled from the backend's full runtime types. The rjsf schema in
-// src/schema.ts remains the authoritative storage shape.
+// the REST payloads the panel actually reads. Where the panel edits a shape
+// the plugin defines (provider routing, the history source), it imports the
+// type itself: a type-only import erases at compile time, so nothing of the
+// backend reaches the panel bundle and the two cannot drift. The rjsf schema
+// in src/schema.ts remains the authoritative storage shape.
+
+import type { HistorySource, LegacyQuestDbCfg } from '../historyConfig.js';
+import type { ProviderRoutingCfg } from '../types.js';
 
 // The analyzer's standardized trigger block, as the panel edits it.
 interface AnalyzerTriggerConfig {
@@ -25,19 +30,10 @@ export interface PanelConfig {
     model?: string;
     maxCallsPerDay?: number;
     fallbackModels?: string[];
-    // Intentional structural mirror of ProviderRoutingCfg in src/types.ts. Kept
-    // local so the panel bundle stays decoupled from backend runtime types; if
-    // you add a provider field there, add it here and in src/schema.ts too.
-    provider?: {
-      sort?: 'price' | 'throughput' | 'latency';
-      maxPrice?: { prompt?: number; completion?: number; request?: number };
-      allowFallbacks?: boolean;
-      dataCollection?: 'allow' | 'deny';
-      zdr?: boolean;
-    };
+    provider?: ProviderRoutingCfg;
   };
   history?: {
-    source?: 'none' | 'questdb' | 'influxdb';
+    source?: HistorySource;
     questdb?: { url?: string };
     influxdb?: {
       version?: '1' | '2';
@@ -49,7 +45,7 @@ export interface PanelConfig {
   };
   // Read only during migration from releases that stored QuestDB at the top
   // level. The panel normalizes this into `history` before editing or saving.
-  questdb?: { enabled?: boolean; url?: string };
+  questdb?: LegacyQuestDbCfg;
   analyzers?: Record<string, AnalyzerConfig>;
 }
 
@@ -66,8 +62,9 @@ export interface AnalyzerStatus {
 
 export interface PanelStatus {
   startedAt: number;
+  // The plugin only answers this route once an API key is configured, so a
+  // payload here means the key is set.
   openrouter: {
-    apiKeySet: boolean;
     model: string;
     callsToday: number;
     maxCallsPerDay: number;
@@ -76,7 +73,7 @@ export interface PanelStatus {
     tokensToday: number;
     costToday: number;
   };
-  history: { source: 'none' | 'questdb' | 'influxdb'; reachable: boolean | null };
+  history: { source: HistorySource; reachable: boolean | null };
   analyzers: AnalyzerStatus[];
 }
 
@@ -87,7 +84,7 @@ export interface ModelOption {
 }
 
 // A single rendered report row (a slice of the on-disk JsonlEntry).
-interface ReportEntry {
+export interface ReportEntry {
   ts: string;
   trigger: string;
   engineId?: string;

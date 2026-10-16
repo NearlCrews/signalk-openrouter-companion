@@ -1,32 +1,24 @@
 import type { ReactElement } from 'react';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import {
-  Banner,
   Button,
-  Card,
   Checkbox,
   Cluster,
-  Code,
   CollapsibleSection,
-  formatCount,
   LabeledField,
-  RelativeAge,
   Select,
   Stack,
   StatusIndicator,
-  Text,
-  usePanelLocale,
   VisuallyHidden,
 } from 'signalk-nearlcrews-ui';
-import { EmptyState, useDisclosure } from 'signalk-nearlcrews-ui/composites';
+import { useDisclosure } from 'signalk-nearlcrews-ui/composites';
 import { SEVERITY_FLOOR_PRESETS } from '../../severityFloors.js';
-import { reportTriggerLabel } from '../reportTrigger.js';
 import { buildScheduleOptions } from '../scheduleOptions.js';
 import type { AnalyzerStatus, AnalyzerUiState } from '../types.js';
 import { AnalyzerDrawerBody, AnalyzerDrawerToggle } from './AnalyzerDrawer.js';
-import styles from './analyzer.module.css';
 import { useControlHint } from './ControlHint.js';
 import { PromptDrawer } from './PromptDrawer.js';
+import { ReportsList } from './ReportsList.js';
 
 interface Props {
   analyzer: AnalyzerStatus;
@@ -63,12 +55,11 @@ export const AnalyzerRow = memo(function AnalyzerRow({
   severityFloor,
   onSeverityFloorChange,
 }: Props): ReactElement {
-  const locale = usePanelLocale();
   const expanded = Boolean(ui.expanded);
   const reportsOpen = Boolean(ui.reportsOpen);
   const promptOpen = Boolean(ui.promptOpen);
   const cronEnabled = analyzer.cron.enabled;
-  const scheduleOptions = buildScheduleOptions(schedule);
+  const scheduleOptions = useMemo(() => buildScheduleOptions(schedule), [schedule]);
   // The cost sits beside the button that spends it, not in a section the
   // operator may never open, and it doubles as the inert button's reason.
   const { hintId: fireHintId, hint: fireHint } = useControlHint(
@@ -187,59 +178,7 @@ export const AnalyzerRow = memo(function AnalyzerRow({
         </Stack>
 
         <AnalyzerDrawerBody drawer={reportsDrawer} label={`Reports for ${analyzer.title}`}>
-          <Card>
-            {ui.reportsLoading ? (
-              <StatusIndicator tone="info">Loading reports…</StatusIndicator>
-            ) : ui.reportsError ? (
-              <Banner tone="danger">Failed to load reports: {ui.reportsError}</Banner>
-            ) : !ui.reports || ui.reports.length === 0 ? (
-              <EmptyState
-                title="No reports yet"
-                description="This analyzer writes a report the first time it runs."
-              />
-            ) : (
-              <div className={styles.reportList}>
-                {ui.reports.map((report) => (
-                  <article
-                    // `ts` is an ISO timestamp with milliseconds and the router
-                    // runs one analyzer at a time, so a repeat of this triple
-                    // would take two runs completing in the same millisecond.
-                    key={`${report.ts}-${report.trigger}-${report.engineId ?? ''}`}
-                    className={styles.reportEntry}
-                  >
-                    <Text as="div" tone="muted" size="sm">
-                      <RelativeAge since={report.ts} /> · {reportTriggerLabel(report.trigger)}
-                      {report.engineId ? ` · Engine ${report.engineId}` : ''}
-                      {typeof report.durationSec === 'number'
-                        ? ` · ${report.durationSec}s session`
-                        : ''}
-                    </Text>
-                    {report.model ? (
-                      <Text as="div" tone="muted" size="sm">
-                        <Code>{report.model}</Code>
-                        {typeof report.totalTokens === 'number'
-                          ? ` · ${formatCount(report.totalTokens, 'token', undefined, { locale })}`
-                          : ''}
-                        {typeof report.costUsd === 'number'
-                          ? ` · $${report.costUsd.toFixed(4)}`
-                          : ''}
-                      </Text>
-                    ) : null}
-                    {report.report ? (
-                      <Text as="div" size="sm" className={styles.reportText}>
-                        {report.report}
-                      </Text>
-                    ) : null}
-                    {report.failure ? (
-                      <Text as="div" tone="danger" size="sm" className={styles.reportText}>
-                        Failure: {report.failure}
-                      </Text>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            )}
-          </Card>
+          <ReportsList ui={ui} />
         </AnalyzerDrawerBody>
 
         <AnalyzerDrawerBody drawer={promptDrawer} label={`Prompt for ${analyzer.title}`}>

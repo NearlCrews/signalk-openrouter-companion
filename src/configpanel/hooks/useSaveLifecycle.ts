@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AnalyzerConfig, PanelConfig, PanelStatus, SavedNotice } from '../types.js';
-import { useConfig } from './useConfig.js';
+import type { PanelConfig, PanelStatus, SavedNotice } from '../types.js';
+import { type UseConfig, useConfig } from './useConfig.js';
 
-// Phases of the post-save notice: the plugin is restarting, then it is done.
-const NOTICE_RESTARTING = 'restarting';
-const NOTICE_DONE = 'done';
+// The words the save bar and the failure banner show for a notice.
+function noticeTextFor(notice: SavedNotice | null): string {
+  if (!notice) return '';
+  const at = new Date(notice.requestedAt).toLocaleTimeString();
+  if (notice.error) return `Save failed at ${at}: ${notice.error}`;
+  return notice.phase === 'done'
+    ? `Saved at ${at}. Plugin restarted.`
+    : `Save requested at ${at}. Plugin restarting…`;
+}
 
-export interface UseSaveLifecycle {
-  // The edit-buffer surface, re-exposed from useConfig so the panel has one
-  // hook to consume.
-  cfg: PanelConfig;
-  dirty: boolean;
-  setSection: (patch: Partial<PanelConfig>) => void;
-  setAnalyzerCfg: (id: string, patch: Partial<AnalyzerConfig>) => void;
-  setSchedule: (id: string, pattern: string) => void;
+// The edit-buffer surface, re-exposed from useConfig so the panel has one hook
+// to consume, plus the save lifecycle.
+export interface UseSaveLifecycle extends Omit<UseConfig, 'discard' | 'resyncCount'> {
   // The save lifecycle: the in-flight latch, the two-phase notice and its
   // rendered text, and the actions. Focus after Save and Discard belongs to
   // the shared save bar, which moves it to its status line.
@@ -34,8 +35,8 @@ export function useSaveLifecycle(
   save: (configuration: PanelConfig) => void,
   status: PanelStatus | null,
 ): UseSaveLifecycle {
-  const { cfg, dirty, setSection, setAnalyzerCfg, setSchedule, discard, resyncCount } =
-    useConfig(configuration);
+  const { discard, resyncCount, ...config } = useConfig(configuration);
+  const { cfg } = config;
 
   // Latches between Save click and the next host configuration push so a rapid
   // double-click cannot fire two saves before the host resyncs. Cleared on the
@@ -73,9 +74,7 @@ export function useSaveLifecycle(
     const watch = restartWatchRef.current;
     if (watch && typeof status?.startedAt === 'number' && status.startedAt !== watch.prior) {
       restartWatchRef.current = null;
-      setSavedNotice((prev) =>
-        prev?.phase === NOTICE_RESTARTING ? { ...prev, phase: NOTICE_DONE } : prev,
-      );
+      setSavedNotice((prev) => (prev?.phase === 'restarting' ? { ...prev, phase: 'done' } : prev));
     }
   }, [status]);
 
@@ -88,7 +87,7 @@ export function useSaveLifecycle(
     if (!savedNotice || savedNotice.error) return;
     const handle = setTimeout(
       () => setSavedNotice(null),
-      savedNotice.phase === NOTICE_DONE ? 6000 : 30000,
+      savedNotice.phase === 'done' ? 6000 : 30000,
     );
     return () => clearTimeout(handle);
   }, [savedNotice]);
@@ -108,7 +107,7 @@ export function useSaveLifecycle(
       restartWatchRef.current = null;
       setSavedNotice({
         requestedAt,
-        phase: NOTICE_DONE,
+        phase: 'done',
         error: err instanceof Error ? err.message : String(err),
       });
       return;
@@ -119,12 +118,12 @@ export function useSaveLifecycle(
     // disarmed and let the auto-clear retire the notice instead.
     restartWatchRef.current =
       typeof status?.startedAt === 'number' ? { prior: status.startedAt } : null;
-    setSavedNotice({ requestedAt, phase: NOTICE_RESTARTING });
+    setSavedNotice({ requestedAt, phase: 'restarting' });
     // Fallback: if the host never pushes a fresh configuration prop (the only
     // other path that clears `saving`), drop the latch after a generous timeout
     // so the Save button is not pinned forever on a silent failure.
     if (latchTimerRef.current) clearTimeout(latchTimerRef.current);
-    latchTimerRef.current = setTimeout(() => setSaving((s) => (s ? false : s)), 30_000);
+    latchTimerRef.current = setTimeout(() => setSaving(false), 30_000);
   };
 
   const onDiscard = (): void => {
@@ -133,24 +132,11 @@ export function useSaveLifecycle(
     setSavedNotice(null);
   };
 
-  const at = savedNotice ? new Date(savedNotice.requestedAt).toLocaleTimeString() : '';
-  const noticeText = savedNotice
-    ? savedNotice.error
-      ? `Save failed at ${at}: ${savedNotice.error}`
-      : savedNotice.phase === NOTICE_DONE
-        ? `Saved at ${at}. Plugin restarted.`
-        : `Save requested at ${at}. Plugin restarting…`
-    : '';
-
   return {
-    cfg,
-    dirty,
-    setSection,
-    setAnalyzerCfg,
-    setSchedule,
+    ...config,
     saving,
     savedNotice,
-    noticeText,
+    noticeText: noticeTextFor(savedNotice),
     onSave,
     onDiscard,
   };

@@ -1,12 +1,12 @@
 import { asFiniteNumber } from './format.js';
-import type {
-  EngineBinHistory,
-  EngineWindowRequest,
-  HistoryProvider,
-  PathWindowSummary,
+import {
+  type EngineBinHistory,
+  type EngineWindowRequest,
+  emptyEngineBins,
+  type HistoryProvider,
+  type PathWindowSummary,
 } from './history.js';
-import { fetchWithTimeout } from './http.js';
-import { normalizeBaseUrl } from './questdb.js';
+import { discardBody, fetchWithTimeout, normalizeBaseUrl } from './http.js';
 
 export type InfluxDBVersion = '1' | '2';
 
@@ -51,6 +51,7 @@ const INFLUXDB_ENGINE_MAX_BYTES = 64 * 1024 * 1024;
 const INFLUXDB_ENGINE_MAX_SAMPLES = 2_000_000;
 const INFLUXDB_ENGINE_TIMEOUT_MS = 60_000;
 const INFLUXDB_ENGINE_BUDGET_ERROR = 'InfluxDB engine history exceeded its bounded query budget';
+const INFLUXDB_INVALID_RESPONSE = 'InfluxDB returned an invalid query response';
 
 export function escapeInfluxIdentifier(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -87,16 +88,16 @@ function firstSeries(result: InfluxResult): InfluxSeries | null {
 
 function decodeResult(body: unknown): InfluxResult {
   if (body === null || typeof body !== 'object') {
-    throw new Error('InfluxDB returned an invalid query response');
+    throw new Error(INFLUXDB_INVALID_RESPONSE);
   }
   const response = body as InfluxResponse;
   if (typeof response.error === 'string') throw new Error('InfluxDB query failed');
   if (!Array.isArray(response.results) || response.results.length === 0) {
-    throw new Error('InfluxDB returned an invalid query response');
+    throw new Error(INFLUXDB_INVALID_RESPONSE);
   }
   const result = response.results[0];
   if (result === null || typeof result !== 'object') {
-    throw new Error('InfluxDB returned an invalid query response');
+    throw new Error(INFLUXDB_INVALID_RESPONSE);
   }
   const typed = result as InfluxResult;
   if (typeof typed.error === 'string') throw new Error('InfluxDB query failed');
@@ -122,21 +123,39 @@ class EngineQueryBudget {
   }
 }
 
-function emptyEngineBins(request: EngineWindowRequest): Map<string, EngineBinHistory> {
-  return new Map(
-    request.bins.map(({ key }) => [
-      key,
-      { fuelCount: 0, sogCount: 0, meanFuelRate: null, meanSog: null },
-    ]),
-  );
-}
-
 function binKey(request: EngineWindowRequest, rpmHz: number): string | null {
   if (rpmHz < request.runningThresholdHz) return null;
   for (const bin of request.bins) {
     if (rpmHz < bin.maxHz) return bin.key;
   }
   return request.bins.at(-1)?.key ?? null;
+}
+
+// The newest sample at or before a timestamp, read off one ordered stream.
+// The engine merge walks the fuel and SOG streams in step with the RPM stream,
+// and both need the same preceding-sample ASOF match inside a freshness window.
+class AsofCursor {
+  private latest: TimedValue | null = null;
+
+  constructor(
+    private readonly iterator: AsyncIterator<TimedValue>,
+    private next: IteratorResult<TimedValue>,
+  ) {}
+
+  // Consume every sample at or before `timestamp`, keeping the newest.
+  async advanceTo(timestamp: number): Promise<void> {
+    while (!this.next.done && this.next.value.timestamp <= timestamp) {
+      this.latest = this.next.value;
+      this.next = await this.iterator.next();
+    }
+  }
+
+  // The newest consumed value, when it is no older than `windowMs` before
+  // `timestamp`.
+  valueWithin(timestamp: number, windowMs: number): number | null {
+    const latest = this.latest;
+    return latest && timestamp - latest.timestamp <= windowMs ? latest.value : null;
+  }
 }
 
 function timestampMs(value: unknown): number | null {
@@ -184,22 +203,20 @@ export class InfluxDBClient implements HistoryProvider {
   ): Promise<Map<string, PathWindowSummary>> {
     const entries = await Promise.all(
       paths.map(async (path): Promise<[string, PathWindowSummary] | null> => {
-        const result = await this.query(
-          `SELECT FIRST("value") AS "first_value", LAST("value") AS "last_value", COUNT("value") AS "sample_count" FROM ${identifier(path)} WHERE ${this.whereClause(fromMs, toMs)}`,
+        const read = await this.queryRow(
+          path,
+          `FIRST("value") AS "first_value", LAST("value") AS "last_value", COUNT("value") AS "sample_count"`,
+          fromMs,
+          toMs,
           abortSignal,
         );
-        const series = firstSeries(result);
-        const row = series ? rows(series)[0] : undefined;
-        if (!series || !row) return null;
-        const firstIdx = columnIndex(series, 'first_value');
-        const lastIdx = columnIndex(series, 'last_value');
-        const countIdx = columnIndex(series, 'sample_count');
+        if (!read) return null;
         return [
           path,
           {
-            first: asFiniteNumber(firstIdx >= 0 ? row[firstIdx] : null),
-            last: asFiniteNumber(lastIdx >= 0 ? row[lastIdx] : null),
-            count: asFiniteNumber(countIdx >= 0 ? row[countIdx] : null) ?? 0,
+            first: read.number('first_value'),
+            last: read.number('last_value'),
+            count: read.number('sample_count') ?? 0,
           },
         ];
       }),
@@ -215,15 +232,14 @@ export class InfluxDBClient implements HistoryProvider {
   ): Promise<Map<string, number>> {
     const entries = await Promise.all(
       paths.map(async (path): Promise<[string, number] | null> => {
-        const result = await this.query(
-          `SELECT MEAN("value") AS "mean_value" FROM ${identifier(path)} WHERE ${this.whereClause(fromMs, toMs)}`,
+        const read = await this.queryRow(
+          path,
+          `MEAN("value") AS "mean_value"`,
+          fromMs,
+          toMs,
           abortSignal,
         );
-        const series = firstSeries(result);
-        const row = series ? rows(series)[0] : undefined;
-        if (!series || !row) return null;
-        const meanIdx = columnIndex(series, 'mean_value');
-        const mean = asFiniteNumber(meanIdx >= 0 ? row[meanIdx] : null);
+        const mean = read?.number('mean_value') ?? null;
         return mean == null ? null : [path, mean];
       }),
     );
@@ -253,29 +269,24 @@ export class InfluxDBClient implements HistoryProvider {
     let sogIterator: AsyncGenerator<TimedValue> | null = null;
 
     try {
+      // RPM first and alone: a window the engine never ran in costs one query,
+      // not three.
       let rpm = await rpmIterator.next();
       if (rpm.done) return null;
 
       fuelIterator = this.rawSeries(request.fuelRatePath, fromMs, toMs, budget, querySignal);
       sogIterator = this.rawSeries(request.sogPath, fromMs, toMs, budget, querySignal);
-      let nextFuel = await fuelIterator.next();
-      let nextSog = await sogIterator.next();
-      let latestFuel: TimedValue | null = null;
-      let latestSog: TimedValue | null = null;
+      const [firstFuel, firstSog] = await Promise.all([fuelIterator.next(), sogIterator.next()]);
+      const fuel = new AsofCursor(fuelIterator, firstFuel);
+      const sog = new AsofCursor(sogIterator, firstSog);
 
       const out = emptyEngineBins(request);
       const fuelTotals = new Map<string, number>();
       const sogTotals = new Map<string, number>();
       while (!rpm.done) {
         const rpmSample = rpm.value;
-        while (!nextFuel.done && nextFuel.value.timestamp <= rpmSample.timestamp) {
-          latestFuel = nextFuel.value;
-          nextFuel = await fuelIterator.next();
-        }
-        while (!nextSog.done && nextSog.value.timestamp <= rpmSample.timestamp) {
-          latestSog = nextSog.value;
-          nextSog = await sogIterator.next();
-        }
+        await fuel.advanceTo(rpmSample.timestamp);
+        await sog.advanceTo(rpmSample.timestamp);
 
         const key = binKey(request, rpmSample.value);
         rpm = await rpmIterator.next();
@@ -283,13 +294,15 @@ export class InfluxDBClient implements HistoryProvider {
         const stats = out.get(key);
         if (!stats) continue;
 
-        if (latestFuel && rpmSample.timestamp - latestFuel.timestamp <= request.joinWindowMs) {
+        const fuelRate = fuel.valueWithin(rpmSample.timestamp, request.joinWindowMs);
+        if (fuelRate != null) {
           stats.fuelCount += 1;
-          fuelTotals.set(key, (fuelTotals.get(key) ?? 0) + latestFuel.value);
+          fuelTotals.set(key, (fuelTotals.get(key) ?? 0) + fuelRate);
         }
-        if (latestSog && rpmSample.timestamp - latestSog.timestamp <= request.joinWindowMs) {
+        const speed = sog.valueWithin(rpmSample.timestamp, request.joinWindowMs);
+        if (speed != null) {
           stats.sogCount += 1;
-          sogTotals.set(key, (sogTotals.get(key) ?? 0) + latestSog.value);
+          sogTotals.set(key, (sogTotals.get(key) ?? 0) + speed);
         }
       }
       for (const [key, stats] of out) {
@@ -305,6 +318,10 @@ export class InfluxDBClient implements HistoryProvider {
       throw err;
     } finally {
       clearTimeout(deadlineHandle);
+      // A generator's return() waits for its pending next(), and one of the
+      // two first chunks can still be in flight when the other fails. Abort
+      // the shared signal first so that fetch ends instead of holding the run.
+      deadline.abort();
       await Promise.allSettled([
         rpmIterator.return(undefined),
         fuelIterator?.return(undefined),
@@ -344,19 +361,18 @@ export class InfluxDBClient implements HistoryProvider {
       const timeIdx = columnIndex(series, 'time');
       const valueIdx = columnIndex(series, 'value');
       if (timeIdx < 0 || valueIdx < 0) {
-        throw new Error('InfluxDB returned an invalid query response');
+        throw new Error(INFLUXDB_INVALID_RESPONSE);
       }
       const chunkRows = rows(series);
       budget.addSamples(chunkRows.length);
-      const chunk: TimedValue[] = [];
+      // Already time-ordered: the query asks for ORDER BY time ASC, and the
+      // merge in binEngineWindow relies on that order across chunks.
       for (const row of chunkRows) {
         const timestamp = timestampMs(row[timeIdx]);
         const value = asFiniteNumber(row[valueIdx]);
         if (timestamp == null || value == null) continue;
-        chunk.push({ timestamp, value });
+        yield { timestamp, value };
       }
-      chunk.sort((a, b) => a.timestamp - b.timestamp);
-      yield* chunk;
     }
   }
 
@@ -365,7 +381,8 @@ export class InfluxDBClient implements HistoryProvider {
     budget: EngineQueryBudget,
     abortSignal?: AbortSignal,
   ): AsyncGenerator<InfluxResult> {
-    const url = this.queryUrl(influxql, 'ms');
+    const url = this.queryUrl(influxql);
+    url.searchParams.set('epoch', 'ms');
     url.searchParams.set('chunked', 'true');
     url.searchParams.set('chunk_size', String(INFLUXDB_CHUNK_SIZE));
     const response = await fetch(url.toString(), {
@@ -373,8 +390,11 @@ export class InfluxDBClient implements HistoryProvider {
       redirect: 'error',
       signal: abortSignal,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    if (!response.body) throw new Error('InfluxDB returned an invalid query response');
+    if (!response.ok) {
+      discardBody(response);
+      throw new Error(`HTTP ${response.status}`);
+    }
+    if (!response.body) throw new Error(INFLUXDB_INVALID_RESPONSE);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -401,7 +421,7 @@ export class InfluxDBClient implements HistoryProvider {
       if (pending.trim()) yield decodeResult(JSON.parse(pending));
     } catch (err) {
       if (err instanceof SyntaxError) {
-        throw new Error('InfluxDB returned an invalid query response');
+        throw new Error(INFLUXDB_INVALID_RESPONSE);
       }
       throw err;
     } finally {
@@ -410,11 +430,10 @@ export class InfluxDBClient implements HistoryProvider {
     }
   }
 
-  private queryUrl(influxql: string, epoch?: 'ms'): URL {
+  private queryUrl(influxql: string): URL {
     const url = new URL(`${this.baseUrl}/query`);
     url.searchParams.set('db', this.database);
     url.searchParams.set('q', influxql);
-    if (epoch) url.searchParams.set('epoch', epoch);
     return url;
   }
 
@@ -431,19 +450,42 @@ export class InfluxDBClient implements HistoryProvider {
     return headers;
   }
 
-  private async query(
-    influxql: string,
-    abortSignal?: AbortSignal,
-    epoch?: 'ms',
-  ): Promise<InfluxResult> {
-    const url = this.queryUrl(influxql, epoch);
+  private async query(influxql: string, abortSignal?: AbortSignal): Promise<InfluxResult> {
     const response = await fetchWithTimeout(
-      url.toString(),
+      this.queryUrl(influxql).toString(),
       { headers: this.authHeaders(), redirect: 'error' },
       INFLUXDB_DEFAULT_TIMEOUT_MS,
       abortSignal,
     );
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      discardBody(response);
+      throw new Error(`HTTP ${response.status}`);
+    }
     return decodeResult(await response.json());
+  }
+
+  // One aggregate row for one path over a window, with a reader for its
+  // numeric columns by name, or null when the window holds no row. The per-path
+  // summaries differ only in the select list.
+  private async queryRow(
+    path: string,
+    select: string,
+    fromMs: number,
+    toMs: number,
+    abortSignal?: AbortSignal,
+  ): Promise<{ number(column: string): number | null } | null> {
+    const result = await this.query(
+      `SELECT ${select} FROM ${identifier(path)} WHERE ${this.whereClause(fromMs, toMs)}`,
+      abortSignal,
+    );
+    const series = firstSeries(result);
+    const row = series ? rows(series)[0] : undefined;
+    if (!series || !row) return null;
+    return {
+      number(column) {
+        const idx = columnIndex(series, column);
+        return asFiniteNumber(idx >= 0 ? row[idx] : null);
+      },
+    };
   }
 }

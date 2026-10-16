@@ -12,12 +12,22 @@ export type {
 } from '../core/triggerContext.js';
 
 import type { PublishRunMeta, TriggerCtx, TriggerSpec } from '../core/triggerContext.js';
+import type { AnalyzerTriggerCfg } from '../types.js';
 
 export type AnalysisInput = Record<string, unknown>;
 
-interface AppForAnalyzer {
-  getSelfPath(path: string): unknown;
-  selfContext?: string;
+// What every analyzer's constructor reads: its trigger block and an optional
+// system-prompt override. An analyzer with settings of its own extends this,
+// and its config section in PluginOptions satisfies it as is.
+export interface AnalyzerBaseCfg {
+  triggers: AnalyzerTriggerCfg;
+  customSystemPrompt?: string;
+}
+
+// The two messages one LLM call sends.
+export interface PromptPair {
+  system: string;
+  user: string;
 }
 
 export interface AnalyzerDeps {
@@ -27,7 +37,7 @@ export interface AnalyzerDeps {
   budget: import('../core/budget.js').BudgetTracker;
   llm: import('../core/openrouter.js').OpenRouterClient;
   logger: import('../core/logger.js').Logger;
-  app: AppForAnalyzer;
+  app: Pick<import('../core/app.js').PluginApp, 'getSelfPath' | 'selfContext'>;
   setStatus?: (msg: string) => void;
   // The "all healthy" status string the router uses when recovering from a
   // budget-exhausted state. index.ts populates with the analyzer-count aware
@@ -65,7 +75,7 @@ export interface Analyzer<I extends AnalysisInput = AnalysisInput> {
   // acts on the same subject and one run at a time is correct.
   runKey?(ctx: TriggerCtx): string | null;
   collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<I | null>;
-  buildPrompt(input: I): { system: string; user: string };
+  buildPrompt(input: I): PromptPair;
   // Optional. When omitted, the TriggerRouter publishes via
   // `deps.publisher.publishReport(this.id, ctx, text)` on the canonical
   // `notifications.openrouter-companion.<id>.report` path with

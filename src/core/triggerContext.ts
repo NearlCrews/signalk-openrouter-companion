@@ -9,14 +9,19 @@
 // `Analyzer.ts` re-exports these names so an analyzer still imports its whole
 // vocabulary from one place.
 //
-// Types only: this module imports nothing, so it cannot grow an edge back into
-// either layer.
+// This module imports nothing, so it cannot grow an edge back into either
+// layer, and the browser panel can read it without pulling in Node code.
 
-export type BatteryEventKind =
-  | 'low-soc-enter'
-  | 'low-soc-exit'
-  | 'cell-imbalance-enter'
-  | 'cell-imbalance-exit';
+// Every threshold crossing the battery monitor raises. The alerts analyzer
+// subscribes to all of them and the lifecycle wires each one to the router, so
+// the list and the type are written once here.
+export const BATTERY_EVENT_KINDS = [
+  'low-soc-enter',
+  'low-soc-exit',
+  'cell-imbalance-enter',
+  'cell-imbalance-exit',
+] as const;
+export type BatteryEventKind = (typeof BATTERY_EVENT_KINDS)[number];
 
 export type TriggerSpec =
   | { kind: 'engine-start' }
@@ -60,12 +65,16 @@ interface EngineSessionCtx {
   durationSec: number;
 }
 
+// One occurrence of a trigger. The router matches it against each analyzer's
+// TriggerSpec list from these fields alone: `kind`, plus the PUT path for a
+// PUT and the subkind for a battery event.
 export interface TriggerCtx {
   kind: TriggerKind;
   firedAt: Date;
   engineSession?: EngineSessionCtx;
-  put?: { value: unknown };
-  notification?: { path: string; value: unknown };
+  // The Signal K PUT path the request arrived on. Absent on a manual fire from
+  // the admin panel, which names its analyzer directly instead of matching.
+  put?: { path: string };
   bankId?: string;
   batteryEvent?: { subkind: BatteryEventKind; soc?: number; imbalanceV?: number };
 }

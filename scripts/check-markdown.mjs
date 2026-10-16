@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { applyFixes } from 'markdownlint';
 import { lint, readConfig } from 'markdownlint/promise';
+import { exitOnFailures } from './repository.mjs';
 
 // Lints the maintained Markdown with the markdownlint library, called directly.
 // Its command-line wrapper exists to expand globs, and that glob stack carried
@@ -46,9 +47,6 @@ const failures = files.flatMap((path) =>
     }),
 );
 
-if (failures.length > 0) {
-  console.error(failures.join('\n'));
-  process.exit(1);
-}
+exitOnFailures(failures);
 
 process.stdout.write(`Markdown lint passed for ${files.length} files.\n`);

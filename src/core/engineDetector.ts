@@ -1,9 +1,13 @@
 import { TypedEmitter } from './emitter.js';
-import { asFiniteNumber } from './format.js';
+import { asFiniteNumber, MINUTE_MS, SECOND_MS } from './format.js';
 import type { Logger } from './logger.js';
 import { fuseMax } from './readings.js';
 
 type EngineEventKind = 'engine-start' | 'engine-stop' | 'possible-stop';
+
+// How far a persisted session's last delta may lead the restore clock before
+// the snapshot is treated as clock skew or a hand-edit and dropped.
+const RESTORE_FUTURE_TOLERANCE_MS = 5 * MINUTE_MS;
 
 interface EngineSession {
   sessionStart: number;
@@ -78,10 +82,10 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
     logger: Pick<Logger, 'error'>,
   ) {
     super((message) => logger.error(message));
-    this.stopSettleMs = opts.stopSettleSec * 1000;
-    this.startSettleMs = opts.startSettleSec * 1000;
-    this.watchdogMs = opts.watchdogSec * 1000;
-    this.silenceStopMs = opts.silenceStopSec * 1000;
+    this.stopSettleMs = opts.stopSettleSec * SECOND_MS;
+    this.startSettleMs = opts.startSettleSec * SECOND_MS;
+    this.watchdogMs = opts.watchdogSec * SECOND_MS;
+    this.silenceStopMs = opts.silenceStopSec * SECOND_MS;
   }
 
   private getState(engineId: string): EngineState {
@@ -120,7 +124,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
       session: {
         sessionStart,
         sessionEnd,
-        durationSec: Math.round((sessionEnd - sessionStart) / 1000),
+        durationSec: Math.round((sessionEnd - sessionStart) / SECOND_MS),
       },
     });
   }
@@ -236,7 +240,7 @@ export class EngineDetector extends TypedEmitter<EngineEventKind, EngineEvent> {
       // Reject snapshots whose lastDeltaTs is in the future (clock skew,
       // hand-edit): a negative now - lastDeltaTs defeats both the maxResumeAge
       // check below and the silentFor comparisons in tickWatchdog.
-      if (s.lastDeltaTs > now + 5 * 60_000) continue;
+      if (s.lastDeltaTs > now + RESTORE_FUTURE_TOLERANCE_MS) continue;
       if (now - s.lastDeltaTs > maxResumeAgeMs) continue;
       this.states.set(s.engineId, {
         engineId: s.engineId,

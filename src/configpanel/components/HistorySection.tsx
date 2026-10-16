@@ -11,12 +11,17 @@ import {
   TextInput,
 } from 'signalk-nearlcrews-ui';
 import { SecretInput } from 'signalk-nearlcrews-ui/forms';
+import { HISTORY_SOURCES, type HistorySource } from '../../historyConfig.js';
 import type { HistoryTestResult, PanelConfig } from '../types.js';
-import { historyValidity, urlError } from '../utils.js';
+import { HISTORY_SOURCE_LABELS, historyValidity, urlError } from '../utils.js';
+
+type HistoryConfig = NonNullable<PanelConfig['history']>;
 
 interface Props {
-  cfg: PanelConfig;
-  set: (patch: Partial<PanelConfig>) => void;
+  // The history slice alone, so an edit elsewhere in the panel leaves this
+  // memoized section's props unchanged.
+  history: PanelConfig['history'];
+  setHistory: (history: HistoryConfig) => void;
   testResult: HistoryTestResult | null;
   onTest: () => void;
   testing: boolean;
@@ -29,8 +34,8 @@ interface Props {
 }
 
 export const HistorySection = memo(function HistorySection({
-  cfg,
-  set,
+  history: saved,
+  setHistory,
   testResult,
   onTest,
   testing,
@@ -38,10 +43,14 @@ export const HistorySection = memo(function HistorySection({
   databaseRef,
   submitted,
 }: Props): ReactElement {
-  const history: NonNullable<PanelConfig['history']> = cfg.history ?? {};
+  const history: HistoryConfig = saved ?? {};
   const questdb = history.questdb ?? {};
   const influxdb = history.influxdb ?? {};
-  const validity = historyValidity(cfg.history);
+  const setQuestdb = (patch: Partial<NonNullable<HistoryConfig['questdb']>>): void =>
+    setHistory({ ...history, questdb: { ...questdb, ...patch } });
+  const setInfluxdb = (patch: Partial<NonNullable<HistoryConfig['influxdb']>>): void =>
+    setHistory({ ...history, influxdb: { ...influxdb, ...patch } });
+  const validity = historyValidity(saved);
   const { source, noUrl, invalidUrl, missingDatabase } = validity;
   const testText = testResult
     ? testResult.ok
@@ -59,17 +68,14 @@ export const HistorySection = memo(function HistorySection({
         <Select
           value={source}
           onChange={(event) =>
-            set({
-              history: {
-                ...history,
-                source: event.target.value as 'none' | 'questdb' | 'influxdb',
-              },
-            })
+            setHistory({ ...history, source: event.target.value as HistorySource })
           }
         >
-          <option value="none">Disabled</option>
-          <option value="questdb">QuestDB</option>
-          <option value="influxdb">InfluxDB</option>
+          {HISTORY_SOURCES.map((value) => (
+            <option key={value} value={value}>
+              {HISTORY_SOURCE_LABELS[value]}
+            </option>
+          ))}
         </Select>
       </LabeledField>
 
@@ -86,9 +92,7 @@ export const HistorySection = memo(function HistorySection({
             type="url"
             placeholder="http://localhost:9000"
             value={questdb.url ?? ''}
-            onChange={(event) =>
-              set({ history: { ...history, questdb: { ...questdb, url: event.target.value } } })
-            }
+            onChange={(event) => setQuestdb({ url: event.target.value })}
           />
         </LabeledField>
       ) : null}
@@ -102,14 +106,7 @@ export const HistorySection = memo(function HistorySection({
           >
             <Select
               value={influxdb.version ?? '1'}
-              onChange={(event) =>
-                set({
-                  history: {
-                    ...history,
-                    influxdb: { ...influxdb, version: event.target.value as '1' | '2' },
-                  },
-                })
-              }
+              onChange={(event) => setInfluxdb({ version: event.target.value as '1' | '2' })}
             >
               <option value="1">InfluxDB 1.x</option>
               <option value="2">InfluxDB 2.x</option>
@@ -127,11 +124,7 @@ export const HistorySection = memo(function HistorySection({
               type="url"
               placeholder="http://localhost:8086"
               value={influxdb.url ?? ''}
-              onChange={(event) =>
-                set({
-                  history: { ...history, influxdb: { ...influxdb, url: event.target.value } },
-                })
-              }
+              onChange={(event) => setInfluxdb({ url: event.target.value })}
             />
           </LabeledField>
           <LabeledField
@@ -147,14 +140,7 @@ export const HistorySection = memo(function HistorySection({
               ref={databaseRef}
               placeholder="signalk"
               value={influxdb.database ?? ''}
-              onChange={(event) =>
-                set({
-                  history: {
-                    ...history,
-                    influxdb: { ...influxdb, database: event.target.value },
-                  },
-                })
-              }
+              onChange={(event) => setInfluxdb({ database: event.target.value })}
             />
           </LabeledField>
           <LabeledField
@@ -171,14 +157,7 @@ export const HistorySection = memo(function HistorySection({
               // away from.
               autoComplete="off"
               value={influxdb.username ?? ''}
-              onChange={(event) =>
-                set({
-                  history: {
-                    ...history,
-                    influxdb: { ...influxdb, username: event.target.value },
-                  },
-                })
-              }
+              onChange={(event) => setInfluxdb({ username: event.target.value })}
             />
           </LabeledField>
           <LabeledField
@@ -190,14 +169,7 @@ export const HistorySection = memo(function HistorySection({
               <SecretInput
                 {...splitLabeledFieldControlProps(controlContract).controlProps}
                 value={influxdb.password ?? ''}
-                onChange={(event) =>
-                  set({
-                    history: {
-                      ...history,
-                      influxdb: { ...influxdb, password: event.target.value },
-                    },
-                  })
-                }
+                onChange={(event) => setInfluxdb({ password: event.target.value })}
               />
             )}
           </LabeledField>

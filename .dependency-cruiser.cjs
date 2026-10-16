@@ -19,19 +19,19 @@ module.exports = {
       name: 'panel-does-not-import-server-internals',
       severity: 'error',
       comment:
-        'The panel may share pure contracts, but must not pull Node-only analyzer or core modules into the browser. core/triggerContext.ts is the exception: it is the run vocabulary, it imports nothing (the rule below keeps it that way), and its types erase at compile time.',
+        'The panel may share pure contracts, but must not pull Node-only analyzer or core modules into the browser. core/triggerContext.ts (the run vocabulary) and core/paths.ts (the plugin id and its HTTP prefix) are the exceptions: each imports nothing of its own (the rule below keeps it that way), so neither can carry Node code into the panel bundle.',
       from: { path: '^src/configpanel/' },
       to: {
         path: '^src/(?:index\\.ts$|(?:analyzers|core)/)',
-        pathNot: '^src/core/triggerContext\\.ts$',
+        pathNot: '^src/core/(?:triggerContext|paths)\\.ts$',
       },
     },
     {
-      name: 'trigger-vocabulary-stays-a-leaf',
+      name: 'shared-core-leaves-stay-leaves',
       severity: 'error',
       comment:
-        'core/triggerContext.ts is shared with the browser panel and read by core services that must not import the analyzer layer. It stays a leaf: no imports of its own, so it cannot carry either layer into the other.',
-      from: { path: '^src/core/triggerContext\\.ts$' },
+        'core/triggerContext.ts and core/paths.ts are shared with the browser panel, and triggerContext.ts is read by core services that must not import the analyzer layer. Both stay leaves: no imports of their own, so neither can carry one layer into another.',
+      from: { path: '^src/core/(?:triggerContext|paths)\\.ts$' },
       to: { path: '^src/' },
     },
   ],

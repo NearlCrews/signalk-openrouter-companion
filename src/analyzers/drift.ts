@@ -1,5 +1,5 @@
 import {
-  clampPositiveInt,
+  generatedLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
@@ -7,10 +7,18 @@ import {
 } from '../core/cfg.js';
 import { discoverEngineIds } from '../core/discovery.js';
 import { DAY_MS, fmtNumber, fmtPct } from '../core/format.js';
+import { type EngineBinHistory, emptyEngineBin, type HistoryProvider } from '../core/history.js';
 import { enginePaths, SOG_PATH } from '../core/paths.js';
 import { buildTriggers } from '../core/triggers.js';
-import { type AnalyzerTriggerCfg, DRIFT_DEFAULT_BASELINE_DAYS } from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type {
+  AnalysisInput,
+  Analyzer,
+  AnalyzerBaseCfg,
+  AnalyzerDeps,
+  PromptPair,
+  TriggerCtx,
+  TriggerSpec,
+} from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
 const PAST_WEEK_DAYS = 7;
@@ -26,10 +34,8 @@ const RPM_RUNNING_THRESHOLD_HZ = 5.0;
 // joined value to count toward the per-bin mean.
 const RPM_JOIN_WINDOW_MS = 5_000;
 
-export interface DriftCfg {
-  triggers: AnalyzerTriggerCfg;
+export interface DriftCfg extends AnalyzerBaseCfg {
   baselineDays: number;
-  customSystemPrompt?: string;
 }
 
 // Static: window lengths come through the user prompt's data block, not the
@@ -73,16 +79,6 @@ const BIN_DEFS: Record<BinKey, BinDef> = {
   wot: { label: 'wot', min: 75.0, max: Number.POSITIVE_INFINITY },
 };
 
-interface BinStats {
-  // Count of RPM samples in this bin that had a fresh fuel.rate / SOG pair
-  // within RPM_JOIN_WINDOW_MS. Tracked per metric: fuel.rate and SOG join
-  // independently, so one can be well-covered while the other is sparse.
-  fuelCount: number;
-  sogCount: number;
-  meanFuelRate: number | null;
-  meanSog: number | null;
-}
-
 interface BinDelta {
   fuelRateDeltaPct: number | null;
   sogDeltaPct: number | null;
@@ -90,8 +86,8 @@ interface BinDelta {
 
 interface EngineDrift {
   engineId: string;
-  thisWeek: Record<BinKey, BinStats>;
-  baseline: Record<BinKey, BinStats>;
+  thisWeek: Record<BinKey, EngineBinHistory>;
+  baseline: Record<BinKey, EngineBinHistory>;
   deltas: Record<BinKey, BinDelta>;
 }
 
@@ -110,12 +106,7 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 
   constructor(cfg: DriftCfg) {
     this.triggers = buildTriggers(this.id, cfg.triggers);
-    // Bounds mirror the schema (baselineDays minimum 14, maximum 365) so a
-    // value from a hand-edited JSON config is clamped at runtime too.
-    this.baselineDays = clampPositiveInt(cfg.baselineDays, DRIFT_DEFAULT_BASELINE_DAYS, {
-      min: 14,
-      max: 365,
-    });
+    this.baselineDays = cfg.baselineDays;
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, DRIFT_DEFAULT_SYSTEM_PROMPT);
   }
 
@@ -126,17 +117,16 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     if (engineIds.length === 0) return null;
 
     const firedMs = ctx.firedAt.getTime();
+    // The baseline ends where the week begins, so the two never overlap.
     const weekStart = firedMs - PAST_WEEK_DAYS * DAY_MS;
-    const weekEnd = firedMs;
-    const baselineEnd = weekStart;
-    const baselineStart = baselineEnd - this.baselineDays * DAY_MS;
+    const baselineStart = weekStart - this.baselineDays * DAY_MS;
 
     const engines = (
       await Promise.all(
         engineIds.map(async (engineId): Promise<EngineDrift | null> => {
           const [thisWeek, baseline] = await Promise.all([
-            binEngineWindow(history, engineId, weekStart, weekEnd, deps.signal),
-            binEngineWindow(history, engineId, baselineStart, baselineEnd, deps.signal),
+            engineBins(history, engineId, weekStart, firedMs, deps.signal),
+            engineBins(history, engineId, baselineStart, weekStart, deps.signal),
           ]);
           if (!thisWeek || totalBinCount(thisWeek) === 0) return null;
           if (!baseline || totalBinCount(baseline) === 0) return null;
@@ -158,9 +148,9 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
     };
   }
 
-  buildPrompt(input: DriftInput): { system: string; user: string } {
+  buildPrompt(input: DriftInput): PromptPair {
     const lines: string[] = [];
-    lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(generatedLine(input.generatedAt));
     lines.push(
       `Windows: past ${input.windowDays.thisWeek}d vs trailing ${input.windowDays.baseline}d baseline (baseline ends where the week begins, no overlap)`,
     );
@@ -190,13 +180,13 @@ export class DriftAnalyzer implements Analyzer<DriftInput> {
 // Requests one provider-owned aggregation per engine and window. Each provider
 // performs a preceding-sample ASOF match inside the same freshness window. The
 // common result keeps provider query syntax and row decoding out of the analyzer.
-async function binEngineWindow(
-  history: NonNullable<AnalyzerDeps['history']>,
+async function engineBins(
+  history: HistoryProvider,
   engineId: string,
   fromMs: number,
   toMs: number,
   abortSignal?: AbortSignal,
-): Promise<Record<BinKey, BinStats> | null> {
+): Promise<Record<BinKey, EngineBinHistory> | null> {
   const { rpm, fuelRate } = enginePaths(engineId);
   const result = await history.binEngineWindow(
     {
@@ -230,15 +220,16 @@ function isBinKey(k: string): k is BinKey {
   return k in BIN_DEFS;
 }
 
-function emptyBins(): Record<BinKey, BinStats> {
-  return Object.fromEntries(
-    BIN_ORDER.map((k) => [k, { fuelCount: 0, sogCount: 0, meanFuelRate: null, meanSog: null }]),
-  ) as Record<BinKey, BinStats>;
+function emptyBins(): Record<BinKey, EngineBinHistory> {
+  return Object.fromEntries(BIN_ORDER.map((k) => [k, emptyEngineBin()])) as Record<
+    BinKey,
+    EngineBinHistory
+  >;
 }
 
 function computeDeltas(
-  week: Record<BinKey, BinStats>,
-  base: Record<BinKey, BinStats>,
+  week: Record<BinKey, EngineBinHistory>,
+  base: Record<BinKey, EngineBinHistory>,
 ): Record<BinKey, BinDelta> {
   return Object.fromEntries(BIN_ORDER.map((k) => [k, deltaForBin(week[k], base[k])])) as Record<
     BinKey,
@@ -246,7 +237,7 @@ function computeDeltas(
   >;
 }
 
-function deltaForBin(w: BinStats, b: BinStats): BinDelta {
+function deltaForBin(w: EngineBinHistory, b: EngineBinHistory): BinDelta {
   // Gate each metric on its own fresh-pair count: a SOG delta must not pass
   // on fuel-sample density and vice versa.
   const fuelOk = w.fuelCount >= MIN_BIN_SAMPLES && b.fuelCount >= MIN_BIN_SAMPLES;
@@ -263,7 +254,7 @@ function pctDelta(a: number | null, b: number | null): number | null {
   return ((a - b) / b) * 100;
 }
 
-function totalBinCount(bins: Record<BinKey, BinStats>): number {
+function totalBinCount(bins: Record<BinKey, EngineBinHistory>): number {
   let n = 0;
   for (const k of BIN_ORDER) n += bins[k].fuelCount + bins[k].sogCount;
   return n;

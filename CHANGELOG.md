@@ -28,6 +28,20 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   server, starts each one, and mounts the production configuration panel
   through Signal K Admin in a real browser. It replaces the official plugin
   workflow's server lane, which only checked that the plugin loaded.
+- The REST routes rely on the admin authentication Signal K already mounts
+  over `/plugins` instead of calling `app.securityStrategy`, a server internal
+  the official plugin workflow flags. Every route stays admin-only.
+- `/api/status` no longer carries `openrouter.apiKeySet`, which was always
+  true whenever the route answered, or the legacy top-level `questdb` block,
+  which `history` replaced. `/api/openrouter/models` returns each model's id
+  and name only, the two fields the model picker reads.
+- Every bounded analyzer setting is checked once when the configuration
+  loads, against one table the JSON schema also reads its minimums and
+  maximums from. Effective values are unchanged.
+- The health and alerts schema titles now match the names the panel shows.
+- With no analyzer enabled, the plugin no longer subscribes to vessel data or
+  runs its periodic path rescan.
+- Development builds against `@signalk/server-api` 2.33.0.
 - Pushes and pull requests now gate on the runtime dependency audit the
   plugin registry scores. The development-tree audit moved to the weekly
   checks workflow, beside the external link check, and still runs before
@@ -48,6 +62,13 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   lockfile updates for undici, brace-expansion, source-map-js, and fast-uri,
   the development-tree audit reports no high or moderate advisories. None of
   these packages ship in the plugin.
+
+### Fixed
+
+- An engine RPM path listed in the maintenance extra watched paths, whose
+  engine came online after the plugin started, is no longer buffered twice.
+- Editing a history setting while its connection test runs discards that
+  test's result instead of showing it beside the edited settings.
 
 <a id="v080"></a>
 

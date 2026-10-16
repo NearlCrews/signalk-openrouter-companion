@@ -1,6 +1,7 @@
+import { PLUGIN_HTTP_PREFIX } from '../core/paths.js';
 import type { FetchResult } from './types.js';
 
-const API_BASE = '/plugins/signalk-openrouter-companion/api';
+const API_BASE = `${PLUGIN_HTTP_PREFIX}/api`;
 export const POLL_MS = 5000;
 export const REPORT_LIMIT = 10;
 

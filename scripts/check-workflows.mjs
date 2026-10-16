@@ -11,8 +11,9 @@ import {
   runsPlaywrightSuite,
   workflowJobs,
 } from './guards.mjs';
+import { exitOnFailures, readPackageJson } from './repository.mjs';
 
-const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
+const packageJson = readPackageJson();
 const scripts = packageJson.scripts;
 // The published floor, as a major: ">=22.18" reads as 22. The primary CI lane
 // must run on that major or newer, which is the invariant. Which exact major
@@ -210,10 +211,7 @@ for (const expected of ['actionlint@v1.7.12', 'zizmor-action@']) {
   }
 }
 
-if (failures.length > 0) {
-  console.error(failures.join('\n'));
-  process.exit(1);
-}
+exitOnFailures(failures);
 
 process.stdout.write(
   'Workflow pins, gate placement, browser installs, and release invariants passed.\n',

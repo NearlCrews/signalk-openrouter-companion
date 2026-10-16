@@ -7,7 +7,7 @@ import {
   type EnabledGatedNode,
   type TriggerSchemaNode,
 } from '../src/schema.js';
-import { DEFAULT_OPTIONS, mergeWithDefaults } from '../src/types.js';
+import { ANALYZER_BOUNDS, DEFAULT_OPTIONS, mergeWithDefaults } from '../src/types.js';
 
 /**
  * Index into a Record by key, asserting the key is present. Narrows away the
@@ -353,6 +353,53 @@ describe('schema', () => {
 });
 
 describe('mergeWithDefaults', () => {
+  it('snaps a whole-number bounded setting to the nearest bound the schema advertises', () => {
+    const r = mergeWithDefaults({
+      analyzers: {
+        aging: { shortWindowDays: 1, longWindowDays: 5000 },
+        drift: { baselineDays: 2 },
+        liveness: { stalenessThresholdSec: 5 },
+        forecast: { severityFloor: 'catastrophic' },
+      },
+    } as never);
+    expect(r.analyzers.aging.shortWindowDays).toBe(ANALYZER_BOUNDS.aging.shortWindowDays.min);
+    expect(r.analyzers.aging.longWindowDays).toBe(ANALYZER_BOUNDS.aging.longWindowDays.max);
+    expect(r.analyzers.drift.baselineDays).toBe(ANALYZER_BOUNDS.drift.baselineDays.min);
+    expect(r.analyzers.liveness.stalenessThresholdSec).toBe(
+      ANALYZER_BOUNDS.liveness.stalenessThresholdSec.min,
+    );
+    // A floor off the preset scale falls back to the default, not to a bound.
+    expect(r.analyzers.forecast.severityFloor).toBe(
+      DEFAULT_OPTIONS.analyzers.forecast.severityFloor,
+    );
+  });
+
+  it('falls back to the default for a fractional threshold outside its bounds', () => {
+    const r = mergeWithDefaults({
+      analyzers: {
+        maintenance: { engineStopSettleSeconds: 0 },
+        alerts: { lowSocPercent: 150, cellImbalanceV: 0.0005, socExitHysteresis: 0 },
+      },
+    } as never);
+    const da = DEFAULT_OPTIONS.analyzers;
+    expect(r.analyzers.maintenance.engineStopSettleSeconds).toBe(
+      da.maintenance.engineStopSettleSeconds,
+    );
+    expect(r.analyzers.alerts.lowSocPercent).toBe(da.alerts.lowSocPercent);
+    expect(r.analyzers.alerts.cellImbalanceV).toBe(da.alerts.cellImbalanceV);
+    expect(r.analyzers.alerts.socExitHysteresis).toBe(da.alerts.socExitHysteresis);
+  });
+
+  it('falls back to the default for a non-numeric bounded setting', () => {
+    const r = mergeWithDefaults({
+      analyzers: { aging: { shortWindowDays: 'soon' }, liveness: { stalenessThresholdSec: null } },
+    } as never);
+    expect(r.analyzers.aging.shortWindowDays).toBe(DEFAULT_OPTIONS.analyzers.aging.shortWindowDays);
+    expect(r.analyzers.liveness.stalenessThresholdSec).toBe(
+      DEFAULT_OPTIONS.analyzers.liveness.stalenessThresholdSec,
+    );
+  });
+
   it('returns full defaults when input is undefined', () => {
     const r = mergeWithDefaults(undefined);
     expect(r.openrouter.apiKey).toBe('');

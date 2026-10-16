@@ -125,24 +125,37 @@ type Attempt =
 
 export class OpenRouterClient {
   private readonly random: () => number;
-
-  constructor(private cfg: OpenRouterCfg) {
-    this.random = cfg.random ?? Math.random;
-  }
-
+  // The request fields that depend only on the configuration: the completion
+  // cap, the model or model list, and provider routing. Built once rather than
+  // on every attempt.
+  private readonly requestFields: Record<string, unknown>;
   // True when the primary model or any fallback is Anthropic. Drives the
   // explicit cache breakpoint: a fallback may answer instead of the primary,
   // so gate caching on the whole resolved model set, not just cfg.model.
-  private usesAnthropicModel(): boolean {
-    if (this.cfg.model.startsWith('anthropic/')) return true;
-    return (this.cfg.fallbackModels ?? []).some((m) => m.startsWith('anthropic/'));
+  private readonly usesAnthropicModel: boolean;
+
+  constructor(private cfg: OpenRouterCfg) {
+    this.random = cfg.random ?? Math.random;
+    // Trim first, then drop blank entries (a cleared admin-UI row) and dedupe
+    // against the primary so a copy-pasted slug does not appear twice, nor
+    // reach the request body wearing its stray spaces.
+    const fallbacks = (cfg.fallbackModels ?? []).map((m) => m.trim()).filter((m) => m !== '');
+    const provider = this.buildProvider();
+    this.requestFields = {
+      max_tokens: MAX_COMPLETION_TOKENS,
+      ...(fallbacks.length > 0
+        ? { models: [...new Set([cfg.model, ...fallbacks])] }
+        : { model: cfg.model }),
+      ...(provider ? { provider } : {}),
+    };
+    this.usesAnthropicModel = [cfg.model, ...fallbacks].some((m) => m.startsWith('anthropic/'));
   }
 
   private buildSystemMessage(system: string): unknown {
     // Anthropic needs an explicit cache breakpoint; OpenAI/Gemini/etc cache
     // automatically and ignore the marker. Below the model's cache floor
     // (4,096 tokens on Haiku 4.5) the marker is a silent no-op, not an error.
-    if (this.usesAnthropicModel()) {
+    if (this.usesAnthropicModel) {
       return {
         role: 'system',
         content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
@@ -196,29 +209,10 @@ export class OpenRouterClient {
             'HTTP-Referer': this.cfg.referer,
             'X-OpenRouter-Title': this.cfg.title,
           },
-          body: (() => {
-            const payload: Record<string, unknown> = {
-              max_tokens: MAX_COMPLETION_TOKENS,
-              messages: [
-                this.buildSystemMessage(args.system),
-                { role: 'user', content: args.user },
-              ],
-            };
-            // Trim first, then drop blank entries (a cleared admin-UI row) and
-            // dedupe against the primary so a copy-pasted slug does not appear
-            // twice, nor reach the request body wearing its stray spaces.
-            const fallbacks = (this.cfg.fallbackModels ?? [])
-              .map((m) => m.trim())
-              .filter((m) => m !== '');
-            if (fallbacks.length > 0) {
-              payload.models = [...new Set([this.cfg.model, ...fallbacks])];
-            } else {
-              payload.model = this.cfg.model;
-            }
-            const provider = this.buildProvider();
-            if (provider) payload.provider = provider;
-            return JSON.stringify(payload);
-          })(),
+          body: JSON.stringify({
+            ...this.requestFields,
+            messages: [this.buildSystemMessage(args.system), { role: 'user', content: args.user }],
+          }),
         },
         this.cfg.requestTimeoutMs,
         args.abortSignal,

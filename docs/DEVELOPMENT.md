@@ -16,8 +16,10 @@ src/
 ├── index.ts                  Plugin entry: lifecycle, subscriptions, PUT + REST registration
 ├── schema.ts                 JSON Schema storage shape and server metadata
 ├── types.ts                  Plugin options + DEFAULT_OPTIONS + mergeWithDefaults
-├── cronPresets.ts             CRON_PRESETS: schedule-dropdown presets shared by schema + panel
-├── severityFloors.ts          SEVERITY_FLOOR_PRESETS, SeverityFloor, isSeverityFloor: shared by schema + panel + forecast
+├── callBudget.ts             Default daily call cap and its ceiling: shared by runtime + schema + panel
+├── cronPresets.ts            CRON_PRESETS: schedule-dropdown presets shared by schema + panel
+├── severityFloors.ts         SEVERITY_FLOOR_PRESETS, SeverityFloor, isSeverityFloor: shared by schema + panel + forecast
+├── historyConfig.ts          History provider ids, the legacy QuestDB migration, baseUrlProblem: shared by runtime + panel
 ├── analyzers/
 │   ├── Analyzer.ts           Shared interface and AnalyzerDeps; re-exports the trigger vocabulary
 │   ├── ids.ts                ANALYZER_IDS, AnalyzerId, ANALYZER_TITLES, isAnalyzerId
@@ -32,9 +34,11 @@ src/
 ├── configpanel/
 │   ├── PluginConfigurationPanel.tsx  Module Federation panel exposed as `./PluginConfigurationPanel`
 │   ├── components/           Shared UI composition plus plugin-specific CSS Modules
-│   └── hooks/                Config, save, model-list, and live-status state
+│   └── hooks/                Config, save, model-list, live-status, probe, open-section, and per-analyzer state
 └── core/
     ├── api.ts                REST routes registered via registerWithRouter; PluginRuntime
+    ├── app.ts                PluginApp: the one declaration of the server API slice the plugin calls
+    ├── atomicFile.ts         AtomicFileWriter: serialized temporary-file-plus-rename writes
     ├── buffer.ts             Rolling buffer for raw delta history (in-memory)
     ├── batteryMonitor.ts     Per-bank SoC + cell-imbalance state machine
     ├── engineDetector.ts     Per-engine RPM session state machine, persisted across restarts
@@ -42,19 +46,20 @@ src/
     ├── triggerContext.ts     TriggerSpec, TriggerCtx, BatteryEventKind, PublishRunMeta: the trigger vocabulary
     ├── triggerRouter.ts      Routes cron + put + event triggers to analyzers; one run per subject
     ├── cronScheduler.ts      Wraps croner for cron-driven triggers
-    ├── publisher.ts          handleMessage notification + rotating JSONL log writer; exports JsonlEntry
+    ├── publisher.ts          handleMessage notifications and the severity rules on a path
+    ├── reportLog.ts          Rotating JSONL report log: ReportLog writer, readReportTail, JsonlEntry
     ├── budget.ts             Per-day OpenRouter call cap
     ├── openrouter.ts         HTTP client with retry and backoff ladder
     ├── history.ts            Read-only history-provider contract
     ├── influxdb.ts           InfluxQL history provider
     ├── questdb.ts            QuestDB history provider and HTTP client
-    ├── http.ts               fetchWithTimeout: fetch wrapper with AbortSignal-based timeout
+    ├── http.ts               fetchWithTimeout, abortable, discardBody, and base-URL normalization
     ├── discovery.ts          Engine and bank id discovery from SK paths
-    ├── skNode.ts             readNumberAt + readValueAt + asTreeMap + readBankSnapshot
+    ├── skNode.ts             SK tree readers, bank enumeration and prompt lines, deltaTimestampMs
     ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
-    ├── triggers.ts           buildTriggers(analyzerId, cfg, eventMapper?) + manualPutCtx(value?)
+    ├── triggers.ts           buildTriggers(analyzerId, cfg, eventMapper?) + manualPutCtx(path?)
     ├── readings.ts           Per-source rolling map helpers: evictStale, fuseMin, fuseMax, evictStaleSpan
-    ├── format.ts             fmtNumber / fmtPct / fmtUnit / fmtRatio / asFiniteNumber
+    ├── format.ts             Number formatters, asFiniteNumber, compositeKey, and duration constants
     ├── cfg.ts                clamp and default helpers, resolveSystemPrompt, and the prompt sanitizers and row cap
     └── logger.ts             Wraps app.debug / app.error / stringify
 ```
@@ -154,8 +159,11 @@ The default is `moderate`. When the grade meets or exceeds the floor the notific
 ## REST API
 
 Mounted under `/plugins/signalk-openrouter-companion/api/*` via SK's
-`registerWithRouter`. All routes inherit Signal K admin authentication. If the
-server cannot install the admin middleware, the plugin registers no REST routes.
+`registerWithRouter`. All routes are admin-only, enforced by the server itself:
+Signal K mounts admin authentication over `/plugins`, and since 2.33 a plugin
+route stays admin-only unless the plugin opens it to read-only or read-write
+users, which this plugin never does. The plugin does not reach for
+`app.securityStrategy`, a server internal that plugin CI flags.
 History-provider tests support the local and LAN hosts commonly used onboard,
 but reject redirects and never return upstream response text or credentials to
 the client.
@@ -557,7 +565,7 @@ published, non-prerelease GitHub release.
   The published plugin remains compatible with Node 22.18 or newer. The
   manifest accepts npm 10.9.3 only so the upstream Node 22 plugin workflow can
   bootstrap the project.
-- `@signalk/server-api` 2.32 types with a `>=2.24.0 <3` runtime peer range. The
+- `@signalk/server-api` 2.33 types with a `>=2.24.0 <3` runtime peer range. The
   separate Signal K server floor is 2.25.0 because that release added the ESM
   configurator loader while still shipping server API 2.24.
 - `croner` 10 (only runtime dep)

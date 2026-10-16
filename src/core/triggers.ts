@@ -30,8 +30,12 @@ export function buildTriggers(
   return out;
 }
 
-// Synthesize the TriggerCtx for a manual fire (REST /api/analyzers/:id/fire
-// or PUT). Shared so the two call sites can't drift on shape.
-export function manualPutCtx(value: unknown = 'manual'): TriggerCtx {
-  return { kind: 'put', firedAt: new Date(), put: { value } };
+// Synthesize the TriggerCtx for a manual fire: a Signal K PUT, which carries
+// the path it arrived on, or the REST /api/analyzers/:id/fire route, which
+// names its analyzer and so has no path to match. Shared so the two call sites
+// can't drift on shape.
+export function manualPutCtx(path?: string): TriggerCtx {
+  return path
+    ? { kind: 'put', firedAt: new Date(), put: { path } }
+    : { kind: 'put', firedAt: new Date() };
 }

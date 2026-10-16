@@ -7,8 +7,6 @@
     "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "declaration": true,
-    "outDir": "dist",
     "rootDir": "src",
     "resolveJsonModule": true,
     "allowJs": false,

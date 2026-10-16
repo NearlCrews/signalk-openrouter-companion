@@ -2,14 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { MaintenanceAnalyzer } from '../src/analyzers/maintenance.js';
 import type { BufferSummary } from '../src/core/buffer.js';
-import { RollingBuffer } from '../src/core/buffer.js';
 import { MAX_PROMPT_PATH_ROWS } from '../src/core/cfg.js';
 import {
   cleanupTmpDir,
   type MockApp,
+  makeBuffer,
   makeAnalyzerDeps as makeDeps,
   makeMockApp,
   makeTmpDir,
+  makeTriggers,
 } from './_mocks.js';
 
 function engineStopCtx(durationSec: number, engineId = 'port'): TriggerCtx {
@@ -34,13 +35,9 @@ describe('MaintenanceAnalyzer.collectContext', () => {
   });
 
   it('returns null when session is shorter than minSessionSeconds', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ events: ['engine-stop'] }),
       minSessionSeconds: 60,
     });
     const r = await a.collectContext(engineStopCtx(30), makeDeps(app, buf));
@@ -48,7 +45,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
   });
 
   it('builds session telemetry summaries from the buffer', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const startMs = new Date('2026-05-10T09:00:00Z').getTime();
     const endMs = new Date('2026-05-10T10:00:00Z').getTime();
     buf.record('propulsion.port.revolutions', 12, startMs + 1000, 'n2k');
@@ -72,11 +69,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     });
 
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ events: ['engine-stop'] }),
       minSessionSeconds: 60,
     });
     const r = await a.collectContext(engineStopCtx(3600), makeDeps(app, buf));
@@ -111,7 +104,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
   });
 
   it('includes extraWatchedPaths telemetry in the session report', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const startMs = new Date('2026-05-10T09:00:00Z').getTime();
     const endMs = new Date('2026-05-10T10:00:00Z').getTime();
     // A path outside WATCH_PREFIXES and the engine prefix: it only reaches the
@@ -120,11 +113,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
     buf.record('environment.water.temperature', 292, endMs - 1000, 'sensor');
 
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ events: ['engine-stop'] }),
       minSessionSeconds: 60,
       extraWatchedPaths: ['environment.water.temperature'],
     });
@@ -135,25 +124,17 @@ describe('MaintenanceAnalyzer.collectContext', () => {
   });
 
   it('summarizes engine telemetry on a PUT-triggered fallback', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const firedMs = new Date('2026-05-10T10:00:00Z').getTime();
     // Two RPM samples inside the 30-minute fallback window.
     buf.record('propulsion.port.revolutions', 20, firedMs - 600_000, 'n2k');
     buf.record('propulsion.port.revolutions', 22, firedMs - 300_000, 'n2k');
 
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ events: ['engine-stop'] }),
       minSessionSeconds: 60,
     });
-    const ctx: TriggerCtx = {
-      kind: 'put',
-      firedAt: new Date(firedMs),
-      put: { value: 'manual' },
-    };
+    const ctx: TriggerCtx = { kind: 'put', firedAt: new Date(firedMs) };
     const r = await a.collectContext(ctx, makeDeps(app, buf));
     expect(r).not.toBeNull();
     // The single discovered engine is named in the fallback session.
@@ -166,11 +147,7 @@ describe('MaintenanceAnalyzer.collectContext', () => {
 describe('MaintenanceAnalyzer.buildPrompt', () => {
   it('produces a stable system + user prompt from a representative input', () => {
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: true },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ events: ['engine-stop'] }),
       minSessionSeconds: 60,
     });
     const out = a.buildPrompt({
@@ -223,11 +200,7 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     // could not see. Each field is clamped on its own now, and a cut message
     // says it was cut.
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ put: { enabled: false }, events: ['engine-stop'] }),
       minSessionSeconds: 60,
     });
     const out = a.buildPrompt({
@@ -253,11 +226,7 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
     // oversized prompt is a terminal 400 that burns the budget call already
     // recorded for the run.
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ put: { enabled: false }, events: ['engine-stop'] }),
       minSessionSeconds: 60,
     });
     const telemetry: Record<string, BufferSummary> = {};
@@ -283,11 +252,7 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
 
   it('uses customSystemPrompt when provided', () => {
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ put: { enabled: false }, events: ['engine-stop'] }),
       minSessionSeconds: 60,
       customSystemPrompt: 'CUSTOM MAINT',
     });
@@ -302,11 +267,7 @@ describe('MaintenanceAnalyzer.buildPrompt', () => {
 
   it('falls back to default when customSystemPrompt is whitespace-only', () => {
     const a = new MaintenanceAnalyzer({
-      triggers: {
-        cron: { enabled: false, pattern: '', timezone: '' },
-        put: { enabled: false },
-        events: ['engine-stop'],
-      },
+      triggers: makeTriggers({ put: { enabled: false }, events: ['engine-stop'] }),
       minSessionSeconds: 60,
       customSystemPrompt: '   ',
     });

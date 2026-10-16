@@ -8,7 +8,7 @@ export type SeverityGrade = (typeof SEVERITY_GRADES)[number];
 // on a settled outlook). Typing the presets against this union makes the
 // floor-is-a-grade relation structural: renaming a preset off the scale fails
 // to compile, so the rank lookup in the forecast analyzer can never miss.
-export type SeverityFloorPresetValue = Exclude<SeverityGrade, 'none'>;
+export type SeverityFloor = Exclude<SeverityGrade, 'none'>;
 
 // Forecast severity-floor preset list: single source of truth shared with
 // the rjsf schema (enum + enumNames) and the React panel (dropdown options),
@@ -17,7 +17,7 @@ export type SeverityFloorPresetValue = Exclude<SeverityGrade, 'none'>;
 // sync with the panel's labels (an instance of the anti-pattern CLAUDE.md
 // calls out for cron presets).
 export const SEVERITY_FLOOR_PRESETS: ReadonlyArray<{
-  value: SeverityFloorPresetValue;
+  value: SeverityFloor;
   label: string;
 }> = [
   { value: 'severe', label: 'Severe only' },
@@ -31,10 +31,10 @@ const SEVERITY_FLOOR_VALUES: ReadonlySet<string> = new Set(
   SEVERITY_FLOOR_PRESETS.map((p) => p.value),
 );
 
-export function isSeverityFloor(v: unknown): v is SeverityFloorPresetValue {
+export function isSeverityFloor(v: unknown): v is SeverityFloor {
   return typeof v === 'string' && SEVERITY_FLOOR_VALUES.has(v);
 }
 
 // 'moderate' raises an alarm on a moderate or severe outlook; below the
 // floor the outlook still publishes at `nominal` state so it stays readable.
-export const DEFAULT_SEVERITY_FLOOR_VALUE: SeverityFloorPresetValue = 'moderate';
+export const DEFAULT_SEVERITY_FLOOR_VALUE: SeverityFloor = 'moderate';

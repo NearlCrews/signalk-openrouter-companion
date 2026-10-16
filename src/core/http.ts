@@ -1,14 +1,3 @@
-// A fetch bounded by a timeout and, optionally, the caller's lifecycle signal.
-// AbortSignal.timeout fires its own TimeoutError after `timeoutMs`, and
-// AbortSignal.any aborts the request on whichever signal trips first. Both
-// auto-clean when the request settles, so callers need no manual clearTimeout
-// or removeEventListener teardown. The returned signal also governs the
-// response body stream, so a timeout that fires during res.json() aborts the
-// read too.
-//
-// To tell the two abort causes apart after a throw, check the caller's signal:
-// callerSignal?.aborted is true only for a caller abort, and stays false for a
-// timeout (the timeout aborts the combined signal, not the caller's).
 // Settle with `work`, or reject as soon as the caller's signal aborts, with the
 // signal's own reason. Only this caller's wait ends: the work itself is left to
 // finish or time out on its own, which is what a shared in-flight promise needs
@@ -34,6 +23,17 @@ export function abortable<T>(
   });
 }
 
+// A fetch bounded by a timeout and, optionally, the caller's lifecycle signal.
+// AbortSignal.timeout fires its own TimeoutError after `timeoutMs`, and
+// AbortSignal.any aborts the request on whichever signal trips first. Both
+// auto-clean when the request settles, so callers need no manual clearTimeout
+// or removeEventListener teardown. The returned signal also governs the
+// response body stream, so a timeout that fires during res.json() aborts the
+// read too.
+//
+// To tell the two abort causes apart after a throw, check the caller's signal:
+// callerSignal?.aborted is true only for a caller abort, and stays false for a
+// timeout (the timeout aborts the combined signal, not the caller's).
 export function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -43,4 +43,39 @@ export function fetchWithTimeout(
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
   return fetch(url, { ...init, signal });
+}
+
+// Release a response body nobody will read, so an error status does not hold
+// its socket until the response is garbage collected.
+export function discardBody(res: Response): void {
+  void res.body?.cancel().catch(() => {});
+}
+
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
+// The base URL a client actually dials: credentials, query, and fragment
+// removed (each client owns authentication and its own query) and no trailing
+// slash, so a path is appended without doubling one. Shared by both history
+// clients and the admin probe routes, so they normalize a URL the same way by
+// construction rather than by three copies agreeing. An unparseable value is
+// returned trimmed, which preserves the fail-soft path for a hand-edited
+// config: the fetch rejects on probe and the optional provider degrades
+// cleanly.
+export function normalizeBaseUrl(value: string): string {
+  const rawUrl = value.trim();
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    parsed.pathname = stripTrailingSlashes(parsed.pathname);
+    return stripTrailingSlashes(parsed.href);
+  } catch {
+    return stripTrailingSlashes(rawUrl);
+  }
 }

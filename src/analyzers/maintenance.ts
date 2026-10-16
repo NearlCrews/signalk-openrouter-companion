@@ -9,9 +9,8 @@ import {
   sanitizeProducerString,
 } from '../core/cfg.js';
 import { discoverEngineIds, WATCH_PREFIXES } from '../core/discovery.js';
-import { fmtNumber, pushBankLines } from '../core/format.js';
+import { fmtNumber, MINUTE_MS, SECOND_MS } from '../core/format.js';
 import {
-  BATTERIES_PARENT_PATH,
   bankPaths,
   engineNotificationsPath,
   enginePathPrefix,
@@ -20,23 +19,30 @@ import {
 import {
   asTreeMap,
   type BankSnapshot,
-  isBankNode,
+  pushBankLines,
+  readBankNodes,
   readBankSnapshot,
   readValueAt,
 } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
-import { type AnalyzerTriggerCfg, MAINTENANCE_SUPPORTED_EVENTS } from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import { MAINTENANCE_SUPPORTED_EVENTS } from '../types.js';
+import type {
+  AnalysisInput,
+  Analyzer,
+  AnalyzerBaseCfg,
+  AnalyzerDeps,
+  PromptPair,
+  TriggerCtx,
+  TriggerSpec,
+} from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
-export interface MaintenanceCfg {
-  triggers: AnalyzerTriggerCfg;
+export interface MaintenanceCfg extends AnalyzerBaseCfg {
   minSessionSeconds: number;
   // Operator-configured extra Signal K paths to fold into the session report.
   // These are buffered by the plugin lifecycle but are not necessarily under
   // WATCH_PREFIXES, so the analyzer must be told about them explicitly.
   extraWatchedPaths?: string[];
-  customSystemPrompt?: string;
 }
 
 export const MAINTENANCE_DEFAULT_SYSTEM_PROMPT = [
@@ -73,7 +79,7 @@ export interface MaintenanceInput extends AnalysisInput {
 
 // When fired by cron or PUT (not engine-stop), maintenance falls back to
 // summarizing the last 30 minutes of telemetry as the "session".
-const MAINT_FALLBACK_WINDOW_MS = 30 * 60 * 1000;
+const MAINT_FALLBACK_WINDOW_MS = 30 * MINUTE_MS;
 
 // Sentinel engine id used by the cron/PUT fallback when no engine session is
 // available and the buffer does not yield a single unambiguous engine.
@@ -137,7 +143,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
         engineId,
         start: new Date(startMs).toISOString(),
         end: new Date(endMs).toISOString(),
-        durationSec: Math.round((endMs - startMs) / 1000),
+        durationSec: Math.round((endMs - startMs) / SECOND_MS),
       },
       telemetry,
       engineNotifications,
@@ -145,7 +151,7 @@ export class MaintenanceAnalyzer implements Analyzer<MaintenanceInput> {
     };
   }
 
-  buildPrompt(input: MaintenanceInput): { system: string; user: string } {
+  buildPrompt(input: MaintenanceInput): PromptPair {
     const { session, telemetry, engineNotifications, batteries } = input;
     const f = (v: unknown) => fmtNumber(v, { nan: 'n/a (no samples)' });
 
@@ -268,24 +274,15 @@ function snapshotEngineNotifications(
 }
 
 function snapshotBatteries(deps: AnalyzerDeps, startMs: number, endMs: number): BatterySnapshot[] {
-  const tree = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH));
-  if (!tree) return [];
-  // Filter to true bank subtrees: a future SK server release could attach
-  // metadata leaves (`meta`, `$source`, `value`, `timestamp`, ...) at the
-  // `electrical.batteries` container level, and treating those as banks
-  // would produce nonsense LLM input. A real bank node is an object that
-  // carries at least one of the canonical bank fields.
-  return Object.entries(tree)
-    .filter(([_, node]) => isBankNode(node))
-    .map(([id, node]) => {
-      const paths = bankPaths(id);
-      return {
-        id,
-        ...readBankSnapshot(node),
-        voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
-        socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
-      };
-    });
+  return readBankNodes(deps.app).map(([id, node]) => {
+    const paths = bankPaths(id);
+    return {
+      id,
+      ...readBankSnapshot(node),
+      voltageSession: deps.buffer.summarize(paths.voltage, startMs, endMs),
+      socSession: deps.buffer.summarize(paths.soc, startMs, endMs),
+    };
+  });
 }
 
 // Scanned in order, so the specific suffixes must precede the general ones:

@@ -15,9 +15,13 @@ import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY_CEILING } from '../../call
 import type { ModelOption, ModelsState, PanelConfig } from '../types.js';
 import { MODELS_ERROR } from '../utils.js';
 
+type OpenRouterConfig = NonNullable<PanelConfig['openrouter']>;
+
 interface Props {
-  cfg: PanelConfig;
-  set: (patch: Partial<PanelConfig>) => void;
+  // The OpenRouter slice alone, so an edit elsewhere in the panel leaves this
+  // memoized section, and the model datalist it renders, untouched.
+  openrouter: PanelConfig['openrouter'];
+  setOpenRouter: (openrouter: OpenRouterConfig) => void;
   models: ModelOption[];
   modelsState: ModelsState;
   loadModels: () => Promise<void>;
@@ -29,15 +33,17 @@ interface Props {
 }
 
 export const OpenRouterSection = memo(function OpenRouterSection({
-  cfg,
-  set,
+  openrouter,
+  setOpenRouter,
   models,
   modelsState,
   loadModels,
   apiKeyRef,
   submitted,
 }: Props): ReactElement {
-  const openRouter: NonNullable<PanelConfig['openrouter']> = cfg.openrouter ?? {};
+  const openRouter: OpenRouterConfig = openrouter ?? {};
+  const set = (patch: Partial<OpenRouterConfig>): void =>
+    setOpenRouter({ ...openRouter, ...patch });
   const noApiKey = !openRouter.apiKey?.trim();
   // Two panels mounted in one document must not share a datalist id.
   const modelListId = useId();
@@ -62,7 +68,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
             {...splitLabeledFieldControlProps(controlContract).controlProps}
             ref={apiKeyRef}
             value={openRouter.apiKey ?? ''}
-            onChange={(event) => set({ openrouter: { ...openRouter, apiKey: event.target.value } })}
+            onChange={(event) => set({ apiKey: event.target.value })}
           />
         )}
       </LabeledField>
@@ -74,7 +80,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
           value={openRouter.model ?? ''}
           placeholder="provider/model-name"
           onFocus={() => void loadModels()}
-          onChange={(event) => set({ openrouter: { ...openRouter, model: event.target.value } })}
+          onChange={(event) => set({ model: event.target.value })}
         />
       </LabeledField>
       <datalist id={modelListId}>
@@ -116,7 +122,7 @@ export const OpenRouterSection = memo(function OpenRouterSection({
         fallback={1}
         inputProps={{ placeholder: String(DEFAULT_MAX_CALLS_PER_DAY) }}
         value={openRouter.maxCallsPerDay}
-        onValueChange={(value) => set({ openrouter: { ...openRouter, maxCallsPerDay: value } })}
+        onValueChange={(value) => set({ maxCallsPerDay: value })}
       />
 
       <LabeledField
@@ -128,12 +134,9 @@ export const OpenRouterSection = memo(function OpenRouterSection({
           value={openRouter.provider?.dataCollection ?? 'allow'}
           onChange={(event) =>
             set({
-              openrouter: {
-                ...openRouter,
-                provider: {
-                  ...openRouter.provider,
-                  dataCollection: event.target.value as 'allow' | 'deny',
-                },
+              provider: {
+                ...openRouter.provider,
+                dataCollection: event.target.value as 'allow' | 'deny',
               },
             })
           }

@@ -1,11 +1,12 @@
 import { mkdirSync, readFileSync } from 'node:fs';
-import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SKVersion } from '@signalk/server-api';
+import type { ActionHandler, ActionResult } from '@signalk/server-api';
 import type { Analyzer, TriggerCtx } from './analyzers/Analyzer.js';
 import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
 import { ANALYZER_FACTORIES } from './analyzers/registry.js';
 import { getOpenApi, type PluginRuntime, type RouterLike, registerApiRoutes } from './core/api.js';
+import type { PluginApp } from './core/app.js';
+import { AtomicFileWriter } from './core/atomicFile.js';
 import { type BatteryEvent, BatteryMonitor } from './core/batteryMonitor.js';
 import { BudgetTracker } from './core/budget.js';
 import { RollingBuffer } from './core/buffer.js';
@@ -18,18 +19,20 @@ import {
   SOC_PATH_RE,
 } from './core/discovery.js';
 import { EngineDetector, type EngineEvent } from './core/engineDetector.js';
-import { compositeKey, HOUR_MS } from './core/format.js';
+import { compositeKey, HOUR_MS, MINUTE_MS, SECOND_MS } from './core/format.js';
 import type { HistoryProvider } from './core/history.js';
 import { InfluxDBClient } from './core/influxdb.js';
 import { Logger, stringify } from './core/logger.js';
 import { OpenRouterClient } from './core/openrouter.js';
-import { enginePaths, PLUGIN_HTTP_PREFIX, PLUGIN_ID, pluginPutPath } from './core/paths.js';
+import { enginePaths, PLUGIN_ID, pluginPutPath } from './core/paths.js';
 import { ReportPublisher } from './core/publisher.js';
 import { QuestDBClient } from './core/questdb.js';
+import { deltaTimestampMs } from './core/skNode.js';
+import { BATTERY_EVENT_KINDS } from './core/triggerContext.js';
 import { REPLAYABLE_TRIGGER_KINDS, type RunOutcome, TriggerRouter } from './core/triggerRouter.js';
 import { manualPutCtx } from './core/triggers.js';
 import { buildSchema, buildUiSchema } from './schema.js';
-import { ALERTS_SUPPORTED_EVENTS, mergeWithDefaults, type PluginOptions } from './types.js';
+import { mergeWithDefaults, type PluginOptions } from './types.js';
 
 const PLUGIN_NAME = 'OpenRouter Companion';
 
@@ -40,23 +43,20 @@ const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
 // hundreds of megabytes on a Raspberry Pi. Roughly 40 MB of entries, which
 // still holds well over a day of aggregates for a realistic path count.
 const BUFFER_MAX_TOTAL_ENTRIES = 400_000;
-const ENGINE_SOURCE_WINDOW_MS = 1000;
+const ENGINE_SOURCE_WINDOW_MS = SECOND_MS;
 const BATTERY_SOURCE_WINDOW_MS = 5000;
 const MONITOR_TICK_MS = 5000;
 const WATCHDOG_TICK_MS = 5000;
 const WATCHDOG_SEC = 30;
-const RESCAN_INTERVAL_MS = 60_000;
-// How far a delta's timestamp may lead wall-clock before it gets clamped.
-// Sensors with a mis-set RTC commonly drift hours; anything past this is
-// treated as a clock fault rather than a legitimate sample, so it cannot
-// shift the rolling-buffer eviction cutoff or the engine watchdog math.
-const CLOCK_SKEW_GRACE_MS = HOUR_MS;
+const RESCAN_INTERVAL_MS = MINUTE_MS;
 // On restart, a persisted engine session whose last delta is older than this
 // is discarded rather than resumed (the engine stopped during the downtime).
-const ENGINE_STATE_MAX_RESUME_SEC = 3600;
+const ENGINE_STATE_MAX_RESUME_MS = HOUR_MS;
 // How often the in-progress engine session is persisted to disk so a restart
 // mid-session can resume it.
-const DETECTOR_SAVE_INTERVAL_MS = 60_000;
+const DETECTOR_SAVE_INTERVAL_MS = MINUTE_MS;
+const HISTORY_UNREACHABLE_MESSAGE =
+  'History source unreachable; trend analyzers will skip until it recovers';
 // Used when the configured report-log filename is not a plain filename.
 const DEFAULT_LOG_FILENAME = 'reports.jsonl';
 // What a report-log filename may be: letters, digits, dot, dash, and
@@ -69,34 +69,7 @@ const ONLY_DOTS = /^\.+$/;
 // init from growing the list without end.
 const MAX_PENDING_STARTUP_EVENTS = 32;
 
-interface ServerApiLike {
-  streambundle: {
-    getSelfBus(path: string): { onValue(cb: (v: unknown) => void): () => void };
-    getAvailablePaths(): string[];
-  };
-  // Third arg matches the real SK ServerAPI signature so a v2-shaped delta
-  // can be routed correctly; the publisher passes SKVersion.v1 explicitly.
-  handleMessage(pluginId: string, delta: unknown, skVersion?: SKVersion): void;
-  registerPutHandler(context: string, path: string, handler: unknown, source?: string): void;
-  setPluginStatus(msg: string): void;
-  setPluginError(msg: string): void;
-  debug(...args: unknown[]): void;
-  error(msg: string): void;
-  getDataDirPath(): string;
-  getSelfPath(path: string): unknown;
-  selfContext?: string;
-  // securityStrategy is provided by SK but not in the typed ServerAPI surface
-  // (the typed surface is the long-term-public subset; security middleware
-  // wiring is server-internal). Optional so test harnesses without auth can
-  // still satisfy the interface; runtime checks at the call site.
-  securityStrategy?: {
-    addAdminMiddleware(path: string): void;
-    addAdminWriteMiddleware(path: string): void;
-    addWriteMiddleware(path: string): void;
-  };
-}
-
-export default function createPlugin(app: ServerApiLike): {
+export default function createPlugin(app: PluginApp): {
   id: string;
   name: string;
   description: string;
@@ -226,45 +199,7 @@ export default function createPlugin(app: ServerApiLike): {
           },
           logger,
         );
-        // Resume an engine session that was in progress when the plugin last
-        // stopped, so a restart mid-trip neither splits nor loses the session.
-        try {
-          const parsed: unknown = JSON.parse(readFileSync(detectorStatePath, 'utf-8'));
-          if (Array.isArray(parsed)) {
-            detector.restore(parsed, Date.now(), ENGINE_STATE_MAX_RESUME_SEC * 1000);
-          }
-        } catch {
-          // No persisted state, or unreadable: start with a clean detector.
-        }
-        // Persist only when the snapshot actually changed: the engine is off
-        // most of the time, so an unconditional periodic write would rewrite
-        // the same empty state to the SD card every interval.
-        //
-        // The writes are serialized and atomic (temporary file plus rename).
-        // The periodic saver, the engine-start listener, and the engine-stop
-        // listener can all fire close together, and two independent truncating
-        // writes can otherwise land out of order or leave a partial file that
-        // the next start discards.
-        let lastDetectorState = '';
-        let detectorWriteChain: Promise<void> = Promise.resolve();
-        const saveDetectorState = (): Promise<void> => {
-          const serialized = JSON.stringify(detector.snapshot());
-          if (serialized === lastDetectorState) return detectorWriteChain;
-          lastDetectorState = serialized;
-          const tempPath = `${detectorStatePath}.tmp`;
-          detectorWriteChain = detectorWriteChain.then(async () => {
-            try {
-              await writeFile(tempPath, serialized);
-              await rename(tempPath, detectorStatePath);
-            } catch (err) {
-              // Clear the memo so the next save retries rather than treating
-              // this snapshot as already on disk.
-              lastDetectorState = '';
-              logger.debug(`engine-detector state save failed: ${stringify(err)}`);
-            }
-          });
-          return detectorWriteChain;
-        };
+        const saveDetectorState = persistDetector(detector, detectorStatePath, logger);
         flushDetectorState = saveDetectorState;
         const monitor = new BatteryMonitor(
           {
@@ -298,26 +233,23 @@ export default function createPlugin(app: ServerApiLike): {
         // True while any probe of the history source is outstanding, the
         // initial one included, so the periodic recovery probe never runs a
         // second one alongside it.
-        let historyProbeInFlight = Boolean(historyCandidate);
+        let historyProbeInFlight = false;
+        // Probe the history source once. A probe that answers wrongly and one
+        // that throws both read as unreachable.
+        const probeHistory = (candidate: HistoryProvider): Promise<boolean> => {
+          historyProbeInFlight = true;
+          return candidate
+            .probe(lifecycle.signal)
+            .catch(() => false)
+            .finally(() => {
+              historyProbeInFlight = false;
+            });
+        };
         const probePromise: Promise<HistoryProvider | null> = historyCandidate
-          ? historyCandidate
-              .probe(lifecycle.signal)
-              .then((ok) => {
-                if (!ok)
-                  logger.debug(
-                    'History source unreachable; trend analyzers will skip until it recovers',
-                  );
-                return ok ? historyCandidate : null;
-              })
-              .catch(() => {
-                logger.debug(
-                  'History source unreachable; trend analyzers will skip until it recovers',
-                );
-                return null;
-              })
-              .finally(() => {
-                historyProbeInFlight = false;
-              })
+          ? probeHistory(historyCandidate).then((ok) => {
+              if (!ok) logger.debug(HISTORY_UNREACHABLE_MESSAGE);
+              return ok ? historyCandidate : null;
+            })
           : Promise.resolve(null);
         const publisher = new ReportPublisher({
           app,
@@ -399,50 +331,16 @@ export default function createPlugin(app: ServerApiLike): {
               historyLive: null,
               historyProbed: false,
               analyzers,
-              apiKeySet: true,
               router,
               logPath,
               signal: lifecycle.signal,
               startedAt: Date.now(),
             };
             activeRouter = router;
-            // Register one Cron job per unique (pattern, timezone) pair, each
-            // carrying the analyzers that share it. Several analyzers can share
-            // a schedule (health and liveness both default to '0 8 * * *'), so
-            // a job per analyzer would double-spend the budget. The job fires
-            // its members by id via runById, not router.dispatch: dispatch
-            // matches cron by pattern alone, so two analyzers on the same
-            // pattern but different timezones would each run on both jobs.
-            // Naming the members keeps every job bound to exactly its pair.
-            const cronJobs = new Map<
-              string,
-              { pattern: string; timezone: string; analyzerIds: AnalyzerId[] }
-            >();
-            for (const a of analyzers) {
-              const timezone = cfg.analyzers[a.id].triggers.cron.timezone;
-              for (const t of a.triggers) {
-                if (t.kind !== 'cron') continue;
-                const key = compositeKey(t.pattern, timezone);
-                const existing = cronJobs.get(key);
-                if (existing) existing.analyzerIds.push(a.id);
-                else cronJobs.set(key, { pattern: t.pattern, timezone, analyzerIds: [a.id] });
-              }
-            }
-            for (const { pattern, timezone, analyzerIds } of cronJobs.values()) {
-              try {
-                sched.register(
-                  pattern,
-                  () => {
-                    if (!router) return;
-                    const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
-                    for (const id of analyzerIds) void router.runById(id, ctx);
-                  },
-                  timezone || undefined,
-                );
-              } catch (err) {
-                logger.error(`failed to register cron '${pattern}': ${stringify(err)}`);
-              }
-            }
+            const cronRouter = router;
+            registerCronJobs(analyzers, cfg, sched, logger, (ids, ctx) => {
+              for (const id of ids) void cronRouter.runById(id, ctx);
+            });
             logger.debug('router ready');
             // Anything the engine detector or the battery monitor raised while
             // the router was still being built goes out now, in arrival order.
@@ -503,7 +401,7 @@ export default function createPlugin(app: ServerApiLike): {
               },
             };
             withRouter((r) => {
-              void r.dispatch('engine-stop', ctx);
+              void r.dispatch(ctx);
             });
           }),
         );
@@ -528,22 +426,29 @@ export default function createPlugin(app: ServerApiLike): {
             batteryEvent,
           };
           withRouter((r) => {
-            void r.dispatch('battery-event', ctx, { batterySubkind: e.kind });
+            void r.dispatch(ctx);
           });
         };
-        for (const k of ALERTS_SUPPORTED_EVENTS) unsubs.push(monitor.on(k, dispatchBatteryEvent));
+        for (const k of BATTERY_EVENT_KINDS) unsubs.push(monitor.on(k, dispatchBatteryEvent));
 
-        const available = app.streambundle.getAvailablePaths();
-        const engineIds = new Set(discoverEngineIds(available));
-        const bankIds = new Set(discoverBankIds(available));
-        const engineRpmPaths = new Set<string>();
-        // Watched paths already subscribed: lets the rescan pick up a path
-        // that appeared after start() without ever re-subscribing one.
-        const watchedPaths = new Set<string>();
-        const watched = discoverWatchedPaths(
-          available,
-          cfg.analyzers.maintenance.extraWatchedPaths,
-        );
+        for (const id of ANALYZER_IDS) {
+          registerAnalyzerPut(app, id, cfg.analyzers[id], () => activeRouter);
+        }
+
+        // Nothing below has a reader without an enabled analyzer: the
+        // subscriptions feed the buffer and the detectors, the timers raise
+        // events, and the rescan finds new paths and recovers history.
+        if (analyzers.length === 0) {
+          app.setPluginStatus('No analyzers enabled. Enable at least one in plugin settings.');
+          return;
+        }
+
+        // Every path subscribed so far, whatever its sink: lets each scan pick
+        // up a path that appeared after start() without ever buffering one
+        // twice.
+        const subscribed = new Set<string>();
+        const engineIds = new Set<string>();
+        const bankIds = new Set<string>();
 
         // Subscribe to one self-path. The sink receives the unpacked
         // (value, ts, source) for each delta; non-numeric callers can
@@ -552,43 +457,28 @@ export default function createPlugin(app: ServerApiLike): {
           path: string,
           sink: (value: unknown, ts: number, source: string) => void,
         ): void => {
+          subscribed.add(path);
           const bus = app.streambundle.getSelfBus(path);
           const unsub = bus.onValue((delta) => {
             const d = delta as { value?: unknown; timestamp?: string; $source?: string };
-            // Date.parse returns NaN for a malformed timestamp; a NaN ts would
-            // silently break buffer eviction and detector session arithmetic.
-            // A future-stamped delta (mis-set sensor RTC, backlog replay) would
-            // evict the entire RollingBuffer in one record() and freeze the
-            // engine watchdog forever (silentFor goes negative, never trips
-            // silenceStopMs). A far-past delta (epoch 0 from a sensor with no
-            // RTC, or Unix seconds parsed as ms-since-1970) is just as
-            // dangerous on the other side: silentFor becomes years, and the
-            // next tick ends a phantom multi-decade session. Tolerate small
-            // clock skew either way; beyond the grace, fall back to wall-clock.
-            const wall = Date.now();
-            const parsed = d.timestamp ? Date.parse(d.timestamp) : Number.NaN;
-            const ts =
-              Number.isFinite(parsed) &&
-              parsed <= wall + CLOCK_SKEW_GRACE_MS &&
-              parsed >= wall - CLOCK_SKEW_GRACE_MS
-                ? parsed
-                : wall;
-            sink(d.value, ts, d.$source ?? 'unknown');
+            sink(d.value, deltaTimestampMs(d.timestamp, Date.now()), d.$source ?? 'unknown');
           });
           if (typeof unsub === 'function') unsubs.push(unsub);
         };
 
         const subscribeEnginePath = (engineId: string, path: string): void => {
-          engineRpmPaths.add(path);
+          // An operator extra can buffer the RPM path before its engine is
+          // discovered. The detector then gets a listener of its own, and the
+          // samples are not recorded a second time.
+          const buffered = subscribed.has(path);
           subscribe(path, (value, ts, src) => {
             if (typeof value !== 'number') return;
             detector.observe(engineId, src, value, ts);
-            buffer.record(path, value, ts, src);
+            if (!buffered) buffer.record(path, value, ts, src);
           });
         };
 
         const subscribeWatchedPath = (path: string): void => {
-          watchedPaths.add(path);
           // Match the path once at subscribe time so the per-delta callback
           // skips two regex executions per delta on a path that fires often.
           const socMatch = path.match(SOC_PATH_RE);
@@ -605,13 +495,36 @@ export default function createPlugin(app: ServerApiLike): {
           });
         };
 
-        for (const engineId of engineIds) {
-          subscribeEnginePath(engineId, enginePaths(engineId).rpm);
-        }
-        for (const path of watched) {
-          if (engineRpmPaths.has(path)) continue;
-          subscribeWatchedPath(path);
-        }
+        // Subscribe everything new in one listing of the live tree: each
+        // engine's RPM path, which feeds the detector, then every watched path
+        // under the WATCH_PREFIXES plus the operator's extras (a battery bank,
+        // alternator, charger, or fuel tank that came online after start()).
+        // Engines go first, so an RPM path is never subscribed as a plain
+        // watched path. Returns whether anything new turned up.
+        const scan = (available: readonly string[]): boolean => {
+          let changed = false;
+          for (const id of discoverEngineIds(available)) {
+            if (engineIds.has(id)) continue;
+            engineIds.add(id);
+            subscribeEnginePath(id, enginePaths(id).rpm);
+            changed = true;
+          }
+          for (const id of discoverBankIds(available)) {
+            if (bankIds.has(id)) continue;
+            bankIds.add(id);
+            changed = true;
+          }
+          for (const path of discoverWatchedPaths(
+            available,
+            cfg.analyzers.maintenance.extraWatchedPaths,
+          )) {
+            if (subscribed.has(path)) continue;
+            subscribeWatchedPath(path);
+            changed = true;
+          }
+          return changed;
+        };
+        scan(app.streambundle.getAvailablePaths());
 
         // Some analyzers need fixed Signal K paths buffered that are not
         // discovered from the live tree (forecast's weather leaves). Subscribe
@@ -620,20 +533,13 @@ export default function createPlugin(app: ServerApiLike): {
         // subscribed unconditionally (not filtered by getAvailablePaths) so a
         // producer that starts after this plugin is still captured;
         // collectContext degrades gracefully on paths that never produce data.
-        const declaredPaths = new Set(watched);
         for (const a of analyzers) {
-          if (!a.watchedPaths) continue;
-          for (const path of a.watchedPaths) {
-            if (declaredPaths.has(path) || engineRpmPaths.has(path)) continue;
-            declaredPaths.add(path);
+          for (const path of a.watchedPaths ?? []) {
+            if (subscribed.has(path)) continue;
             subscribe(path, (value, ts, src) => {
               if (typeof value === 'number') buffer.record(path, value, ts, src);
             });
           }
-        }
-
-        for (const id of ANALYZER_IDS) {
-          registerAnalyzerPut(app, id, cfg.analyzers[id], () => activeRouter, PLUGIN_ID);
         }
 
         // The engine and battery timers exist to raise events. With no enabled
@@ -666,32 +572,7 @@ export default function createPlugin(app: ServerApiLike): {
         }
         intervalHandles.push(
           setInterval(() => {
-            const fresh = app.streambundle.getAvailablePaths();
-            let changed = false;
-            for (const id of discoverEngineIds(fresh)) {
-              if (engineIds.has(id)) continue;
-              engineIds.add(id);
-              subscribeEnginePath(id, enginePaths(id).rpm);
-              changed = true;
-            }
-            for (const id of discoverBankIds(fresh)) {
-              if (bankIds.has(id)) continue;
-              bankIds.add(id);
-              changed = true;
-            }
-            // Subscribe any watched path that appeared since the last scan: a
-            // battery bank, alternator, charger, or fuel tank that came online
-            // after start().
-            const freshWatched = discoverWatchedPaths(
-              fresh,
-              cfg.analyzers.maintenance.extraWatchedPaths,
-            );
-            for (const path of freshWatched) {
-              if (engineRpmPaths.has(path) || watchedPaths.has(path)) continue;
-              subscribeWatchedPath(path);
-              changed = true;
-            }
-            if (changed) {
+            if (scan(app.streambundle.getAvailablePaths())) {
               app.setPluginStatus(runningStatus(analyzers.length));
             }
             // History recovery: a source that is down at start (or starts after
@@ -705,33 +586,26 @@ export default function createPlugin(app: ServerApiLike): {
             ) {
               const live = runtime;
               const routerForRecovery = router;
-              historyProbeInFlight = true;
-              void historyCandidate
-                .probe(lifecycle.signal)
-                .then((ok) => {
-                  if (
-                    ok &&
-                    !lifecycle.signal.aborted &&
-                    runtime === live &&
-                    activeRouter === routerForRecovery
-                  ) {
-                    routerForRecovery.setHistory(historyCandidate);
-                    live.historyLive = historyCandidate;
-                    logger.debug('History source recovered; trend analyzers re-enabled');
-                  }
-                })
-                .catch(() => {})
-                .finally(() => {
-                  historyProbeInFlight = false;
-                });
+              void probeHistory(historyCandidate).then((ok) => {
+                if (
+                  ok &&
+                  !lifecycle.signal.aborted &&
+                  runtime === live &&
+                  activeRouter === routerForRecovery
+                ) {
+                  routerForRecovery.setHistory(historyCandidate);
+                  live.historyLive = historyCandidate;
+                  logger.debug('History source recovered; trend analyzers re-enabled');
+                }
+              });
             }
           }, RESCAN_INTERVAL_MS),
         );
 
-        if (analyzers.length === 0) {
-          app.setPluginStatus('No analyzers enabled. Enable at least one in plugin settings.');
-        } else if (engineIds.size === 0 && bankIds.size === 0) {
-          app.setPluginStatus('Running: no engine or battery data yet, re-scanning every 60s');
+        if (engineIds.size === 0 && bankIds.size === 0) {
+          app.setPluginStatus(
+            `Running: no engine or battery data yet, re-scanning every ${RESCAN_INTERVAL_MS / SECOND_MS}s`,
+          );
         } else {
           app.setPluginStatus(runningStatus(analyzers.length));
         }
@@ -755,30 +629,15 @@ export default function createPlugin(app: ServerApiLike): {
       releaseResources();
     },
 
+    // Every route here spends OpenRouter budget, fires an LLM call, probes a
+    // URL from the Signal K host, or reads operator configuration and report
+    // history, so all of them must be admin-only. The server already enforces
+    // that: it mounts admin authentication over /plugins (since 2.24, and
+    // through its plugin route permissions since 2.33, where a route nobody
+    // declared readonly or readwrite stays admin-only), and this plugin
+    // declares no such permission. Reaching for app.securityStrategy here
+    // would add nothing and is a server internal plugin CI flags.
     registerWithRouter: (router: RouterLike) => {
-      // Gate every route under the plugin's API prefix to admin users.
-      // Three of the seven routes spend OpenRouter budget, fire LLM calls,
-      // or probe arbitrary URLs from the SK host; the others leak operator
-      // configuration and report history. addAdminMiddleware is the
-      // narrowest gate that closes the unauthenticated path; on a server
-      // with security disabled (dummysecurity) it is still attached and
-      // a no-op so dev setups are unaffected.
-      const prefix = `${PLUGIN_HTTP_PREFIX}/api`;
-      if (app.securityStrategy?.addAdminMiddleware) {
-        app.securityStrategy.addAdminMiddleware(prefix);
-      } else {
-        // Fail loud: the headline security fix advertises that all routes
-        // are gated. If securityStrategy is missing the gate is silently
-        // skipped, leaving paid-LLM and SSRF endpoints exposed; the only
-        // way an operator learns is by checking the admin status banner.
-        app.setPluginError(
-          'securityStrategy not available; REST routes are unauthenticated. Upgrade signalk-server or report this deployment shape.',
-        );
-        logger.error(
-          'app.securityStrategy missing in registerWithRouter; admin middleware NOT applied',
-        );
-        return;
-      }
       registerApiRoutes(router, () => runtime);
     },
 
@@ -810,19 +669,83 @@ function runningStatus(analyzerCount: number): string {
   return `Running with ${analyzerCount} ${label} enabled`;
 }
 
-interface AnalyzerSectionLike {
-  enabled: boolean;
-  triggers: { put: { enabled: boolean } };
+// Resume an engine session that was in progress when the plugin last stopped,
+// so a restart mid-trip neither splits nor loses the session, and return the
+// saver that keeps that file current.
+//
+// The saver writes only when the snapshot actually changed: the engine is off
+// most of the time, so an unconditional periodic write would rewrite the same
+// empty state to the SD card every interval. Its writes are serialized and
+// atomic, because the periodic saver, the engine-start listener, and the
+// engine-stop listener can all fire close together.
+function persistDetector(
+  detector: EngineDetector,
+  statePath: string,
+  logger: Logger,
+): () => Promise<void> {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(statePath, 'utf-8'));
+    if (Array.isArray(parsed)) detector.restore(parsed, Date.now(), ENGINE_STATE_MAX_RESUME_MS);
+  } catch {
+    // No persisted state, or unreadable: start with a clean detector.
+  }
+  let lastWritten = '';
+  const writer = new AtomicFileWriter(statePath, (err) => {
+    // Clear the memo so the next save retries rather than treating this
+    // snapshot as already on disk.
+    lastWritten = '';
+    logger.debug(`engine-detector state save failed: ${stringify(err)}`);
+  });
+  return () => {
+    const serialized = JSON.stringify(detector.snapshot());
+    if (serialized === lastWritten) return writer.settled();
+    lastWritten = serialized;
+    return writer.write(serialized);
+  };
+}
+
+// Register one Cron job per unique (pattern, timezone) pair, each carrying the
+// analyzers that share it. Several analyzers can share a schedule (health and
+// liveness both default to '0 8 * * *'), so a job per analyzer would
+// double-spend the budget. The job fires its members by id, not through
+// router.dispatch: dispatch matches cron by pattern alone, so two analyzers on
+// the same pattern but different timezones would each run on both jobs. Naming
+// the members keeps every job bound to exactly its pair.
+function registerCronJobs(
+  analyzers: readonly Analyzer[],
+  cfg: PluginOptions,
+  scheduler: CronScheduler,
+  logger: Logger,
+  fire: (ids: readonly AnalyzerId[], ctx: TriggerCtx) => void,
+): void {
+  const jobs = new Map<string, { pattern: string; timezone: string; ids: AnalyzerId[] }>();
+  for (const a of analyzers) {
+    const timezone = cfg.analyzers[a.id].triggers.cron.timezone;
+    for (const t of a.triggers) {
+      if (t.kind !== 'cron') continue;
+      const key = compositeKey(t.pattern, timezone);
+      const existing = jobs.get(key);
+      if (existing) existing.ids.push(a.id);
+      else jobs.set(key, { pattern: t.pattern, timezone, ids: [a.id] });
+    }
+  }
+  for (const { pattern, timezone, ids } of jobs.values()) {
+    try {
+      scheduler.register(
+        pattern,
+        () => fire(ids, { kind: 'cron', firedAt: new Date() }),
+        timezone || undefined,
+      );
+    } catch (err) {
+      logger.error(`failed to register cron '${pattern}': ${stringify(err)}`);
+    }
+  }
 }
 
 // Map the outcomes of a PUT-triggered run onto the Signal K PUT contract. A
 // PUT that produced no report must not answer 200 COMPLETED as if it had: the
 // router resolves rather than rejects, so the outcomes are the only signal.
-function putAckFor(outcomes: readonly RunOutcome[]): {
-  state: string;
-  statusCode?: number;
-  message?: string;
-} {
+function putAckFor(outcomes: readonly RunOutcome[]): ActionResult {
   if (outcomes.includes('failed')) {
     return { state: 'FAILED', statusCode: 500, message: 'analyzer run failed' };
   }
@@ -854,49 +777,41 @@ function putAckFor(outcomes: readonly RunOutcome[]): {
 }
 
 function registerAnalyzerPut(
-  app: ServerApiLike,
+  app: Pick<PluginApp, 'registerPutHandler'>,
   analyzerId: AnalyzerId,
-  section: AnalyzerSectionLike,
+  section: { enabled: boolean; triggers: { put: { enabled: boolean } } },
   getRouter: () => TriggerRouter | null,
-  pluginId: string,
 ): void {
   if (!section.enabled) return;
   if (!section.triggers.put.enabled) return;
   const path = pluginPutPath(analyzerId);
-  app.registerPutHandler(
-    'vessels.self',
-    path,
-    (
-      _context: string,
-      _path: string,
-      value: unknown,
-      cb: (r: { state: string; statusCode?: number; message?: string }) => void,
-    ): { state: string; statusCode?: number; message?: string } => {
-      const router = getRouter();
-      // Router not yet built (a PUT landing during the deferred init window):
-      // resolve synchronously with a terminal result. Returning PENDING here
-      // and then calling cb would have the SK contract surface a 503 carrying
-      // a PENDING state and a result href that never completes.
-      if (!router) {
-        return { state: 'COMPLETED', statusCode: 503, message: 'plugin not fully started' };
+  // The PUT value is not read: a PUT to this path means "run once", whatever
+  // it carries.
+  const handler: ActionHandler = (_context, _path, _value, cb) => {
+    const router = getRouter();
+    // Router not yet built (a PUT landing during the deferred init window):
+    // resolve synchronously with a terminal result. Returning PENDING here
+    // and then calling cb would have the SK contract surface a 503 carrying
+    // a PENDING state and a result href that never completes.
+    if (!router) {
+      return { state: 'COMPLETED', statusCode: 503, message: 'plugin not fully started' };
+    }
+    // Guard the async ack against double-fire: the SK PENDING/COMPLETED
+    // contract expects exactly one cb per request.
+    let acked = false;
+    const ack = (r: ActionResult): void => {
+      if (acked) return;
+      acked = true;
+      cb(r);
+    };
+    void (async () => {
+      try {
+        ack(putAckFor(await router.dispatch(manualPutCtx(path))));
+      } catch (err) {
+        ack({ state: 'FAILED', statusCode: 500, message: stringify(err) });
       }
-      // Guard the async ack against double-fire: the SK PENDING/COMPLETED
-      // contract expects exactly one cb per request.
-      let acked = false;
-      const ack = (r: { state: string; statusCode?: number; message?: string }): void => {
-        if (acked) return;
-        acked = true;
-        cb(r);
-      };
-      void (async () => {
-        try {
-          ack(putAckFor(await router.dispatch('put', manualPutCtx(value), { putPath: path })));
-        } catch (err) {
-          ack({ state: 'FAILED', statusCode: 500, message: stringify(err) });
-        }
-      })();
-      return { state: 'PENDING' };
-    },
-    pluginId,
-  );
+    })();
+    return { state: 'PENDING' };
+  };
+  app.registerPutHandler('vessels.self', path, handler, PLUGIN_ID);
 }

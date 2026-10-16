@@ -14,13 +14,15 @@ import {
 } from 'signalk-nearlcrews-ui';
 import { EmptyState, SaveActionBar } from 'signalk-nearlcrews-ui/composites';
 import { DEFAULT_SEVERITY_FLOOR_VALUE, isSeverityFloor } from '../severityFloors.js';
-import { errText, fetchJson, REPORT_LIMIT } from './api.js';
+import { errText, fetchJson } from './api.js';
 import { AnalyzerRow } from './components/AnalyzerRow.js';
 import { HistorySection } from './components/HistorySection.js';
 import { OpenRouterSection } from './components/OpenRouterSection.js';
 import { StatusBlock } from './components/StatusBlock.js';
-import { fireOutcomeText, isFireSuccess } from './fireOutcome.js';
+import { useAnalyzerActions } from './hooks/useAnalyzerActions.js';
 import { useOpenRouterModels } from './hooks/useOpenRouterModels.js';
+import { useOpenSections } from './hooks/useOpenSections.js';
+import { useProbe } from './hooks/useProbe.js';
 import { useSaveLifecycle } from './hooks/useSaveLifecycle.js';
 import { useStatus } from './hooks/useStatus.js';
 import styles from './panel.module.css';
@@ -39,21 +41,23 @@ const SECTION_ANALYZERS = 'orc-section-analyzers';
 
 const SAVE_LABEL = 'Save configuration';
 
+// The field a blocked save points at, and what the save bar says about it.
+type ValidationTarget = 'api-key' | 'history-url' | 'history-database';
+const VALIDATION_TEXT: Record<ValidationTarget, string> = {
+  'api-key': 'Enter an OpenRouter API key before saving.',
+  'history-url': `Enter a valid history-provider ${HISTORY_URL_RULE} before saving.`,
+  'history-database': 'Enter the InfluxDB database or DBRP database name before saving.',
+};
+
 // One shared empty-ui object so an analyzer with no UI state yet passes a stable
 // reference to its (memoized) row instead of a fresh `{}` every render.
 const EMPTY_UI: AnalyzerUiState = Object.freeze({});
 
 // The forecast analyzer coerces a saved severity floor that is off the preset
-// scale back to the default (see analyzers/forecast.ts), so the dropdown shows
-// the same value the plugin is actually running with.
+// scale back to the default (see validateOptions in types.ts), so the dropdown
+// shows the same value the plugin is actually running with.
 function severityFloorFor(saved: string | undefined): string {
   return isSeverityFloor(saved) ? saved : DEFAULT_SEVERITY_FLOOR_VALUE;
-}
-
-// What the reports drawer says once its list settles.
-function reportsLoadedText(title: string, count: number): string {
-  if (count === 0) return `No reports yet for ${title}.`;
-  return count === 1 ? `1 report loaded for ${title}.` : `${count} reports loaded for ${title}.`;
 }
 
 // The shell runs the browser preflight, owns the theme toggle, and wraps the
@@ -90,76 +94,31 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     onDiscard: discardConfiguration,
   } = useSaveLifecycle(configuration, save, status);
   const { models, modelsState, loadModels } = useOpenRouterModels(announce);
+  const { analyzerUi, readUi, patchUi, setExpanded, fireAnalyzer, toggleReports, togglePrompt } =
+    useAnalyzerActions(announce, status?.analyzers);
+  const sections = useOpenSections();
+  const apiTest = useProbe<TestResult>();
+  const historyTest = useProbe<HistoryTestResult>();
 
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [historyTest, setHistoryTest] = useState<HistoryTestResult | null>(null);
-  const [historyTesting, setHistoryTesting] = useState(false);
-  const [analyzerUi, setAnalyzerUi] = useState<Record<string, AnalyzerUiState>>({});
-  const [validationTarget, setValidationTarget] = useState<
-    'api-key' | 'history-url' | 'history-database' | null
-  >(null);
+  const [validationTarget, setValidationTarget] = useState<ValidationTarget | null>(null);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const apiKeyRef = useRef<HTMLInputElement>(null);
   const historyUrlRef = useRef<HTMLInputElement>(null);
   const historyDatabaseRef = useRef<HTMLInputElement>(null);
-  const setHistorySection = useCallback(
-    (patch: Partial<PanelConfig>): void => {
-      setHistoryTest(null);
-      setSection(patch);
-    },
+
+  const setOpenRouter = useCallback(
+    (openrouter: NonNullable<PanelConfig['openrouter']>): void => setSection({ openrouter }),
     [setSection],
   );
-  // Mirror of analyzerUi for reads from event handlers without going through the
-  // state updater. The updater functions must be pure (StrictMode and concurrent
-  // rendering may call them more than once), so any side effect (loadReports,
-  // loadPrompt, setTimeout) must run outside them. A ref kept in sync via
-  // useEffect gives the handlers the latest committed state without
-  // re-introducing the stale-closure bug the functional setters were added to
-  // fix.
-  const analyzerUiRef = useRef(analyzerUi);
-  useEffect(() => {
-    analyzerUiRef.current = analyzerUi;
-  }, [analyzerUi]);
-  // Analyzer titles for the announcements, read from a ref for the same reason:
-  // the handlers must not close over `status`, or every poll that changed the
-  // payload would rebuild them and re-render every memoized row.
-  const titlesRef = useRef<Record<string, string>>({});
-  useEffect(() => {
-    const titles: Record<string, string> = {};
-    for (const analyzer of status?.analyzers ?? []) titles[analyzer.id] = analyzer.title;
-    titlesRef.current = titles;
-  }, [status]);
-  const titleFor = useCallback((id: string): string => titlesRef.current[id] ?? id, []);
-  // In-flight guard for the two per-analyzer GETs. React 19 StrictMode calls
-  // event handlers' state updaters twice in dev; dedup-by-key here prevents
-  // double-firing the network request even when the handler runs twice.
-  const inFlightRef = useRef<Set<string>>(new Set());
-  // Every section starts collapsed so the panel opens compact, showing just the
-  // live status and the section headers. One map keyed by section id; the
-  // single toggle stays stable so adding a section costs no new callback.
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
-  const setSectionOpen = useCallback((id: string, open: boolean): void => {
-    setOpenSections((prev) => (Boolean(prev[id]) === open ? prev : { ...prev, [id]: open }));
-  }, []);
-  // Force a section open (idempotent): the first-run callout uses it to reveal
-  // the OpenRouter section. Returns the same map when already open so it adds no
-  // render. All writes to openSections funnel through these two named setters.
-  const openSection = useCallback((id: string): void => {
-    setOpenSections((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
-  }, []);
-  // Post-fire report refresh timers, one per analyzer so firing a second
-  // analyzer cannot cancel the first one's pending refresh. Tracked so every
-  // pending timer is cleared on unmount.
-  const reportRefreshTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  useEffect(() => {
-    const timers = reportRefreshTimersRef.current;
-    return () => {
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-    };
-  }, []);
+  // An edited history setting invalidates the last connection test's result.
+  const { clear: clearHistoryTest } = historyTest;
+  const setHistory = useCallback(
+    (history: NonNullable<PanelConfig['history']>): void => {
+      clearHistoryTest();
+      setSection({ history });
+    },
+    [setSection, clearHistoryTest],
+  );
 
   // A save restarts the plugin, so lost edits are costly: ask before a tab
   // close or reload while edits are unsaved.
@@ -179,195 +138,52 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     if (pluginUnreachable) announce(pluginUnreachable, { assertive: true });
   }, [pluginUnreachable, announce]);
 
-  const patchUi = useCallback((id: string, patch: Partial<AnalyzerUiState>): void => {
-    setAnalyzerUi((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
-  }, []);
-
-  // Shared in-flight dedup for the per-analyzer GETs: skip when a request for
-  // the same key is already running, and release the key when it settles.
-  const withInFlight = useCallback(async (key: string, fn: () => Promise<void>): Promise<void> => {
-    if (inFlightRef.current.has(key)) return;
-    inFlightRef.current.add(key);
-    try {
-      await fn();
-    } finally {
-      inFlightRef.current.delete(key);
-    }
-  }, []);
-
+  const { run: runApiTest } = apiTest;
   const runTest = useCallback(async (): Promise<void> => {
-    setTesting(true);
-    setTestResult(null);
-    const r = await fetchJson<{ totalTokens?: number; model?: string }>('/openrouter/test', {
-      method: 'POST',
+    const outcome = await runApiTest(async () => {
+      const r = await fetchJson<{ totalTokens?: number; model?: string }>('/openrouter/test', {
+        method: 'POST',
+      });
+      const text =
+        r.ok && r.body ? `OK (${r.body.totalTokens} tokens, ${r.body.model})` : errText(r);
+      return { ok: r.ok, text };
     });
-    const text = r.ok && r.body ? `OK (${r.body.totalTokens} tokens, ${r.body.model})` : errText(r);
-    setTestResult({ ok: r.ok, text });
-    setTesting(false);
-    announce(text);
-  }, [announce]);
+    if (outcome) announce(outcome.text);
+  }, [runApiTest, announce]);
 
-  const historySource = cfg.history?.source ?? 'questdb';
-  const questdbUrl = cfg.history?.questdb?.url;
-  const influxdbVersion = cfg.history?.influxdb?.version ?? '1';
-  const influxdbUrl = cfg.history?.influxdb?.url;
-  const influxdbDatabase = cfg.history?.influxdb?.database;
-  const influxdbUsername = cfg.history?.influxdb?.username;
-  const influxdbPassword = cfg.history?.influxdb?.password;
+  const { run: runHistoryProbe } = historyTest;
+  const history = cfg.history;
   const runHistoryTest = useCallback(async (): Promise<void> => {
-    if (historySource === 'none') return;
-    setHistoryTesting(true);
-    setHistoryTest(null);
-    const isInfluxDB = historySource === 'influxdb';
-    const r = await fetchJson<{
-      ok?: boolean;
-      url?: string;
-      database?: string;
-      version?: string;
-      error?: string;
-    }>(isInfluxDB ? '/influxdb/test' : '/questdb/test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(
-        isInfluxDB
-          ? {
-              version: influxdbVersion,
-              url: influxdbUrl,
-              database: influxdbDatabase,
-              username: influxdbUsername,
-              password: influxdbPassword,
-            }
-          : { url: questdbUrl },
-      ),
+    const source = history?.source ?? 'questdb';
+    if (source === 'none') return;
+    const outcome = await runHistoryProbe(async (): Promise<HistoryTestResult> => {
+      const isInfluxDB = source === 'influxdb';
+      const r = await fetchJson<{ ok?: boolean; url?: string; error?: string }>(
+        isInfluxDB ? '/influxdb/test' : '/questdb/test',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            isInfluxDB
+              ? {
+                  version: history?.influxdb?.version ?? '1',
+                  url: history?.influxdb?.url,
+                  database: history?.influxdb?.database,
+                  username: history?.influxdb?.username,
+                  password: history?.influxdb?.password,
+                }
+              : { url: history?.questdb?.url },
+          ),
+        },
+      );
+      return r.body?.ok ? { ok: true, url: r.body.url ?? '' } : { ok: false, text: errText(r) };
     });
-    const url = r.body?.url ?? '';
-    setHistoryTest(r.body?.ok ? { ok: true, url } : { ok: false, text: errText(r) });
-    setHistoryTesting(false);
-    announce(`History provider test: ${r.body?.ok ? `Reachable at ${url}` : errText(r)}`);
-  }, [
-    announce,
-    historySource,
-    influxdbDatabase,
-    influxdbPassword,
-    influxdbUrl,
-    influxdbUsername,
-    influxdbVersion,
-    questdbUrl,
-  ]);
-
-  const loadReports = useCallback(
-    (id: string): Promise<void> =>
-      withInFlight(`reports:${id}`, async () => {
-        patchUi(id, { reportsLoading: true });
-        announce(`Loading reports for ${titleFor(id)}.`);
-        const r = await fetchJson<{ reports?: AnalyzerUiState['reports'] }>(
-          `/analyzers/${id}/reports?limit=${REPORT_LIMIT}`,
-        );
-        if (r.ok) {
-          const reports = r.body?.reports || [];
-          patchUi(id, { reports, reportsLoading: false, reportsError: null });
-          announce(reportsLoadedText(titleFor(id), reports.length));
-        } else {
-          // Keep any previously loaded reports rather than clobbering them with
-          // an empty list, which would render a false "No reports yet".
-          patchUi(id, { reportsLoading: false, reportsError: errText(r) });
-          announce(`Failed to load reports for ${titleFor(id)}: ${errText(r)}`);
-        }
-      }),
-    [withInFlight, patchUi, announce, titleFor],
-  );
-
-  const fireAnalyzer = useCallback(
-    async (id: string): Promise<void> => {
-      patchUi(id, { fire: { pending: true } });
-      const r = await fetchJson<{ outcome?: string }>(`/analyzers/${id}/fire`, { method: 'POST' });
-      const text = r.ok ? fireOutcomeText(r.body?.outcome) : errText(r);
-      patchUi(id, { fire: { ok: r.ok && isFireSuccess(r.body?.outcome), text } });
-      // The chip beside the button appears with its text, which a screen reader
-      // may never observe. The announcer speaks the same words through a region
-      // that already existed, and repeats them when a second run ends the same
-      // way rather than reading as an unchanged region.
-      announce(`${titleFor(id)}: ${text}.`);
-      // Refresh the open drawer so the new report shows up after the LLM returns.
-      // 800 ms is a heuristic; a real boat round-trip is 1-3 s. Read the live
-      // drawer state via the ref: the multi-second fire means the closed-over
-      // analyzerUi is stale by the time it resolves.
-      if (analyzerUiRef.current[id]?.reportsOpen) {
-        const timers = reportRefreshTimersRef.current;
-        const pending = timers.get(id);
-        if (pending) clearTimeout(pending);
-        timers.set(
-          id,
-          setTimeout(() => {
-            timers.delete(id);
-            void loadReports(id);
-          }, 800),
-        );
-      }
-    },
-    [patchUi, loadReports, announce, titleFor],
-  );
-
-  // A pure expand/collapse write with no side effect, so it funnels through
-  // patchUi like every other per-id mutation. The section reports the state it
-  // is moving to, so nothing has to be re-derived here.
-  const setExpanded = useCallback(
-    (id: string, expanded: boolean): void => {
-      patchUi(id, { expanded });
-    },
-    [patchUi],
-  );
-
-  const toggleReports = useCallback(
-    (id: string): void => {
-      const current = analyzerUiRef.current[id];
-      const next = !current?.reportsOpen;
-      patchUi(id, { reportsOpen: next });
-      if (!next) return;
-      // A drawer reopened on an already-loaded list still says what is in it,
-      // since nothing new arrives to speak for it.
-      if (current?.reports) announce(reportsLoadedText(titleFor(id), current.reports.length));
-      else void loadReports(id);
-    },
-    [patchUi, loadReports, announce, titleFor],
-  );
-
-  const loadPrompt = useCallback(
-    (id: string): Promise<void> =>
-      withInFlight(`prompt:${id}`, async () => {
-        patchUi(id, { promptLoaded: false, promptError: null });
-        announce(`Loading the prompt for ${titleFor(id)}.`);
-        const r = await fetchJson<{ default?: string; current?: string | null }>(
-          `/analyzers/${id}/prompt`,
-        );
-        if (r.ok && r.body) {
-          patchUi(id, {
-            promptDefault: r.body.default,
-            promptCurrent: r.body.current,
-            promptLoaded: true,
-            promptError: null,
-          });
-          announce(`Prompt loaded for ${titleFor(id)}.`);
-        } else {
-          patchUi(id, { promptError: errText(r), promptLoaded: true });
-          announce(`Failed to load the prompt for ${titleFor(id)}: ${errText(r)}`);
-        }
-      }),
-    [withInFlight, patchUi, announce, titleFor],
-  );
-
-  const togglePrompt = useCallback(
-    (id: string): void => {
-      const current = analyzerUiRef.current[id];
-      const next = !current?.promptOpen;
-      patchUi(id, { promptOpen: next });
-      if (!next) return;
-      // Load on first open, and retry on reopen if the previous load failed.
-      if (!current?.promptLoaded || current?.promptError) void loadPrompt(id);
-      else announce(`Prompt loaded for ${titleFor(id)}.`);
-    },
-    [patchUi, loadPrompt, announce, titleFor],
-  );
+    if (outcome) {
+      announce(
+        `History provider test: ${outcome.ok ? `Reachable at ${outcome.url}` : outcome.text}`,
+      );
+    }
+  }, [runHistoryProbe, announce, history]);
 
   const handleSetEnabled = useCallback(
     (id: string, value: boolean): void => setAnalyzerCfg(id, { enabled: value }),
@@ -387,9 +203,11 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     [setAnalyzerCfg, patchUi],
   );
 
+  // The built-in default is read off the latest analyzer UI state, not closed
+  // over, so the callback stays stable across every keystroke.
   const onPromptChange = useCallback(
     (id: string, value: string): void => {
-      const def = analyzerUiRef.current[id]?.promptDefault;
+      const def = readUi(id)?.promptDefault;
       if (!isPromptOverride(value, def)) {
         // Typed back to the built-in default: drop the override so Save does not
         // persist a redundant customSystemPrompt identical to the default.
@@ -399,7 +217,7 @@ function PanelContent({ configuration, save }: Props): ReactElement {
         setAnalyzerCfg(id, { customSystemPrompt: value });
       }
     },
-    [setAnalyzerCfg, patchUi],
+    [setAnalyzerCfg, patchUi, readUi],
   );
 
   // Single source of truth for the prompt edit buffer: the cfg object. The
@@ -413,11 +231,13 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     return ui?.promptCurrent ?? ui?.promptDefault ?? '';
   };
 
+  // The first-run callout keys off the edit buffer so it disappears the moment
+  // the operator starts typing a key, before any save round-trip.
   const noApiKey = !(cfg.openrouter?.apiKey ?? '').trim();
   // One derivation of the history validation state, shared with HistorySection
   // so the save gate and the marked field can never disagree.
-  const history = historyValidity(cfg.history);
-  const badHistoryUrl = history.noUrl || history.invalidUrl;
+  const validity = historyValidity(cfg.history);
+  const badHistoryUrl = validity.noUrl || validity.invalidUrl;
 
   // Open a section and hand back the field inside it. The reveal commits inside
   // flushSync, so the field is connected and visible when the caller focuses it
@@ -427,7 +247,7 @@ function PanelContent({ configuration, save }: Props): ReactElement {
     sectionId: string,
     ref: RefObject<HTMLInputElement | null>,
   ): RefObject<HTMLInputElement | null> => {
-    flushSync(() => openSection(sectionId));
+    flushSync(() => sections.setOpen(sectionId, true));
     return ref;
   };
 
@@ -446,7 +266,7 @@ function PanelContent({ configuration, save }: Props): ReactElement {
       setValidationTarget('history-url');
       return revealField(SECTION_HISTORY, historyUrlRef);
     }
-    if (history.missingDatabase) {
+    if (validity.missingDatabase) {
       setValidationTarget('history-database');
       return revealField(SECTION_HISTORY, historyDatabaseRef);
     }
@@ -462,16 +282,15 @@ function PanelContent({ configuration, save }: Props): ReactElement {
   };
 
   const analyzersList = status?.analyzers ?? [];
-  // The first-run callout keys off the edit buffer so it disappears the moment
-  // the operator starts typing a key, before any save round-trip.
+  // A blocked save's message stands only while the field is still wrong, so
+  // fixing it clears the save bar's complaint before the next save attempt.
+  const stillInvalid: Record<ValidationTarget, boolean> = {
+    'api-key': noApiKey,
+    'history-url': badHistoryUrl,
+    'history-database': validity.missingDatabase,
+  };
   const validationText =
-    validationTarget === 'api-key' && noApiKey
-      ? 'Enter an OpenRouter API key before saving.'
-      : validationTarget === 'history-url' && badHistoryUrl
-        ? `Enter a valid history-provider ${HISTORY_URL_RULE} before saving.`
-        : validationTarget === 'history-database' && history.missingDatabase
-          ? 'Enter the InfluxDB database or DBRP database name before saving.'
-          : '';
+    validationTarget && stillInvalid[validationTarget] ? VALIDATION_TEXT[validationTarget] : '';
 
   return (
     <>
@@ -494,22 +313,25 @@ function PanelContent({ configuration, save }: Props): ReactElement {
           status={status}
           statusError={statusError}
           onTest={runTest}
-          testing={testing}
-          testResult={testResult}
+          testing={apiTest.pending}
+          testResult={apiTest.result}
           stale={stale}
-          lastSuccessAt={lastSuccessAt}
+          // Every good poll moves the timestamp, and the block shows it only
+          // while the snapshot is stale, so a healthy poll leaves the memoized
+          // block's props unchanged.
+          lastSuccessAt={stale ? lastSuccessAt : null}
         />
       </Section>
 
       <CollapsibleSection
         id={SECTION_OPENROUTER}
         title="OpenRouter"
-        open={Boolean(openSections[SECTION_OPENROUTER])}
-        onOpenChange={(open) => setSectionOpen(SECTION_OPENROUTER, open)}
+        open={sections.isOpen(SECTION_OPENROUTER)}
+        onOpenChange={(open) => sections.setOpen(SECTION_OPENROUTER, open)}
       >
         <OpenRouterSection
-          cfg={cfg}
-          set={setSection}
+          openrouter={cfg.openrouter}
+          setOpenRouter={setOpenRouter}
           models={models}
           modelsState={modelsState}
           loadModels={loadModels}
@@ -521,15 +343,15 @@ function PanelContent({ configuration, save }: Props): ReactElement {
       <CollapsibleSection
         id={SECTION_HISTORY}
         title="History source"
-        open={Boolean(openSections[SECTION_HISTORY])}
-        onOpenChange={(open) => setSectionOpen(SECTION_HISTORY, open)}
+        open={sections.isOpen(SECTION_HISTORY)}
+        onOpenChange={(open) => sections.setOpen(SECTION_HISTORY, open)}
       >
         <HistorySection
-          cfg={cfg}
-          set={setHistorySection}
-          testResult={historyTest}
+          history={cfg.history}
+          setHistory={setHistory}
+          testResult={historyTest.result}
           onTest={runHistoryTest}
-          testing={historyTesting}
+          testing={historyTest.pending}
           urlRef={historyUrlRef}
           databaseRef={historyDatabaseRef}
           submitted={validationTarget === 'history-url' || validationTarget === 'history-database'}
@@ -540,8 +362,8 @@ function PanelContent({ configuration, save }: Props): ReactElement {
         id={SECTION_ANALYZERS}
         title="Analyzers"
         mountStrategy="lazy-retain"
-        open={Boolean(openSections[SECTION_ANALYZERS])}
-        onOpenChange={(open) => setSectionOpen(SECTION_ANALYZERS, open)}
+        open={sections.isOpen(SECTION_ANALYZERS)}
+        onOpenChange={(open) => sections.setOpen(SECTION_ANALYZERS, open)}
       >
         <Stack gap={2}>
           {analyzersList.length === 0 ? (
@@ -573,7 +395,7 @@ function PanelContent({ configuration, save }: Props): ReactElement {
               }
               onScheduleChange={setSchedule}
               // A saved value off the preset scale is coerced to the default
-              // by the analyzer, so the dropdown shows the default too rather
+              // by the plugin, so the dropdown shows the default too rather
               // than blanking on a value the plugin is not using.
               severityFloor={
                 analyzer.hasSeverityFloor

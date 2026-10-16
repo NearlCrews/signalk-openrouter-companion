@@ -43,7 +43,7 @@ describe('BudgetTracker', () => {
     const raw = JSON.parse(await readFile(path, 'utf-8'));
     expect(raw.callsToday).toBe(2);
     const b2 = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
-    expect(b2.callsToday()).toBe(2);
+    expect(b2.snapshot().callsToday).toBe(2);
   });
 
   it('resets count on UTC day rollover', async () => {
@@ -55,7 +55,7 @@ describe('BudgetTracker', () => {
     expect(b.canSpend()).toBe(false);
     now = new Date('2026-05-11T00:30:00Z');
     expect(b.canSpend()).toBe(true);
-    expect(b.callsToday()).toBe(0);
+    expect(b.snapshot().callsToday).toBe(0);
   });
 
   it('tolerates corrupted state file by resetting', async () => {
@@ -67,7 +67,7 @@ describe('BudgetTracker', () => {
       now: () => new Date('2026-05-10T00:00:00Z'),
     });
     expect(b.canSpend()).toBe(true);
-    expect(b.callsToday()).toBe(0);
+    expect(b.snapshot().callsToday).toBe(0);
   });
 
   it('resets when callsToday is negative or non-integer (hardened load)', async () => {
@@ -82,7 +82,7 @@ describe('BudgetTracker', () => {
       const path = join(dir, `budget-${bad.callsToday}.json`);
       await writeFile(path, JSON.stringify(bad));
       const b = await BudgetTracker.load({ maxPerDay: 3, statePath: path, now });
-      expect(b.callsToday()).toBe(0);
+      expect(b.snapshot().callsToday).toBe(0);
       expect(b.canSpend()).toBe(true);
     }
   });
@@ -93,8 +93,8 @@ describe('BudgetTracker', () => {
     const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
     await b.recordUsage({ totalTokens: 120, cost: 0.004 });
     await b.recordUsage({ totalTokens: 80, cost: 0.002 });
-    expect(b.tokensToday()).toBe(200);
-    expect(b.costToday()).toBeCloseTo(0.006, 6);
+    expect(b.snapshot().tokensToday).toBe(200);
+    expect(b.snapshot().costToday).toBeCloseTo(0.006, 6);
   });
 
   it('resets tokens and cost on UTC day rollover', async () => {
@@ -103,8 +103,8 @@ describe('BudgetTracker', () => {
     const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => now });
     await b.recordUsage({ totalTokens: 100, cost: 0.01 });
     now = new Date('2026-05-11T00:30:00Z');
-    expect(b.tokensToday()).toBe(0);
-    expect(b.costToday()).toBe(0);
+    expect(b.snapshot().tokensToday).toBe(0);
+    expect(b.snapshot().costToday).toBe(0);
   });
 
   it('recordUsage after a UTC day rollover starts the new day from 0', async () => {
@@ -117,8 +117,8 @@ describe('BudgetTracker', () => {
     await b.recordUsage({ totalTokens: 100, cost: 0.01 });
     now = new Date('2026-05-11T00:30:00Z');
     await b.recordUsage({ totalTokens: 30, cost: 0.003 });
-    expect(b.tokensToday()).toBe(30);
-    expect(b.costToday()).toBeCloseTo(0.003, 6);
+    expect(b.snapshot().tokensToday).toBe(30);
+    expect(b.snapshot().costToday).toBeCloseTo(0.003, 6);
   });
 
   it('leaves totals unchanged for NaN, Infinity, or negative usage', async () => {
@@ -136,8 +136,8 @@ describe('BudgetTracker', () => {
     ]) {
       await b.recordUsage(bad);
     }
-    expect(b.tokensToday()).toBe(100);
-    expect(b.costToday()).toBeCloseTo(0.01, 6);
+    expect(b.snapshot().tokensToday).toBe(100);
+    expect(b.snapshot().costToday).toBeCloseTo(0.01, 6);
   });
 
   it('loads a pre-upgrade state file without token/cost fields', async () => {
@@ -145,9 +145,9 @@ describe('BudgetTracker', () => {
     const t0 = new Date('2026-05-10T01:00:00Z');
     await writeFile(path, JSON.stringify({ day: '2026-05-10', callsToday: 2 }));
     const b = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
-    expect(b.callsToday()).toBe(2);
-    expect(b.tokensToday()).toBe(0);
-    expect(b.costToday()).toBe(0);
+    expect(b.snapshot().callsToday).toBe(2);
+    expect(b.snapshot().tokensToday).toBe(0);
+    expect(b.snapshot().costToday).toBe(0);
   });
 
   it('persists tokens and cost across instances', async () => {
@@ -156,8 +156,8 @@ describe('BudgetTracker', () => {
     const b1 = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
     await b1.recordUsage({ totalTokens: 50, cost: 0.005 });
     const b2 = await BudgetTracker.load({ maxPerDay: 5, statePath: path, now: () => t0 });
-    expect(b2.tokensToday()).toBe(50);
-    expect(b2.costToday()).toBeCloseTo(0.005, 6);
+    expect(b2.snapshot().tokensToday).toBe(50);
+    expect(b2.snapshot().costToday).toBeCloseTo(0.005, 6);
   });
 
   it('logs and does not throw when the state write fails', async () => {
@@ -175,6 +175,6 @@ describe('BudgetTracker', () => {
     });
     await expect(b.recordCall()).resolves.toBeUndefined();
     expect(messages.some((m) => m.includes('budget state write failed'))).toBe(true);
-    expect(b.callsToday()).toBe(1);
+    expect(b.snapshot().callsToday).toBe(1);
   });
 });

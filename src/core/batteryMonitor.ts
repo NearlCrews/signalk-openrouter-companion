@@ -1,4 +1,5 @@
 import { TypedEmitter } from './emitter.js';
+import { SECOND_MS } from './format.js';
 import type { Logger } from './logger.js';
 import { evictStaleSpan, fuseMin } from './readings.js';
 import type { BatteryEventKind } from './triggerContext.js';
@@ -62,7 +63,7 @@ export class BatteryMonitor extends TypedEmitter<BatteryEventKind, BatteryEvent>
     super((message) => logger.error(message));
     this.lowThreshold = opts.lowSocPercent / 100;
     this.exitThreshold = (opts.lowSocPercent + opts.socExitHysteresis) / 100;
-    this.imbalanceSettleMs = opts.imbalanceSettleSec * 1000;
+    this.imbalanceSettleMs = opts.imbalanceSettleSec * SECOND_MS;
   }
 
   private getBank(bankId: string): BankState {

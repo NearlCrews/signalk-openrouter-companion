@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
+import { readPackageJson } from './repository.mjs';
 
 const execFileAsync = promisify(execFile);
-const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
+const packageJson = readPackageJson();
 const { stdout } = await execFileAsync(
   process.platform === 'win32' ? 'npm.cmd' : 'npm',
   ['pack', '--dry-run', '--json', '--ignore-scripts'],

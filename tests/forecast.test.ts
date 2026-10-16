@@ -9,22 +9,23 @@ import {
   parseForecast,
   resolveForecastState,
 } from '../src/analyzers/forecast.js';
-import { RollingBuffer } from '../src/core/buffer.js';
+import { HOUR_MS } from '../src/core/format.js';
 import { ReportPublisher } from '../src/core/publisher.js';
-import type { SeverityFloor } from '../src/types.js';
+import type { SeverityFloor } from '../src/severityFloors.js';
 import {
   cleanupTmpDir,
   firstNotificationValue,
   type MockApp,
   makeAnalyzerDeps,
+  makeBuffer,
   makeMockApp,
   makeQuestDBStub,
   makeRouterDeps,
   makeRunMeta,
   makeTmpDir,
+  makeTriggers,
 } from './_mocks.js';
 
-const HOUR = 3_600_000;
 // Fixed trigger time so the 12 hourly buckets land on predictable indices.
 const FIRED_AT = new Date('2026-05-10T12:00:00.000Z');
 const FIRED_MS = FIRED_AT.getTime();
@@ -37,11 +38,10 @@ function makeCfg(
   overrides: Partial<{ severityFloor: SeverityFloor; cron: boolean; put: boolean }> = {},
 ) {
   return {
-    triggers: {
-      cron: { enabled: overrides.cron ?? true, pattern: '0 */3 * * *', timezone: '' },
+    triggers: makeTriggers({
+      cron: { enabled: overrides.cron ?? true, pattern: '0 */3 * * *' },
       put: { enabled: overrides.put ?? true },
-      events: [] as string[],
-    },
+    }),
     severityFloor: overrides.severityFloor ?? ('moderate' as SeverityFloor),
   };
 }
@@ -171,7 +171,7 @@ describe('ForecastAnalyzer', () => {
 
   describe('collectContext cold start', () => {
     it('returns null with under an hour of history and no QuestDB', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 30 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
@@ -179,7 +179,7 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('proceeds despite a thin buffer when a QuestDB baseline is available', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 30 * 60_000, 'accuweather');
       const stub = makeQuestDBStub(() => baselineResult([{ path: PRESSURE_PATH, mean: 101_500 }]));
       const a = new ForecastAnalyzer(makeCfg());
@@ -191,11 +191,11 @@ describe('ForecastAnalyzer', () => {
 
   describe('collectContext trend buckets', () => {
     it('averages samples that fall in the same hourly bucket', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       // Samples are recorded oldest-first, as live deltas arrive. One older
       // sample (bucket 8) clears the 1h cold-start floor; two recent samples
       // 0.5h before the trigger both land in bucket 11 and average to 292.
-      buf.record(TEMPERATURE_PATH, 288, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      buf.record(TEMPERATURE_PATH, 288, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(TEMPERATURE_PATH, 290, FIRED_MS - 30 * 60_000, 'accuweather');
       buf.record(TEMPERATURE_PATH, 294, FIRED_MS - 29 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
@@ -210,9 +210,9 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('pre-computes the 3h barometric tendency in hPa', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       // Bucket 8 (3.5h ago) and bucket 11 (0.5h ago) are exactly 3 buckets apart.
-      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
@@ -224,9 +224,9 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('reports a null tendency when the prior 3h bucket is empty', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       // Pressure only recently; an older temperature sample clears cold start.
-      buf.record(TEMPERATURE_PATH, 288, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      buf.record(TEMPERATURE_PATH, 288, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
@@ -235,12 +235,12 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('reports a null tendency when the latest pressure bucket is stale', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       // Pressure stopped 4.5h ago: buckets 4 and 7 populated, current bucket
       // 11 empty. The prompt labels the tendency "last 3h", so an old delta
       // must not be surfaced as current.
-      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 7.5 * HOUR, 'accuweather');
-      buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 4.5 * HOUR, 'accuweather');
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 7.5 * HOUR_MS, 'accuweather');
+      buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 4.5 * HOUR_MS, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
       expect(r).not.toBeNull();
@@ -250,8 +250,8 @@ describe('ForecastAnalyzer', () => {
 
   describe('collectContext buffer-only vs QuestDB baseline', () => {
     it('runs buffer-only with no QuestDB: baseline flag false, baselineMean null', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
-      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      const buf = makeBuffer();
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
@@ -262,8 +262,8 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('falls back to a buffer-only forecast when the QuestDB query throws', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
-      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      const buf = makeBuffer();
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
       const stub = makeQuestDBStub(() => {
         throw new Error('questdb unreachable');
@@ -279,8 +279,8 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('attaches the QuestDB 24-72h baseline mean per path when QuestDB is reachable', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
-      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      const buf = makeBuffer();
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
       const stub = makeQuestDBStub(() => baselineResult([{ path: PRESSURE_PATH, mean: 101_900 }]));
       const a = new ForecastAnalyzer(makeCfg());
@@ -298,8 +298,8 @@ describe('ForecastAnalyzer', () => {
 
   describe('collectContext graceful degradation', () => {
     it('produces a forecast from a canonical-only feed', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
-      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      const buf = makeBuffer();
+      buf.record(PRESSURE_PATH, 101_300, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 30 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
@@ -313,8 +313,8 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('includes extension paths in the trend table when they are present', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
-      buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 3.5 * HOUR, 'accuweather');
+      const buf = makeBuffer();
+      buf.record(PRESSURE_PATH, 100_700, FIRED_MS - 3.5 * HOUR_MS, 'accuweather');
       buf.record(GUST_PATH, 14.2, FIRED_MS - 30 * 60_000, 'accuweather');
       const a = new ForecastAnalyzer(makeCfg());
       const r = await a.collectContext(cronCtx, makeAnalyzerDeps(app, buf));
@@ -384,7 +384,7 @@ describe('ForecastAnalyzer', () => {
     }
 
     it('publishes an alarm-state notification when the grade meets the floor', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
       await a.publishOutput?.(
@@ -412,7 +412,7 @@ describe('ForecastAnalyzer', () => {
       // publish, never whether the readings support one, so a single
       // hallucinated line on settled data was enough to beep. Repeated false
       // alarms are how a crew learns to mute the channel.
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
       await a.publishOutput?.(
@@ -432,7 +432,7 @@ describe('ForecastAnalyzer', () => {
     it('honors a severe grade corroborated by a wind shift alone', async () => {
       // Any one of the three indicators is enough: no usable barometric
       // tendency, but the wind has backed 90 degrees across the window.
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
       await a.publishOutput?.(
@@ -478,7 +478,7 @@ describe('ForecastAnalyzer', () => {
       // ("recovered"), and `signalk-nmea2000-emitter-cannon` suppresses the PGN
       // for `nominal`, so a recovery published as `nominal` never clears the
       // chartplotter alert the raised outlook set.
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
       const deps = makeAnalyzerDeps(app, buf, { publisher });
@@ -511,7 +511,7 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('publishes at state nominal when the grade is below the floor', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'moderate' }));
       await a.publishOutput?.(
@@ -528,7 +528,7 @@ describe('ForecastAnalyzer', () => {
     });
 
     it('publishes the whole text at state nominal when no SEVERITY line is present', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const publisher = makePublisher();
       const a = new ForecastAnalyzer(makeCfg({ severityFloor: 'minor' }));
       const text = 'Conditions settled; no significant change expected overnight.';

@@ -1,30 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { DriftAnalyzer, type DriftInput } from '../src/analyzers/drift.js';
-import { RollingBuffer } from '../src/core/buffer.js';
+import { DAY_MS } from '../src/core/format.js';
 import {
   cleanupTmpDir,
   type MockApp,
-  type MockQuestDB,
   makeAnalyzerDeps,
+  makeBuffer,
   makeMockApp,
   makeQuestDBStub,
   makeTmpDir,
+  makeTriggers,
 } from './_mocks.js';
 
 function makeCfg(overrides: Partial<{ baselineDays: number }> = {}) {
   return {
-    triggers: {
-      cron: { enabled: true, pattern: '0 8 * * 0', timezone: '' },
-      put: { enabled: true },
-      events: [] as string[],
-    },
+    triggers: makeTriggers({ cron: { enabled: true, pattern: '0 8 * * 0' } }),
     baselineDays: overrides.baselineDays ?? 30,
   };
-}
-
-function makeDeps(app: MockApp, buffer: RollingBuffer, questdb: MockQuestDB | null = null) {
-  return makeAnalyzerDeps(app, buffer, { questdb });
 }
 
 // drift.ts pushes per-bin aggregation into QuestDB and reads back rows of
@@ -98,31 +91,31 @@ describe('DriftAnalyzer', () => {
 
   describe('collectContext null paths', () => {
     it('returns null when questdb is not configured', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-10T08:00:00Z') };
-      const r = await a.collectContext(ctx, makeDeps(app, buf, null));
+      const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: null }));
       expect(r).toBeNull();
     });
 
     it('returns null when QuestDB returns no bin rows in the past week', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       const stub = makeQuestDBStub(() => binResult([]));
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-10T08:00:00Z') };
-      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+      const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
       expect(r).toBeNull();
     });
   });
 
   describe('collectContext happy path', () => {
     it('returns per-bin stats and computes deltas vs baseline', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       buf.record('propulsion.port.revolutions', 4, Date.now() - 1000, 'n2k');
 
       const firedAt = new Date('2026-05-10T08:00:00Z');
       const firedMs = firedAt.getTime();
-      const thisWeekFromIso = new Date(firedMs - 7 * 86_400_000).toISOString();
+      const thisWeekFromIso = new Date(firedMs - 7 * DAY_MS).toISOString();
 
       // Week burns 10% more fuel per bin than baseline; SOG identical.
       const weekRows: BinRow[] = [
@@ -144,7 +137,7 @@ describe('DriftAnalyzer', () => {
 
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt };
-      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+      const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
       expect(r).not.toBeNull();
       const input = r as DriftInput;
       expect(input.windowDays).toEqual({ thisWeek: 7, baseline: 30 });
@@ -186,12 +179,12 @@ describe('DriftAnalyzer', () => {
     });
 
     it('skips bins that fall below MIN_BIN_SAMPLES (null delta)', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       buf.record('propulsion.port.revolutions', 2, Date.now() - 1000, 'n2k');
 
       const firedAt = new Date('2026-05-10T08:00:00Z');
       const firedMs = firedAt.getTime();
-      const thisWeekFromIso = new Date(firedMs - 7 * 86_400_000).toISOString();
+      const thisWeekFromIso = new Date(firedMs - 7 * DAY_MS).toISOString();
 
       // Only 5 samples in low cruise: below MIN_BIN_SAMPLES (30).
       const week: BinRow[] = [
@@ -207,7 +200,7 @@ describe('DriftAnalyzer', () => {
 
       const a = new DriftAnalyzer(makeCfg());
       const ctx: TriggerCtx = { kind: 'cron', firedAt };
-      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+      const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
       expect(r).not.toBeNull();
       const input = r as DriftInput;
       const eng = input.engines[0];
@@ -219,14 +212,14 @@ describe('DriftAnalyzer', () => {
     });
 
     it('uses configured baselineDays to size the baseline window', async () => {
-      const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+      const buf = makeBuffer();
       buf.record('propulsion.port.revolutions', 4, Date.now() - 1000, 'n2k');
 
       const firedAt = new Date('2026-05-10T08:00:00Z');
       const firedMs = firedAt.getTime();
-      const thisWeekFromIso = new Date(firedMs - 7 * 86_400_000).toISOString();
+      const thisWeekFromIso = new Date(firedMs - 7 * DAY_MS).toISOString();
       // baselineDays=14 means the baseline runs from -21d to -7d.
-      const baselineFromIso = new Date(firedMs - (7 + 14) * 86_400_000).toISOString();
+      const baselineFromIso = new Date(firedMs - (7 + 14) * DAY_MS).toISOString();
 
       const rows: BinRow[] = [
         { bin: 'idle', n_fuel: 50, n_sog: 50, mean_fuel: 0.00005, mean_sog: 0 },
@@ -235,7 +228,7 @@ describe('DriftAnalyzer', () => {
 
       const a = new DriftAnalyzer(makeCfg({ baselineDays: 14 }));
       const ctx: TriggerCtx = { kind: 'cron', firedAt };
-      const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+      const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
       expect(r).not.toBeNull();
       expect((r as DriftInput).windowDays).toEqual({ thisWeek: 7, baseline: 14 });
       // One query references each window's lower bound exactly.

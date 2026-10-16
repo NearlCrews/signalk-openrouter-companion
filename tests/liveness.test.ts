@@ -9,15 +9,12 @@ import {
   makeAnalyzerDeps as makeDeps,
   makeMockApp,
   makeTmpDir,
+  makeTriggers,
 } from './_mocks.js';
 
 function makeCfg(overrides: Record<string, unknown> = {}) {
   return {
-    triggers: {
-      cron: { enabled: true, pattern: '0 8 * * *', timezone: '' },
-      put: { enabled: true },
-      events: [],
-    },
+    triggers: makeTriggers({ cron: { enabled: true, pattern: '0 8 * * *' } }),
     stalenessThresholdSec: 300,
     ...overrides,
   };

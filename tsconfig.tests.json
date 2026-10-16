@@ -5,5 +5,5 @@
     "rootDir": "."
   },
   "include": ["tests/**/*"],
-  "exclude": ["dist", "node_modules", "src/configpanel"]
+  "exclude": ["dist", "node_modules"]
 }

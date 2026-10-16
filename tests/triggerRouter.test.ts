@@ -32,7 +32,7 @@ describe('TriggerRouter', () => {
     const b = makeAnalyzer({ id: 'b', triggers: [{ kind: 'engine-start' }] });
     const { router } = makeRouter([a, b]);
     const ctx: TriggerCtx = { kind: 'engine-stop', firedAt: new Date() };
-    await router.dispatch('engine-stop', ctx);
+    await router.dispatch(ctx);
     expect(a.collectContext).toHaveBeenCalled();
     expect(b.collectContext).not.toHaveBeenCalled();
   });
@@ -45,7 +45,7 @@ describe('TriggerRouter', () => {
       collectContext: vi.fn(async () => null),
     });
     const { router } = makeRouter([a, b]);
-    const outcomes = await router.dispatch('engine-stop', {
+    const outcomes = await router.dispatch({
       kind: 'engine-stop',
       firedAt: new Date(),
     });
@@ -55,9 +55,7 @@ describe('TriggerRouter', () => {
   it('reports no outcomes when nothing listens on the trigger', async () => {
     const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-start' }] });
     const { router } = makeRouter([a]);
-    expect(
-      await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() }),
-    ).toEqual([]);
+    expect(await router.dispatch({ kind: 'engine-stop', firedAt: new Date() })).toEqual([]);
   });
 
   it('skips a second cron run of an analyzer that is already in flight', async () => {
@@ -166,7 +164,7 @@ describe('TriggerRouter', () => {
       collectContext: vi.fn(async () => null),
     });
     const { router, mocks } = makeRouter([a]);
-    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    await router.dispatch({ kind: 'engine-stop', firedAt: new Date() });
     expect(mocks.complete).not.toHaveBeenCalled();
     expect(mocks.publishReport).not.toHaveBeenCalled();
   });
@@ -175,7 +173,7 @@ describe('TriggerRouter', () => {
     const a = makeAnalyzer({ id: 'a', triggers: [{ kind: 'engine-stop' }] });
     const { router, mocks } = makeRouter([a]);
     mocks.canSpend.mockReturnValue(false);
-    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    await router.dispatch({ kind: 'engine-stop', firedAt: new Date() });
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
@@ -194,11 +192,12 @@ describe('TriggerRouter', () => {
     });
     const { router, mocks } = makeRouter([alerts]);
     mocks.canSpend.mockReturnValue(false);
-    await router.dispatch(
-      'battery-event',
-      { kind: 'battery-event', firedAt: new Date(), bankId: 'house' },
-      { batterySubkind: 'low-soc-enter' },
-    );
+    await router.dispatch({
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'low-soc-enter' },
+    });
     expect(mocks.recordCall).not.toHaveBeenCalled();
     expect(alerts.publishOutput).not.toHaveBeenCalled();
     expect(mocks.publishFailure).not.toHaveBeenCalled();
@@ -291,7 +290,7 @@ describe('TriggerRouter', () => {
     });
     const good = makeAnalyzer({ id: 'good', triggers: [{ kind: 'engine-stop' }] });
     const { router, mocks } = makeRouter([bad, good]);
-    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    await router.dispatch({ kind: 'engine-stop', firedAt: new Date() });
     expect(good.collectContext).toHaveBeenCalled();
     expect(mocks.publishFailure).toHaveBeenCalled();
   });
@@ -327,11 +326,7 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'put', path: 'plugins.x.run' }],
     });
     const { router } = makeRouter([a]);
-    await router.dispatch(
-      'put',
-      { kind: 'put', firedAt: new Date(), put: { value: 1 } },
-      { putPath: 'plugins.x.run' },
-    );
+    await router.dispatch({ kind: 'put', firedAt: new Date(), put: { path: 'plugins.x.run' } });
     expect(a.collectContext).toHaveBeenCalled();
   });
 
@@ -341,13 +336,13 @@ describe('TriggerRouter', () => {
     // First call: budget exhausted
     mocks.canSpend.mockReturnValueOnce(false);
     let router = new TriggerRouter([a], deps);
-    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    await router.dispatch({ kind: 'engine-stop', firedAt: new Date() });
     expect(mocks.setStatus).toHaveBeenCalledWith('Running: budget exhausted for today');
     // Second call: budget available
     mocks.setStatus.mockClear();
     mocks.canSpend.mockReturnValue(true);
     router = new TriggerRouter([a], deps);
-    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    await router.dispatch({ kind: 'engine-stop', firedAt: new Date() });
     expect(mocks.setStatus).toHaveBeenCalledWith('Running');
   });
 
@@ -373,7 +368,7 @@ describe('TriggerRouter', () => {
       ]);
       // maxPerDay is 1 and both analyzers run: exactly one LLM call may fire.
       expect(mocks.complete).toHaveBeenCalledTimes(1);
-      expect(budget.callsToday()).toBe(1);
+      expect(budget.snapshot().callsToday).toBe(1);
     } finally {
       await cleanupTmpDir(dir);
     }
@@ -385,11 +380,7 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'put', path: 'plugins.x.run' }],
     });
     const { router } = makeRouter([a]);
-    await router.dispatch(
-      'put',
-      { kind: 'put', firedAt: new Date(), put: { value: 1 } },
-      { putPath: 'other.path' },
-    );
+    await router.dispatch({ kind: 'put', firedAt: new Date(), put: { path: 'other.path' } });
     expect(a.collectContext).not.toHaveBeenCalled();
   });
 
@@ -397,7 +388,7 @@ describe('TriggerRouter', () => {
     const a = makeAnalyzer({ id: 'health', triggers: [] });
     const b = makeAnalyzer({ id: 'drift', triggers: [] });
     const { router, mocks } = makeRouter([a, b]);
-    await router.runById('health', { kind: 'put', firedAt: new Date(), put: { value: 'manual' } });
+    await router.runById('health', { kind: 'put', firedAt: new Date() });
     expect(a.collectContext).toHaveBeenCalledOnce();
     expect(mocks.recordCall).toHaveBeenCalledOnce();
     expect(a.publishOutput).toHaveBeenCalledOnce();
@@ -410,7 +401,6 @@ describe('TriggerRouter', () => {
     const outcome = await router.runById('nope' as AnalyzerId, {
       kind: 'put',
       firedAt: new Date(),
-      put: { value: 'manual' },
     });
     expect(outcome).toBe('unknown');
     expect(a.collectContext).not.toHaveBeenCalled();
@@ -436,7 +426,7 @@ describe('TriggerRouter', () => {
     const { router } = makeRouter([a]);
     // dispatch is for path-based (put) and event-based (battery-event)
     // routing; cron has no path to match on.
-    await router.dispatch('cron', { kind: 'cron', firedAt: new Date() });
+    await router.dispatch({ kind: 'cron', firedAt: new Date() });
     expect(a.collectContext).not.toHaveBeenCalled();
   });
 
@@ -446,16 +436,12 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
     });
     const { router } = makeRouter([a]);
-    await router.dispatch(
-      'battery-event',
-      {
-        kind: 'battery-event',
-        firedAt: new Date(),
-        bankId: 'house',
-        batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
-      },
-      { batterySubkind: 'low-soc-enter' },
-    );
+    await router.dispatch({
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
+    });
     expect(a.collectContext).toHaveBeenCalled();
   });
 
@@ -465,16 +451,12 @@ describe('TriggerRouter', () => {
       triggers: [{ kind: 'battery-event', subkind: 'low-soc-enter' }],
     });
     const { router } = makeRouter([a]);
-    await router.dispatch(
-      'battery-event',
-      {
-        kind: 'battery-event',
-        firedAt: new Date(),
-        bankId: 'house',
-        batteryEvent: { subkind: 'cell-imbalance-enter' },
-      },
-      { batterySubkind: 'cell-imbalance-enter' },
-    );
+    await router.dispatch({
+      kind: 'battery-event',
+      firedAt: new Date(),
+      bankId: 'house',
+      batteryEvent: { subkind: 'cell-imbalance-enter' },
+    });
     expect(a.collectContext).not.toHaveBeenCalled();
   });
 
@@ -487,7 +469,7 @@ describe('TriggerRouter', () => {
       buildPrompt: vi.fn(() => ({ system: 's', user: 'u' })),
     } as Analyzer;
     const { router, mocks } = makeRouter([a]);
-    await router.dispatch('engine-stop', { kind: 'engine-stop', firedAt: new Date() });
+    await router.dispatch({ kind: 'engine-stop', firedAt: new Date() });
     expect(mocks.publishReport).toHaveBeenCalledTimes(1);
     expect(mocks.publishReport.mock.calls[0]?.[0]).toBe('maintenance');
   });
@@ -615,16 +597,12 @@ describe('TriggerRouter', () => {
     });
     const router = new TriggerRouter([alerts], deps);
     const fire = (bankId: string, subkind: BatteryEventKind, ms: number) =>
-      router.dispatch(
-        'battery-event',
-        {
-          kind: 'battery-event',
-          firedAt: new Date(ms),
-          bankId,
-          batteryEvent: { subkind, soc: 0.2 },
-        },
-        { batterySubkind: subkind },
-      );
+      router.dispatch({
+        kind: 'battery-event',
+        firedAt: new Date(ms),
+        bankId,
+        batteryEvent: { subkind, soc: 0.2 },
+      });
 
     const houseEnter = fire('house', 'low-soc-enter', 1000);
     // A different bank is a different subject: it must not contend at all.

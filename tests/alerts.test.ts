@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { AlertAnalyzer } from '../src/analyzers/alerts.js';
-import type { RollingBuffer } from '../src/core/buffer.js';
 import { Logger } from '../src/core/logger.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
@@ -16,12 +15,12 @@ import {
   makeRouterDeps,
   makeRunMeta,
   makeTmpDir,
+  makeTriggers,
 } from './_mocks.js';
 
 function makeCfg(overrides: Partial<{ events: string[] }> = {}) {
   return {
-    triggers: {
-      cron: { enabled: false, pattern: '', timezone: '' },
+    triggers: makeTriggers({
       put: { enabled: false },
       events: overrides.events ?? [
         'low-soc-enter',
@@ -29,12 +28,8 @@ function makeCfg(overrides: Partial<{ events: string[] }> = {}) {
         'cell-imbalance-enter',
         'cell-imbalance-exit',
       ],
-    },
+    }),
   };
-}
-
-function makeDeps(app: MockApp, buffer: RollingBuffer, publisher: ReportPublisher) {
-  return makeAnalyzerDeps(app, buffer, { publisher });
 }
 
 describe('AlertAnalyzer', () => {
@@ -79,7 +74,7 @@ describe('AlertAnalyzer', () => {
       logPath: join(dir, 'reports.jsonl'),
     });
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date() };
-    expect(await a.collectContext(ctx, makeDeps(app, buf, publisher))).toBeNull();
+    expect(await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { publisher }))).toBeNull();
   });
 
   it('collectContext builds context for low-soc-enter', async () => {
@@ -99,7 +94,7 @@ describe('AlertAnalyzer', () => {
       bankId: 'house',
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     };
-    const r = await a.collectContext(ctx, makeDeps(app, buf, publisher));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { publisher }));
     expect(r).not.toBeNull();
     if (!r) throw new Error('Expected low state-of-charge context.');
     expect(r.subkind).toBe('low-soc-enter');
@@ -124,7 +119,7 @@ describe('AlertAnalyzer', () => {
     await a.publishOutput?.(
       'SoC is at 25%, check house bank.',
       ctx,
-      makeDeps(app, buf, publisher),
+      makeAnalyzerDeps(app, buf, { publisher }),
       makeRunMeta(),
     );
     expect(app.published).toHaveLength(1);
@@ -155,7 +150,12 @@ describe('AlertAnalyzer', () => {
     };
     const longText = `House bank SoC dropped to 25%. ${'Voltage trending down across all cells with no detectable charging source connected. '.repeat(10)}`;
     expect(longText.length).toBeGreaterThan(220);
-    await a.publishOutput?.(longText, ctx, makeDeps(app, buf, publisher), makeRunMeta());
+    await a.publishOutput?.(
+      longText,
+      ctx,
+      makeAnalyzerDeps(app, buf, { publisher }),
+      makeRunMeta(),
+    );
     const sent = firstNotificationValue(app.published[0]?.delta).message;
     // Cap is 64 chars; the previous 200 assertion was a no-op (the wire spec
     // ceiling, not the plugin's truncation budget).
@@ -179,7 +179,7 @@ describe('AlertAnalyzer', () => {
       batteryEvent: { subkind: 'low-soc-enter', soc: 0.25 },
     };
     const short = 'House bank SoC dropped to 25%, check charging source.';
-    await a.publishOutput?.(short, ctx, makeDeps(app, buf, publisher), makeRunMeta());
+    await a.publishOutput?.(short, ctx, makeAnalyzerDeps(app, buf, { publisher }), makeRunMeta());
     expect(firstNotificationValue(app.published[0]?.delta).message).toBe(short);
   });
 
@@ -200,7 +200,7 @@ describe('AlertAnalyzer', () => {
     await a.publishOutput?.(
       'SoC recovered to 40%.',
       ctx,
-      makeDeps(app, buf, publisher),
+      makeAnalyzerDeps(app, buf, { publisher }),
       makeRunMeta(),
     );
     const v = firstNotificationValue(app.published[0]?.delta);
@@ -228,7 +228,7 @@ describe('AlertAnalyzer', () => {
       bankId: 'starter',
       batteryEvent: { subkind: 'cell-imbalance-enter', imbalanceV: 0.12 },
     };
-    const input = await a.collectContext(ctx, makeDeps(app, buf, publisher));
+    const input = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { publisher }));
     if (input == null) throw new Error('expected a cell-imbalance input');
     expect(input.subkind).toBe('cell-imbalance-enter');
     expect(input.eventData.imbalanceV).toBe(0.12);
@@ -257,7 +257,7 @@ describe('AlertAnalyzer', () => {
     await a.publishOutput?.(
       'Starter cell imbalance 0.12 V.',
       ctx,
-      makeDeps(app, buf, publisher),
+      makeAnalyzerDeps(app, buf, { publisher }),
       makeRunMeta(),
     );
     expect(app.published).toHaveLength(1);
@@ -287,7 +287,7 @@ describe('AlertAnalyzer', () => {
     await a.publishOutput?.(
       'Starter cells balanced.',
       ctx,
-      makeDeps(app, buf, publisher),
+      makeAnalyzerDeps(app, buf, { publisher }),
       makeRunMeta(),
     );
     const v = firstNotificationValue(app.published[0]?.delta);
@@ -328,7 +328,7 @@ describe('AlertAnalyzer', () => {
     });
     const errorSpy = vi.fn();
     const deps = {
-      ...makeDeps(app, buf, publisher),
+      ...makeAnalyzerDeps(app, buf, { publisher }),
       logger: new Logger({ debug: vi.fn(), error: errorSpy }),
     };
     // A battery-event ctx with no batteryEvent leaves subkind undefined, so the

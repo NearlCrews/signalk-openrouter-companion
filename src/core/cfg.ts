@@ -1,4 +1,5 @@
 import { asFiniteNumber } from './format.js';
+import { stripTrailingSlashes } from './http.js';
 
 // Return v when it is a finite number at or above `min`, else the fallback.
 // Used to sanitize float configuration values (RPM thresholds, seconds) that,
@@ -21,16 +22,23 @@ export function finiteOr(v: unknown, fallback: number): number {
   return asFiniteNumber(v) ?? fallback;
 }
 
+// Return v when it is a string, else the fallback. For free-text settings a
+// hand-edited config may have set to another type.
+export function stringOr(v: unknown, fallback: string): string {
+  return typeof v === 'string' ? v : fallback;
+}
+
 // Sanitize a numeric configuration value. Falls back to `fallback` when the
 // input is not a finite number >= 1; otherwise it is truncated to an integer
 // and clamped into the caller-supplied min/max range.
 export function clampPositiveInt(
-  v: number,
+  v: unknown,
   fallback: number,
   opts: { min?: number; max?: number } = {},
 ): number {
-  if (!Number.isFinite(v) || v < 1) return fallback;
-  const n = Math.trunc(v);
+  const finite = asFiniteNumber(v);
+  if (finite == null || finite < 1) return fallback;
+  const n = Math.trunc(finite);
   const min = opts.min ?? 1;
   const max = opts.max ?? Number.POSITIVE_INFINITY;
   if (n < min) return min;
@@ -134,13 +142,22 @@ export function normalizeOpenRouterBaseUrl(raw: unknown, fallback: string): stri
     if (url.protocol !== 'https:' || url.search || url.hash) return fallback;
     url.username = '';
     url.password = '';
-    let normalized = url.href;
-    while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
-    return normalized;
+    return stripTrailingSlashes(url.href);
   } catch {
     return fallback;
   }
 }
+
+// The data-block header the scheduled report prompts open with, stamped with
+// the run's own time so the model reads the window it is describing.
+export function generatedLine(iso: string): string {
+  return `## Generated ${iso}`;
+}
+
+// The unit contract the battery prompts state, spelled once so the health and
+// alert prompts cannot describe the same telemetry in different units.
+export const BATTERY_SI_UNITS_INSTRUCTION =
+  'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.';
 
 // Shared opening line for every long-form report prompt. The first line of the
 // reply becomes the chartplotter notification (see headlineOf in publisher.ts),

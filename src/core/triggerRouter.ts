@@ -3,24 +3,11 @@ import type { AnalyzerId } from '../analyzers/ids.js';
 import { compositeKey } from './format.js';
 import type { HistoryProvider } from './history.js';
 import { stringify } from './logger.js';
-import type {
-  BatteryEventKind,
-  RunOutcome,
-  TriggerCtx,
-  TriggerKind,
-  TriggerSpec,
-} from './triggerContext.js';
+import type { RunOutcome, TriggerCtx, TriggerKind, TriggerSpec } from './triggerContext.js';
 
 // The run outcomes this router produces are part of the shared vocabulary in
 // triggerContext.ts, re-exported here because this is where they are decided.
 export type { RunOutcome } from './triggerContext.js';
-
-// cron triggers are dispatched directly via runById (a cron job names its
-// analyzer ids); only put and battery-event flow through dispatch + match.
-interface DispatchExtras {
-  putPath?: string;
-  batterySubkind?: BatteryEventKind;
-}
 
 // Trigger kinds whose producer fires again on its own: cron comes round on the
 // next tick and a PUT is the operator pressing the button, so one that lands
@@ -68,18 +55,15 @@ export class TriggerRouter {
     this.deps.setStatus?.(msg);
   }
 
-  // Returns one outcome per matched analyzer, in match order, so a caller that
-  // has to answer for the run (the PUT handler) can report what actually
-  // happened instead of blanket success. runOne resolves rather than rejects,
-  // so a rejected settlement here would be a bug in runOne itself.
-  async dispatch(
-    kind: TriggerKind,
-    ctx: TriggerCtx,
-    extras: DispatchExtras = {},
-  ): Promise<RunOutcome[]> {
-    const matches = this.analyzers.filter((a) =>
-      a.triggers.some((t) => triggerMatches(t, kind, extras)),
-    );
+  // Run every analyzer with a trigger matching this event: an engine stop, a
+  // battery event, or a PUT. Cron is not dispatched here; a cron job names its
+  // analyzers and fires them through runById. Returns one outcome per matched
+  // analyzer, in match order, so a caller that has to answer for the run (the
+  // PUT handler) can report what actually happened instead of blanket
+  // success. runOne resolves rather than rejects, so a rejected settlement here
+  // would be a bug in runOne itself.
+  async dispatch(ctx: TriggerCtx): Promise<RunOutcome[]> {
+    const matches = this.analyzers.filter((a) => a.triggers.some((t) => triggerMatches(t, ctx)));
     const settled = await Promise.allSettled(matches.map((a) => this.runOne(a, ctx)));
     return settled.map((result) => (result.status === 'fulfilled' ? result.value : 'failed'));
   }
@@ -176,14 +160,11 @@ export class TriggerRouter {
       });
       await this.deps.budget.recordUsage(result.usage);
       this.setStatus(this.deps.okStatus ?? 'Running');
-      const run = {
-        model: result.model,
-        usage: {
-          totalTokens: result.usage.totalTokens,
-          cachedTokens: result.usage.cachedTokens,
-          cost: result.usage.cost,
-        },
-      };
+      // Copied field by field to exactly the PublishRunMeta contract: the
+      // client's usage also carries prompt and completion counts, which no
+      // publisher or analyzer reads.
+      const { totalTokens, cachedTokens, cost } = result.usage;
+      const run = { model: result.model, usage: { totalTokens, cachedTokens, cost } };
       if (a.publishOutput) {
         await a.publishOutput(result.text, ctx, this.deps, run, input);
       } else {
@@ -230,13 +211,13 @@ export class TriggerRouter {
   }
 }
 
-function triggerMatches(t: TriggerSpec, kind: TriggerKind, extras: DispatchExtras): boolean {
-  if (t.kind !== kind) return false;
+function triggerMatches(t: TriggerSpec, ctx: TriggerCtx): boolean {
+  if (t.kind !== ctx.kind) return false;
   // Cron is dispatched via runById (production registers one cron job per
   // (pattern, timezone) and names its members directly); dispatch never
   // routes cron and a call here is a misuse.
   if (t.kind === 'cron') return false;
-  if (t.kind === 'put') return t.path === extras.putPath;
-  if (t.kind === 'battery-event') return t.subkind === extras.batterySubkind;
+  if (t.kind === 'put') return t.path === ctx.put?.path;
+  if (t.kind === 'battery-event') return t.subkind === ctx.batteryEvent?.subkind;
   return true;
 }

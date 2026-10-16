@@ -10,57 +10,25 @@ import { LIVENESS_DEFAULT_SYSTEM_PROMPT, LivenessAnalyzer } from './liveness.js'
 import { MAINTENANCE_DEFAULT_SYSTEM_PROMPT, MaintenanceAnalyzer } from './maintenance.js';
 
 // Per-id factory map. Each factory receives the analyzer's cfg sub-object
-// (DEFAULT_OPTIONS.analyzers[id] in types.ts) and returns the live Analyzer
-// instance. Keeping these here (rather than in ids.ts, which must stay free
-// of analyzer-class imports to break the circular dep) lets index.ts loop
-// `ANALYZER_IDS` once instead of a hand-rolled if-block per analyzer.
+// (DEFAULT_OPTIONS.analyzers[id] in types.ts, already normalized by
+// mergeWithDefaults) and returns the live Analyzer instance. Each section
+// satisfies its analyzer's config type as is, so a new setting reaches the
+// analyzer without an edit here. Keeping these here (rather than in ids.ts,
+// which must stay free of analyzer-class imports to break the circular dep)
+// lets index.ts loop `ANALYZER_IDS` once instead of a hand-rolled if-block per
+// analyzer.
 type AnalyzerFactories = {
   [K in AnalyzerId]: (cfg: PluginOptions['analyzers'][K]) => Analyzer;
 };
 
 export const ANALYZER_FACTORIES: AnalyzerFactories = {
-  maintenance: (c) =>
-    new MaintenanceAnalyzer({
-      triggers: c.triggers,
-      minSessionSeconds: c.minSessionSeconds,
-      extraWatchedPaths: c.extraWatchedPaths,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
-  health: (c) =>
-    new HealthAnalyzer({
-      triggers: c.triggers,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
-  aging: (c) =>
-    new AgingAnalyzer({
-      triggers: c.triggers,
-      shortWindowDays: c.shortWindowDays,
-      longWindowDays: c.longWindowDays,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
-  drift: (c) =>
-    new DriftAnalyzer({
-      triggers: c.triggers,
-      baselineDays: c.baselineDays,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
-  alerts: (c) =>
-    new AlertAnalyzer({
-      triggers: c.triggers,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
-  liveness: (c) =>
-    new LivenessAnalyzer({
-      triggers: c.triggers,
-      stalenessThresholdSec: c.stalenessThresholdSec,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
-  forecast: (c) =>
-    new ForecastAnalyzer({
-      triggers: c.triggers,
-      severityFloor: c.severityFloor,
-      customSystemPrompt: c.customSystemPrompt,
-    }),
+  maintenance: (c) => new MaintenanceAnalyzer(c),
+  health: (c) => new HealthAnalyzer(c),
+  aging: (c) => new AgingAnalyzer(c),
+  drift: (c) => new DriftAnalyzer(c),
+  alerts: (c) => new AlertAnalyzer(c),
+  liveness: (c) => new LivenessAnalyzer(c),
+  forecast: (c) => new ForecastAnalyzer(c),
 };
 
 // Per-id default system prompt. Co-located with the factory map so adding an

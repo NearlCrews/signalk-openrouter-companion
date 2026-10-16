@@ -1,21 +1,27 @@
 import {
   capPromptRows,
-  clampPositiveInt,
+  generatedLine,
   omittedPathsLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
   sanitizeProducerString,
 } from '../core/cfg.js';
+import { SECOND_MS } from '../core/format.js';
 import { buildTriggers } from '../core/triggers.js';
-import { type AnalyzerTriggerCfg, LIVENESS_DEFAULT_STALENESS_SEC } from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type {
+  AnalysisInput,
+  Analyzer,
+  AnalyzerBaseCfg,
+  AnalyzerDeps,
+  PromptPair,
+  TriggerCtx,
+  TriggerSpec,
+} from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
-export interface LivenessCfg {
-  triggers: AnalyzerTriggerCfg;
+export interface LivenessCfg extends AnalyzerBaseCfg {
   stalenessThresholdSec: number;
-  customSystemPrompt?: string;
 }
 
 export const LIVENESS_DEFAULT_SYSTEM_PROMPT = [
@@ -55,13 +61,7 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
 
   constructor(cfg: LivenessCfg) {
     this.triggers = buildTriggers(this.id, cfg.triggers);
-    // min mirrors the schema (stalenessThresholdSec minimum 30) so a value
-    // from a hand-edited JSON config is clamped at runtime too.
-    this.stalenessThresholdSec = clampPositiveInt(
-      cfg.stalenessThresholdSec,
-      LIVENESS_DEFAULT_STALENESS_SEC,
-      { min: 30 },
-    );
+    this.stalenessThresholdSec = cfg.stalenessThresholdSec;
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, LIVENESS_DEFAULT_SYSTEM_PROMPT);
   }
 
@@ -70,7 +70,7 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
     const paths: PathLiveness[] = [];
     for (const path of deps.buffer.pathKeys()) {
       const { newestTs, count, sources } = deps.buffer.scan(path, 0, firedMs);
-      const lastSeenAgeSec = newestTs == null ? null : (firedMs - newestTs) / 1000;
+      const lastSeenAgeSec = newestTs == null ? null : (firedMs - newestTs) / SECOND_MS;
       paths.push({
         path,
         lastSeenAgeSec,
@@ -81,7 +81,8 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
       });
     }
     if (paths.length === 0) return null;
-    paths.sort((a, b) => a.path.localeCompare(b.path));
+    // Code-unit order, as the maintenance prompt sorts its rows.
+    paths.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     return {
       generatedAt: new Date(firedMs).toISOString(),
       stalenessThresholdSec: this.stalenessThresholdSec,
@@ -89,9 +90,9 @@ export class LivenessAnalyzer implements Analyzer<LivenessInput> {
     };
   }
 
-  buildPrompt(input: LivenessInput): { system: string; user: string } {
+  buildPrompt(input: LivenessInput): PromptPair {
     const lines: string[] = [];
-    lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(generatedLine(input.generatedAt));
     lines.push(`## Staleness threshold: ${input.stalenessThresholdSec}s`);
     lines.push('');
     // Stale and multi-source paths are what this analyzer exists to name, so

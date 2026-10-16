@@ -32,8 +32,9 @@ export interface UseStatus {
 // already reads.
 export function useStatus(): UseStatus {
   const [status, setStatus] = useState<PanelStatus | null>(null);
+  // Non-null exactly while the latest poll failed, so it doubles as the
+  // failed-poll half of the staleness flag.
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [pollFailed, setPollFailed] = useState(false);
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
   // The age of the last good snapshot and whether it has passed the threshold
   // come from the shared hook rather than from a clock and a comparison of this
@@ -62,15 +63,12 @@ export function useStatus(): UseStatus {
         // Only a successful poll advances the freshness clock, so the staleness
         // marker measures time since the last good snapshot.
         setLastSuccessAt(Date.now());
-        setPollFailed(false);
         setStatus((prev) => (jsonEqual(prev, body) ? prev : body));
         setStatusError(null);
       } else if (r.status === 503) {
-        setPollFailed(true);
         setStatus(null);
         setStatusError('Plugin is not running. Set an API key and Save to start it.');
       } else {
-        setPollFailed(true);
         setStatusError(`Status fetch failed: ${errText(r)}`);
       }
     };
@@ -95,5 +93,5 @@ export function useStatus(): UseStatus {
     };
   }, []);
 
-  return { status, statusError, stale: pollFailed || freshness.stale, lastSuccessAt };
+  return { status, statusError, stale: statusError !== null || freshness.stale, lastSuccessAt };
 }

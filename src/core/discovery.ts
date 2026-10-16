@@ -1,3 +1,5 @@
+import { BATTERIES_PARENT_PATH, PROPULSION_PREFIX } from './paths.js';
+
 // Match an engine id (group 1) off revolutions or any of the aux fields. Some
 // gateways publish coolantTemperature, runTime, or oilPressure but not
 // revolutions (e.g. an older NMEA-2000 engine that only emits PGN 127489 /
@@ -33,8 +35,8 @@ export function discoverBankIds(paths: Iterable<string>): string[] {
 }
 
 export const WATCH_PREFIXES: ReadonlyArray<string> = [
-  'propulsion.',
-  'electrical.batteries.',
+  PROPULSION_PREFIX,
+  `${BATTERIES_PARENT_PATH}.`,
   'electrical.alternators.',
   'electrical.chargers.',
   // Buffering tanks.fuel.* lets the maintenance prompt cross-check fuel rate

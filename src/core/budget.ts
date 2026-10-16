@@ -1,4 +1,5 @@
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { AtomicFileWriter } from './atomicFile.js';
 
 interface BudgetOptions {
   maxPerDay: number;
@@ -32,27 +33,27 @@ function nonNegFinite(n: number): number {
 type ResolvedBudgetOptions = BudgetOptions & { now: () => Date };
 
 export class BudgetTracker {
-  // Serializes the state writes. One cron job fans out to several analyzers, so
-  // one run's recordUsage can overlap another's recordCall. Two independent
-  // truncating writes to the same path can leave the longer payload's tail
-  // behind the shorter one, and the unparseable file that results silently
-  // resets the daily spend cap on the next load.
-  private writeChain: Promise<void> = Promise.resolve();
+  // Serialized, atomic state writes. One cron job fans out to several
+  // analyzers, so one run's recordUsage can overlap another's recordCall, and
+  // two independent truncating writes to the same path can leave an
+  // unparseable file that silently resets the daily spend cap on the next load.
+  private readonly writer: AtomicFileWriter;
 
   private constructor(
     private opts: ResolvedBudgetOptions,
     private state: PersistedState,
-  ) {}
+  ) {
+    this.writer = new AtomicFileWriter(opts.statePath, (err) =>
+      opts.log?.(`budget state write failed: ${String(err)}`),
+    );
+  }
 
   static async load(opts: BudgetOptions): Promise<BudgetTracker> {
     const now = opts.now ?? (() => new Date());
     let state: PersistedState;
     try {
       const raw = await readFile(opts.statePath, 'utf-8');
-      const parsed = JSON.parse(raw) as Partial<PersistedState> & {
-        day?: string;
-        callsToday?: number;
-      };
+      const parsed = JSON.parse(raw) as Partial<PersistedState>;
       // callsToday gates the spend cap, so reject a NaN, fractional, or
       // negative count rather than letting it through to the comparison. The
       // tokensToday/costToday totals are display-only, so they take the gentler
@@ -87,14 +88,17 @@ export class BudgetTracker {
     }
   }
 
+  // Today's counters, read together after one day check: the only read path,
+  // so a change to rollover or counting has one place to land.
+  snapshot(): Omit<PersistedState, 'day'> {
+    this.rolloverIfNeeded();
+    const { callsToday, tokensToday, costToday } = this.state;
+    return { callsToday, tokensToday, costToday };
+  }
+
   canSpend(): boolean {
     this.rolloverIfNeeded();
     return this.state.callsToday < this.opts.maxPerDay;
-  }
-
-  callsToday(): number {
-    this.rolloverIfNeeded();
-    return this.state.callsToday;
   }
 
   // The `callsToday` increment must stay synchronous and run before the
@@ -112,28 +116,14 @@ export class BudgetTracker {
     await this.persist();
   }
 
-  // Write the current state through the serializing chain, and write it
-  // atomically: a temporary file plus a rename, so a concurrent reader or a
-  // power loss mid-write can only ever see a complete file.
-  //
   // Best-effort by contract. The in-memory counters are already updated, so a
   // failed write only loses them across a server restart. It must not reject:
   // recordCall runs inside the analyzer's try block, and a rejection there
   // would surface as a spurious analyzer-failure report before the LLM call
   // has even been attempted. A persistently failing write quietly weakens the
-  // cap, so log it.
+  // cap, so the writer logs it.
   private persist(): Promise<void> {
-    const snapshot = JSON.stringify(this.state);
-    const tempPath = `${this.opts.statePath}.tmp`;
-    this.writeChain = this.writeChain.then(async () => {
-      try {
-        await writeFile(tempPath, snapshot);
-        await rename(tempPath, this.opts.statePath);
-      } catch (err) {
-        this.opts.log?.(`budget state write failed: ${String(err)}`);
-      }
-    });
-    return this.writeChain;
+    return this.writer.write(JSON.stringify(this.state));
   }
 
   // Daily token/cost accounting. Unlike recordCall (which runs before the LLM
@@ -151,15 +141,5 @@ export class BudgetTracker {
       costToday: this.state.costToday + nonNegFinite(usage.cost),
     };
     await this.persist();
-  }
-
-  tokensToday(): number {
-    this.rolloverIfNeeded();
-    return this.state.tokensToday;
-  }
-
-  costToday(): number {
-    this.rolloverIfNeeded();
-    return this.state.costToday;
   }
 }

@@ -1,12 +1,9 @@
-interface LoggerHost {
-  debug(...args: unknown[]): void;
-  error(msg: string): void;
-}
+import type { PluginApp } from './app.js';
+
+type LoggerHost = Pick<PluginApp, 'debug' | 'error'>;
 
 export function stringify(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  return String(err);
+  return err instanceof Error ? err.message : String(err);
 }
 
 export class Logger {

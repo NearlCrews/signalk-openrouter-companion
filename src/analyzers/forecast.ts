@@ -1,7 +1,6 @@
 import type { BufferEntry } from '../core/buffer.js';
-import { resolveSystemPrompt } from '../core/cfg.js';
+import { generatedLine, resolveSystemPrompt } from '../core/cfg.js';
 import { asFiniteNumber, fmtNumber, fmtSigned, HOUR_MS } from '../core/format.js';
-import type { HistoryProvider } from '../core/history.js';
 import {
   AIR_TEMPERATURE_PATH,
   DEW_POINT_PATH,
@@ -12,18 +11,14 @@ import {
   WIND_DIRECTION_PATH,
 } from '../core/paths.js';
 import { buildTriggers } from '../core/triggers.js';
-import { isSeverityFloor, SEVERITY_GRADES, type SeverityGrade } from '../severityFloors.js';
-import {
-  type AnalyzerTriggerCfg,
-  FORECAST_DEFAULT_SEVERITY_FLOOR,
-  type NotificationState,
-  type SeverityFloor,
-  severityRank,
-} from '../types.js';
+import { SEVERITY_GRADES, type SeverityFloor, type SeverityGrade } from '../severityFloors.js';
+import { type NotificationState, severityRank } from '../types.js';
 import type {
   AnalysisInput,
   Analyzer,
+  AnalyzerBaseCfg,
   AnalyzerDeps,
+  PromptPair,
   PublishRunMeta,
   TriggerCtx,
   TriggerSpec,
@@ -45,12 +40,6 @@ const BASELINE_TO_HOURS = 24;
 // Barometric tendency is reported over the classic 3-hour interval.
 const TENDENCY_HOURS = 3;
 const PA_PER_HPA = 100;
-
-// Wind direction is a circular quantity (radians true): its hourly buckets
-// need a circular mean, not an arithmetic one that breaks across the 0/2pi
-// wrap. The path string is single-sourced as WIND_DIRECTION_PATH in paths.ts,
-// imported above, so the bucketMeans circular gate below cannot drift from the
-// canonical path list.
 
 // Maps an LLM grade to the Signal K notification state used when the grade
 // meets or exceeds the configured floor. Below the floor the state is forced
@@ -95,9 +84,9 @@ interface WeatherPathMeta {
 // WEATHER_EXTENSION_PATHS (see familyForPath) so it cannot drift from the
 // canonical/extension split single-sourced in paths.ts.
 const WEATHER_PATH_META: Record<string, WeatherPathMeta> = {
-  'environment.outside.pressure': { label: 'barometric pressure', unit: 'Pa' },
-  'environment.outside.temperature': { label: 'air temperature', unit: 'K' },
-  'environment.outside.dewPointTemperature': { label: 'dew point', unit: 'K' },
+  [WEATHER_PRESSURE_PATH]: { label: 'barometric pressure', unit: 'Pa' },
+  [AIR_TEMPERATURE_PATH]: { label: 'air temperature', unit: 'K' },
+  [DEW_POINT_PATH]: { label: 'dew point', unit: 'K' },
   'environment.outside.relativeHumidity': { label: 'relative humidity', unit: 'ratio 0-1' },
   'environment.wind.speedOverGround': { label: 'wind speed', unit: 'm/s' },
   [WIND_DIRECTION_PATH]: { label: 'wind direction (true)', unit: 'rad' },
@@ -134,10 +123,8 @@ const BASELINE_PATHS: ReadonlyArray<string> = ALL_WEATHER_PATHS.filter(
   (path) => path !== WIND_DIRECTION_PATH,
 );
 
-export interface ForecastCfg {
-  triggers: AnalyzerTriggerCfg;
+export interface ForecastCfg extends AnalyzerBaseCfg {
   severityFloor: SeverityFloor;
-  customSystemPrompt?: string;
 }
 
 // Static: window lengths and the severity scale are described here so a
@@ -194,7 +181,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
 
   constructor(cfg: ForecastCfg) {
     this.triggers = buildTriggers(this.id, cfg.triggers);
-    this.severityFloor = normalizeFloor(cfg.severityFloor);
+    this.severityFloor = cfg.severityFloor;
     this.systemPrompt = resolveSystemPrompt(cfg.customSystemPrompt, FORECAST_DEFAULT_SYSTEM_PROMPT);
   }
 
@@ -212,7 +199,12 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     let baseline = new Map<string, number>();
     if (history) {
       try {
-        baseline = await queryBaseline(history, firedMs, deps.signal);
+        baseline = await history.meanPaths(
+          BASELINE_PATHS,
+          firedMs - BASELINE_FROM_HOURS * HOUR_MS,
+          firedMs - BASELINE_TO_HOURS * HOUR_MS,
+          deps.signal,
+        );
       } catch (err) {
         deps.logger.debug(`forecast: history baseline query failed: ${String(err)}`);
       }
@@ -241,7 +233,7 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
     const historyMs = oldestTs == null ? 0 : firedMs - oldestTs;
     if (historyMs < COLD_START_MIN_HISTORY_MS && !hasHistoryBaseline) return null;
 
-    const trends: PathTrend[] = pathsToReport.map((path) => {
+    const trends: PathTrend[] = pathsToReport.map((path): PathTrend => {
       const meta = WEATHER_PATH_META[path];
       const entries = windowEntries.get(path) ?? [];
       const latest = latestEntry(entries);
@@ -260,15 +252,15 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
       generatedAt: new Date(firedMs).toISOString(),
       trendWindowHours: TREND_WINDOW_HOURS,
       tendencyHours: TENDENCY_HOURS,
-      pressureTendencyHpa: pressureTendency(trends),
+      pressureTendencyHpa: pressureTendency(trends.find((t) => t.path === WEATHER_PRESSURE_PATH)),
       hasHistoryBaseline,
       trends,
     };
   }
 
-  buildPrompt(input: ForecastInput): { system: string; user: string } {
+  buildPrompt(input: ForecastInput): PromptPair {
     const lines: string[] = [];
-    lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(generatedLine(input.generatedAt));
     lines.push(
       `Trend window: last ${input.trendWindowHours}h of observations, shown as hourly means oldest to newest.`,
     );
@@ -336,13 +328,6 @@ export class ForecastAnalyzer implements Analyzer<ForecastInput> {
   }
 }
 
-// The one place a trend row is looked up by path, so a change to how a row is
-// keyed is a change to this line. The corroboration indicators read three
-// paths out of the same list and build an index instead.
-function trendFor(trends: ReadonlyArray<PathTrend>, path: string): PathTrend | undefined {
-  return trends.find((t) => t.path === path);
-}
-
 // Cap a state at the ceiling an uncorroborated grade may publish at.
 function capUncorroborated(state: NotificationState): NotificationState {
   return severityRank(state) > UNCORROBORATED_CEILING_RANK ? UNCORROBORATED_CEILING : state;
@@ -386,10 +371,6 @@ function dewPointSpreadK(byPath: ReadonlyMap<string, PathTrend>): number | null 
   const dew = byPath.get(DEW_POINT_PATH)?.current;
   if (air == null || dew == null) return null;
   return air - dew;
-}
-
-function normalizeFloor(v: unknown): SeverityFloor {
-  return isSeverityFloor(v) ? v : FORECAST_DEFAULT_SEVERITY_FLOOR;
 }
 
 // Slice the buffer entries into TREND_WINDOW_HOURS hourly-mean buckets, oldest
@@ -448,8 +429,7 @@ function latestEntry(entries: ReadonlyArray<BufferEntry>): BufferEntry | null {
 // Pre-compute the 3-hour barometric tendency in hPa from the pressure path's
 // hourly buckets: the most recent bucket minus the bucket TENDENCY_HOURS
 // earlier. null when either bucket is empty.
-function pressureTendency(trends: ReadonlyArray<PathTrend>): number | null {
-  const pressure = trendFor(trends, WEATHER_PRESSURE_PATH);
+function pressureTendency(pressure: PathTrend | undefined): number | null {
   if (!pressure) return null;
   const { buckets } = pressure;
   let latestIdx = -1;
@@ -489,21 +469,6 @@ function appendTrendLines(lines: string[], trends: ReadonlyArray<PathTrend>): vo
     if (t.baselineMean != null) parts.push(`baseline=${fmtNumber(t.baselineMean)}`);
     lines.push(`- ${t.label} (${t.path}) [${t.unit}]: ${parts.join('; ')}`);
   }
-}
-
-// One provider query that returns the per-path mean over the 24-72h baseline
-// window. Throws on a query fault; the caller logs it and runs buffer-only.
-async function queryBaseline(
-  history: HistoryProvider,
-  firedMs: number,
-  abortSignal?: AbortSignal,
-): Promise<Map<string, number>> {
-  return history.meanPaths(
-    BASELINE_PATHS,
-    firedMs - BASELINE_FROM_HOURS * HOUR_MS,
-    firedMs - BASELINE_TO_HOURS * HOUR_MS,
-    abortSignal,
-  );
 }
 
 interface ParsedForecast {

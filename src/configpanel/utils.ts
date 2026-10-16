@@ -1,3 +1,4 @@
+import { baseUrlProblem, type HistorySource } from '../historyConfig.js';
 import type { PanelConfig } from './types.js';
 
 // Structural equality used to detect a dirty edit buffer and to skip
@@ -58,6 +59,20 @@ export function isPromptOverride(value: string, promptDefault: string | undefine
 // must not drift.
 export const MODELS_ERROR = 'Could not load the model list. Type a model slug manually, or retry.';
 
+// What the panel calls each history provider: the provider dropdown and the
+// status tile both name them, so the two cannot spell a provider differently.
+export const HISTORY_SOURCE_LABELS: Record<HistorySource, string> = {
+  none: 'Disabled',
+  questdb: 'QuestDB',
+  influxdb: 'InfluxDB',
+};
+
+// A US dollar amount the way the panel shows OpenRouter spend: four decimals,
+// because a single call usually costs a fraction of a cent.
+export function formatUsd(amount: number): string {
+  return `$${amount.toFixed(4)}`;
+}
+
 // The base-URL rule, written once. Both the history field error and the
 // save-blocked notice quote it, so a wording change cannot leave the two
 // describing different rules.
@@ -65,7 +80,7 @@ export const HISTORY_URL_RULE =
   'HTTP or HTTPS base URL without credentials, a query, or a fragment';
 
 export interface HistoryValidity {
-  source: NonNullable<PanelConfig['history']>['source'];
+  source: HistorySource;
   noUrl: boolean;
   invalidUrl: boolean;
   missingDatabase: boolean;
@@ -102,22 +117,9 @@ export function urlError(
   return validity.invalidUrl ? `Enter an ${HISTORY_URL_RULE}.` : undefined;
 }
 
-// History providers only support HTTP and HTTPS base URLs. Credentials, query
-// strings, and fragments cannot be part of the base because each client owns
-// authentication and its API query.
+// Whether a value is a usable history-provider base URL, by the rule the
+// plugin's probe routes apply (see historyConfig.ts).
 export function isHttpUrl(value: string | undefined): boolean {
   const trimmed = value?.trim();
-  if (!trimmed) return false;
-  try {
-    const url = new URL(trimmed);
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      url.username === '' &&
-      url.password === '' &&
-      url.search === '' &&
-      url.hash === ''
-    );
-  } catch {
-    return false;
-  }
+  return Boolean(trimmed) && baseUrlProblem(trimmed ?? '') === null;
 }

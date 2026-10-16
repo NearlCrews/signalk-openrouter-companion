@@ -1,11 +1,48 @@
 import { describe, expect, it } from 'vitest';
 import {
   asTreeMap,
+  deltaTimestampMs,
   isBankNode,
+  readBankNodes,
   readBankSnapshot,
   readNumberAt,
   readValueAt,
 } from '../src/core/skNode.js';
+import { makeMockApp } from './_mocks.js';
+
+describe('deltaTimestampMs', () => {
+  const wall = Date.parse('2026-10-16T12:00:00Z');
+
+  it('keeps a stamp within an hour of wall-clock either way', () => {
+    expect(deltaTimestampMs('2026-10-16T11:30:00Z', wall)).toBe(wall - 30 * 60_000);
+    expect(deltaTimestampMs('2026-10-16T12:59:00Z', wall)).toBe(wall + 59 * 60_000);
+  });
+
+  it('falls back to wall-clock for a missing, malformed, or far-off stamp', () => {
+    expect(deltaTimestampMs(undefined, wall)).toBe(wall);
+    expect(deltaTimestampMs('not a time', wall)).toBe(wall);
+    expect(deltaTimestampMs('2026-10-16T14:00:01Z', wall)).toBe(wall);
+    expect(deltaTimestampMs('1970-01-01T00:00:00Z', wall)).toBe(wall);
+  });
+});
+
+describe('readBankNodes', () => {
+  it('returns only real bank subtrees under electrical.batteries', () => {
+    const tree = {
+      house: { voltage: { value: 13.2 } },
+      meta: { units: 'V' },
+      value: 1,
+    };
+    // No data directory: reading the self tree never touches disk.
+    const app = makeMockApp('');
+    app.setSelfPath('electrical.batteries', tree);
+    expect(readBankNodes(app)).toEqual([['house', tree.house]]);
+  });
+
+  it('returns nothing when the container is absent', () => {
+    expect(readBankNodes(makeMockApp(''))).toEqual([]);
+  });
+});
 
 const node = {
   voltage: { value: 12.6 },

@@ -1,3 +1,27 @@
+import { Cron } from 'croner';
+import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
+import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY_CEILING } from './callBudget.js';
+import {
+  clampMin,
+  clampPositiveInt,
+  clampRange,
+  finiteOr,
+  normalizeOpenRouterBaseUrl,
+  stringOr,
+} from './core/cfg.js';
+import { BATTERY_EVENT_KINDS } from './core/triggerContext.js';
+import {
+  type HistorySource,
+  isHistorySource,
+  type LegacyQuestDbCfg,
+  legacyHistorySource,
+} from './historyConfig.js';
+import {
+  DEFAULT_SEVERITY_FLOOR_VALUE,
+  isSeverityFloor,
+  type SeverityFloor,
+} from './severityFloors.js';
+
 export interface AnalyzerTriggerCfg {
   cron: { enabled: boolean; pattern: string; timezone: string };
   // The PUT path is a fixed convention: `plugins.openrouter-companion.<id>.run`.
@@ -13,59 +37,63 @@ export const MAINTENANCE_SUPPORTED_EVENTS = ['engine-stop'] as const;
 export type MaintenanceEventKind = (typeof MAINTENANCE_SUPPORTED_EVENTS)[number];
 
 // Shared empty-events sentinel for analyzers that have no event subscriptions.
-// One reference is bundled into dist; the prior five named copies all collapsed
-// to a single allocation here.
-export const NO_EVENTS = [] as const;
+const NO_EVENTS = [] as const;
 
-export const ALERTS_SUPPORTED_EVENTS = [
-  'low-soc-enter',
-  'low-soc-exit',
-  'cell-imbalance-enter',
-  'cell-imbalance-exit',
-] as const;
+// The alerts analyzer answers every crossing the battery monitor raises.
+export const ALERTS_SUPPORTED_EVENTS = BATTERY_EVENT_KINDS;
 
-// Trend-analyzer history-window defaults. Source-of-truth for the schema's
-// admin-UI defaults AND the analyzer constructors' clamp fallbacks; keeping
-// them in one place guarantees the two layers can't drift.
-export const AGING_DEFAULT_SHORT_DAYS = 30;
-export const AGING_DEFAULT_LONG_DAYS = 90;
-export const DRIFT_DEFAULT_BASELINE_DAYS = 30;
+// The event subkinds each analyzer can subscribe to: the schema's checkbox
+// list and its labels both read this, so a new analyzer states them once.
+export const ANALYZER_SUPPORTED_EVENTS: Record<AnalyzerId, ReadonlyArray<string>> = {
+  maintenance: MAINTENANCE_SUPPORTED_EVENTS,
+  health: NO_EVENTS,
+  aging: NO_EVENTS,
+  drift: NO_EVENTS,
+  alerts: ALERTS_SUPPORTED_EVENTS,
+  liveness: NO_EVENTS,
+  forecast: NO_EVENTS,
+};
 
-// Ceiling on the daily OpenRouter call cap. The cap is the plugin's only hard
-// spend bound, so it needs a top as well as a floor: a hand-edited config with
+// The bounds on every bounded analyzer setting, stated once. The schema
+// advertises them as each field's minimum and maximum, and validateOptions
+// holds a saved value inside them, so the form and the runtime cannot disagree
+// about what a setting may be. A whole-number window or threshold
+// (clampPositiveInt) snaps to the nearest bound; a fractional threshold or a
+// settle time (clampMin, clampRange) falls back to its default. Analyzers then
+// trust the normalized config.
+export const ANALYZER_BOUNDS = {
+  maintenance: {
+    engineStopSettleSeconds: { min: 1 },
+    engineSilenceStopSeconds: { min: 1 },
+    engineStartSettleSeconds: { min: 1 },
+    minSessionSeconds: { min: 0 },
+  },
+  aging: {
+    shortWindowDays: { min: 7, max: 365 },
+    longWindowDays: { min: 7, max: 1095 },
+  },
+  drift: {
+    baselineDays: { min: 14, max: 365 },
+  },
+  alerts: {
+    lowSocPercent: { min: 0, max: 100 },
+    // Strict-positive minimums on the hysteresis and threshold fields: a 0
+    // value collapses enter and exit into the same boundary, so any sensor
+    // noise spams enter/exit pairs (each pair spends an LLM call).
+    socExitHysteresis: { min: 1 },
+    cellImbalanceV: { min: 0.001 },
+    imbalanceSettleSec: { min: 1 },
+  },
+  liveness: {
+    stalenessThresholdSec: { min: 30 },
+  },
+} as const;
 
 // Number of whitespace-separated fields in a standard cron pattern. Croner also
 // accepts a 6-field form with a leading seconds column, so an unvalidated
 // '* * * * * *' from a hand-edited config would fire every second and empty the
 // daily call cap in under a minute.
 const CRON_FIELD_COUNT = 5;
-
-// Liveness-analyzer default: a watched path with no sample newer than this
-// many seconds is reported stale. Source-of-truth for the schema default and
-// the analyzer constructor's clamp fallback.
-export const LIVENESS_DEFAULT_STALENESS_SEC = 300;
-
-import { Cron } from 'croner';
-// Forecast-analyzer severity floor: the lowest LLM-graded outlook severity
-// that raises an alarm on the forecast notification. Below the floor the
-// outlook still publishes, with state 'nominal', so it stays readable in the
-// data browser. The preset list lives in `src/severityFloors.ts` (shared
-// with the panel); these aliases are kept for backward-compat with the
-// analyzer constructor and the existing config shape.
-import { ANALYZER_IDS, type AnalyzerId } from './analyzers/ids.js';
-import { DEFAULT_MAX_CALLS_PER_DAY, MAX_CALLS_PER_DAY_CEILING } from './callBudget.js';
-import {
-  clampMin,
-  clampPositiveInt,
-  clampRange,
-  finiteOr,
-  normalizeOpenRouterBaseUrl,
-} from './core/cfg.js';
-import { DEFAULT_SEVERITY_FLOOR_VALUE, type SeverityFloorPresetValue } from './severityFloors.js';
-
-export type SeverityFloor = SeverityFloorPresetValue;
-
-export const FORECAST_DEFAULT_SEVERITY_FLOOR: SeverityFloor = DEFAULT_SEVERITY_FLOOR_VALUE;
 
 // Signal K notification states (the full ALARM_STATE enum). The publisher's
 // typed `state` argument and per-analyzer publish overrides both resolve to
@@ -85,9 +113,8 @@ export function severityRank(state: NotificationState): number {
 
 // OpenRouter provider-routing controls, mirrored 1:1 onto the request body's
 // `provider` object (see core/openrouter.ts::buildProvider). Shared by the
-// plugin config and the OpenRouter client so the two cannot drift; the panel
-// keeps its own structural copy to stay decoupled from backend runtime types,
-// and src/schema.ts is the JSON storage shape.
+// plugin config, the OpenRouter client, and (as a type-only import) the panel,
+// so none of them can drift; src/schema.ts is the JSON storage shape.
 export interface ProviderRoutingCfg {
   sort?: 'price' | 'throughput' | 'latency';
   maxPrice?: { prompt?: number; completion?: number; request?: number };
@@ -95,8 +122,6 @@ export interface ProviderRoutingCfg {
   dataCollection?: 'allow' | 'deny';
   zdr?: boolean;
 }
-
-type HistorySource = 'none' | 'questdb' | 'influxdb';
 
 interface HistoryCfg {
   source: HistorySource;
@@ -242,8 +267,8 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true },
         events: [...NO_EVENTS],
       },
-      shortWindowDays: AGING_DEFAULT_SHORT_DAYS,
-      longWindowDays: AGING_DEFAULT_LONG_DAYS,
+      shortWindowDays: 30,
+      longWindowDays: 90,
     },
     drift: {
       enabled: true,
@@ -252,7 +277,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true },
         events: [...NO_EVENTS],
       },
-      baselineDays: DRIFT_DEFAULT_BASELINE_DAYS,
+      baselineDays: 30,
     },
     alerts: {
       enabled: true,
@@ -277,7 +302,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true },
         events: [...NO_EVENTS],
       },
-      stalenessThresholdSec: LIVENESS_DEFAULT_STALENESS_SEC,
+      stalenessThresholdSec: 300,
     },
     forecast: {
       enabled: false,
@@ -288,7 +313,7 @@ export const DEFAULT_OPTIONS: PluginOptions = {
         put: { enabled: true },
         events: [...NO_EVENTS],
       },
-      severityFloor: FORECAST_DEFAULT_SEVERITY_FLOOR,
+      severityFloor: DEFAULT_SEVERITY_FLOOR_VALUE,
     },
   },
   output: {
@@ -323,11 +348,11 @@ function mergeAnalyzerCfg<T extends { triggers: AnalyzerTriggerCfg }>(
   defaults: T,
   input: WithPartialTriggers<T> | undefined,
 ): T {
-  if (!input) return clone(defaults);
+  if (!input) return structuredClone(defaults);
   // Clone the defaults base so the merged result never aliases a
   // DEFAULT_OPTIONS array (events, extraWatchedPaths). A shared reference
   // would let one analyzer's config mutate the shipped defaults.
-  const base = clone(defaults);
+  const base = structuredClone(defaults);
   const inputTriggers = input.triggers ?? {};
   return {
     ...base,
@@ -347,7 +372,7 @@ type PluginOptionsInput = Omit<Partial<PluginOptions>, 'history'> & {
   };
   // Pre-history-provider releases stored this top-level block. Keep reading it
   // so existing installations migrate without re-entering their QuestDB URL.
-  questdb?: { enabled?: boolean; url?: string };
+  questdb?: LegacyQuestDbCfg;
 };
 
 export function mergeWithDefaults(input: PluginOptionsInput | undefined): PluginOptions {
@@ -356,17 +381,13 @@ export function mergeWithDefaults(input: PluginOptionsInput | undefined): Plugin
   // now; the uniform contract ('all returned cfgs are validated') protects
   // a future maintainer who changes a default into a sentinel that would
   // otherwise bypass the clamp.
-  if (!input) return validateOptions(clone(DEFAULT_OPTIONS));
+  if (!input) return validateOptions(structuredClone(DEFAULT_OPTIONS));
   const inputAnalyzers = input.analyzers as AnalyzerInputOverlay | undefined;
   const legacyQuestDB = input.questdb;
   const historyInput = input.history;
   const historySource =
     historyInput?.source ??
-    (legacyQuestDB
-      ? legacyQuestDB.enabled === false
-        ? 'none'
-        : 'questdb'
-      : DEFAULT_OPTIONS.history.source);
+    (legacyQuestDB ? legacyHistorySource(legacyQuestDB) : DEFAULT_OPTIONS.history.source);
   // Merge every analyzer section by iterating ANALYZER_IDS, the single source
   // of truth. A new analyzer added to ids.ts and registry.ts is then merged
   // from saved config automatically, rather than being silently dropped by a
@@ -404,15 +425,18 @@ export function mergeWithDefaults(input: PluginOptionsInput | undefined): Plugin
   return validateOptions(merged);
 }
 
-// Clamp obviously-broken numeric values back to defaults so a hand-edited
-// JSON cfg (or a UI field cleared to '') cannot silently disable analyzers.
-// The most consequential lockout: maxCallsPerDay = 0 leaves canSpend()
-// returning false forever and pegs the status banner at "budget exhausted".
+// Clamp obviously-broken values back to defaults so a hand-edited JSON cfg (or
+// a UI field cleared to '') cannot silently disable analyzers. The most
+// consequential lockout: maxCallsPerDay = 0 leaves canSpend() returning false
+// forever and pegs the status banner at "budget exhausted". Every bounded
+// setting is normalized here, once, so the analyzers and the lifecycle read a
+// config they can trust rather than each re-clamping their own slice.
 function validateOptions(cfg: PluginOptions): PluginOptions {
   const d = DEFAULT_OPTIONS;
+  const da = d.analyzers;
+  const b = ANALYZER_BOUNDS;
   const or = cfg.openrouter;
-  const m = cfg.analyzers.maintenance;
-  const a = cfg.analyzers.alerts;
+  const { maintenance: m, aging, drift, alerts: a, liveness, forecast } = cfg.analyzers;
   const history = cfg.history;
   const influxdb = history.influxdb;
   cfg.openrouter = {
@@ -434,65 +458,109 @@ function validateOptions(cfg: PluginOptions): PluginOptions {
   for (const id of ANALYZER_IDS) {
     const cron = cfg.analyzers[id].triggers.cron;
     if (cron.pattern && !isRunnableCron(cron.pattern)) {
-      cron.pattern = d.analyzers[id].triggers.cron.pattern;
+      cron.pattern = da[id].triggers.cron.pattern;
     }
   }
   cfg.history = {
-    source:
-      history.source === 'none' || history.source === 'questdb' || history.source === 'influxdb'
-        ? history.source
-        : d.history.source,
+    source: isHistorySource(history.source) ? history.source : d.history.source,
     questdb: {
-      url: typeof history.questdb.url === 'string' ? history.questdb.url : d.history.questdb.url,
+      url: stringOr(history.questdb.url, d.history.questdb.url),
     },
     influxdb: {
       version: influxdb.version === '1' || influxdb.version === '2' ? influxdb.version : '1',
-      url: typeof influxdb.url === 'string' ? influxdb.url : d.history.influxdb.url,
-      database:
-        typeof influxdb.database === 'string' ? influxdb.database : d.history.influxdb.database,
-      username:
-        typeof influxdb.username === 'string' ? influxdb.username : d.history.influxdb.username,
-      password:
-        typeof influxdb.password === 'string' ? influxdb.password : d.history.influxdb.password,
+      url: stringOr(influxdb.url, d.history.influxdb.url),
+      database: stringOr(influxdb.database, d.history.influxdb.database),
+      username: stringOr(influxdb.username, d.history.influxdb.username),
+      password: stringOr(influxdb.password, d.history.influxdb.password),
     },
   };
   cfg.analyzers.maintenance = {
     ...m,
     engineStopRpmHzThreshold: finiteOr(
       m.engineStopRpmHzThreshold,
-      d.analyzers.maintenance.engineStopRpmHzThreshold,
+      da.maintenance.engineStopRpmHzThreshold,
     ),
     engineStartRpmHzThreshold: finiteOr(
       m.engineStartRpmHzThreshold,
-      d.analyzers.maintenance.engineStartRpmHzThreshold,
+      da.maintenance.engineStartRpmHzThreshold,
     ),
     engineStopSettleSeconds: clampMin(
       m.engineStopSettleSeconds,
-      1,
-      d.analyzers.maintenance.engineStopSettleSeconds,
+      b.maintenance.engineStopSettleSeconds.min,
+      da.maintenance.engineStopSettleSeconds,
     ),
     engineStartSettleSeconds: clampMin(
       m.engineStartSettleSeconds,
-      1,
-      d.analyzers.maintenance.engineStartSettleSeconds,
+      b.maintenance.engineStartSettleSeconds.min,
+      da.maintenance.engineStartSettleSeconds,
     ),
     engineSilenceStopSeconds: clampMin(
       m.engineSilenceStopSeconds,
-      1,
-      d.analyzers.maintenance.engineSilenceStopSeconds,
+      b.maintenance.engineSilenceStopSeconds.min,
+      da.maintenance.engineSilenceStopSeconds,
     ),
-    minSessionSeconds: clampMin(m.minSessionSeconds, 0, d.analyzers.maintenance.minSessionSeconds),
+    minSessionSeconds: clampMin(
+      m.minSessionSeconds,
+      b.maintenance.minSessionSeconds.min,
+      da.maintenance.minSessionSeconds,
+    ),
+  };
+  cfg.analyzers.aging = {
+    ...aging,
+    shortWindowDays: clampPositiveInt(
+      aging.shortWindowDays,
+      da.aging.shortWindowDays,
+      b.aging.shortWindowDays,
+    ),
+    longWindowDays: clampPositiveInt(
+      aging.longWindowDays,
+      da.aging.longWindowDays,
+      b.aging.longWindowDays,
+    ),
+  };
+  cfg.analyzers.drift = {
+    ...drift,
+    baselineDays: clampPositiveInt(drift.baselineDays, da.drift.baselineDays, b.drift.baselineDays),
   };
   cfg.analyzers.alerts = {
     ...a,
-    lowSocPercent: clampRange(a.lowSocPercent, 0, 100, d.analyzers.alerts.lowSocPercent),
-    // Strict-positive minimums on the hysteresis and threshold fields: a 0
-    // value collapses enter and exit into the same boundary, so any sensor
-    // noise spams enter/exit pairs (each pair spends an LLM call). The
-    // defaults are the sensible operating point; clamp anything weaker.
-    socExitHysteresis: clampMin(a.socExitHysteresis, 1, d.analyzers.alerts.socExitHysteresis),
-    cellImbalanceV: clampMin(a.cellImbalanceV, 0.001, d.analyzers.alerts.cellImbalanceV),
-    imbalanceSettleSec: clampMin(a.imbalanceSettleSec, 1, d.analyzers.alerts.imbalanceSettleSec),
+    lowSocPercent: clampRange(
+      a.lowSocPercent,
+      b.alerts.lowSocPercent.min,
+      b.alerts.lowSocPercent.max,
+      da.alerts.lowSocPercent,
+    ),
+    socExitHysteresis: clampMin(
+      a.socExitHysteresis,
+      b.alerts.socExitHysteresis.min,
+      da.alerts.socExitHysteresis,
+    ),
+    cellImbalanceV: clampMin(
+      a.cellImbalanceV,
+      b.alerts.cellImbalanceV.min,
+      da.alerts.cellImbalanceV,
+    ),
+    imbalanceSettleSec: clampMin(
+      a.imbalanceSettleSec,
+      b.alerts.imbalanceSettleSec.min,
+      da.alerts.imbalanceSettleSec,
+    ),
+  };
+  cfg.analyzers.liveness = {
+    ...liveness,
+    stalenessThresholdSec: clampPositiveInt(
+      liveness.stalenessThresholdSec,
+      da.liveness.stalenessThresholdSec,
+      b.liveness.stalenessThresholdSec,
+    ),
+  };
+  // A floor off the preset scale falls back to the default, so the analyzer
+  // never ranks against a value the scale does not hold.
+  cfg.analyzers.forecast = {
+    ...forecast,
+    severityFloor: isSeverityFloor(forecast.severityFloor)
+      ? forecast.severityFloor
+      : da.forecast.severityFloor,
   };
   return cfg;
 }
@@ -518,8 +586,4 @@ function isRunnableCron(pattern: string): boolean {
   } catch {
     return false;
   }
-}
-
-function clone<T>(v: T): T {
-  return structuredClone(v);
 }

@@ -1,19 +1,19 @@
-import { open } from 'node:fs/promises';
 import type { Analyzer } from '../analyzers/Analyzer.js';
 import { ANALYZER_IDS, ANALYZER_TITLES, type AnalyzerId, isAnalyzerId } from '../analyzers/ids.js';
 import { ANALYZER_DEFAULT_SYSTEM_PROMPTS } from '../analyzers/registry.js';
+import { type BaseUrlProblem, baseUrlProblem } from '../historyConfig.js';
 import type { PluginOptions } from '../types.js';
 import type { BudgetTracker } from './budget.js';
 import { HOUR_MS } from './format.js';
 import type { HistoryProvider } from './history.js';
-import { abortable, fetchWithTimeout } from './http.js';
+import { abortable, discardBody, fetchWithTimeout, normalizeBaseUrl } from './http.js';
 import { InfluxDBClient } from './influxdb.js';
 import { stringify } from './logger.js';
 import type { CompleteResult, OpenRouterClient } from './openrouter.js';
 import { OpenRouterError } from './openrouter.js';
 import { PLUGIN_HTTP_PREFIX } from './paths.js';
-import type { JsonlEntry } from './publisher.js';
-import { normalizeBaseUrl, QuestDBClient } from './questdb.js';
+import { QuestDBClient } from './questdb.js';
+import { readReportTail } from './reportLog.js';
 import type { TriggerRouter } from './triggerRouter.js';
 import { manualPutCtx } from './triggers.js';
 
@@ -29,9 +29,11 @@ export interface RouteResponse {
   send(body: string): RouteResponse;
 }
 
+type RouteHandler = (req: RouteRequest, res: RouteResponse) => unknown;
+
 export interface RouterLike {
-  get(path: string, handler: (req: RouteRequest, res: RouteResponse) => unknown): unknown;
-  post(path: string, handler: (req: RouteRequest, res: RouteResponse) => unknown): unknown;
+  get(path: string, handler: RouteHandler): unknown;
+  post(path: string, handler: RouteHandler): unknown;
 }
 
 export interface PluginRuntime {
@@ -44,7 +46,6 @@ export interface PluginRuntime {
   historyLive: HistoryProvider | null;
   historyProbed: boolean;
   analyzers: Analyzer[];
-  apiKeySet: boolean;
   router: TriggerRouter | null;
   logPath: string;
   // Lifecycle abort signal, fired by stop(). Direct LLM/history calls from
@@ -60,9 +61,11 @@ export interface PluginRuntime {
 const REPORTS_DEFAULT_LIMIT = 10;
 const REPORTS_MAX_LIMIT = 100;
 
+// A runtime exists only once an API key is configured (start() returns before
+// building one otherwise), so the snapshot carries no key flag: the panel reads
+// a 503 from this route as "no key yet".
 interface StatusResponse {
   openrouter: {
-    apiKeySet: boolean;
     model: string;
     callsToday: number;
     maxCallsPerDay: number;
@@ -70,7 +73,6 @@ interface StatusResponse {
     costToday: number;
   };
   history: { source: PluginOptions['history']['source']; reachable: boolean | null };
-  questdb: { enabled: boolean; reachable: boolean | null };
   analyzers: Array<{
     id: AnalyzerId;
     title: string;
@@ -88,27 +90,20 @@ interface StatusResponse {
 
 function buildStatus(rt: PluginRuntime): StatusResponse {
   const enabled = new Set(rt.analyzers.map((a) => a.id));
+  const { callsToday, tokensToday, costToday } = rt.budget.snapshot();
   return {
     startedAt: rt.startedAt,
     openrouter: {
-      apiKeySet: rt.apiKeySet,
       model: rt.cfg.openrouter.model,
-      callsToday: rt.budget.callsToday(),
+      callsToday,
       maxCallsPerDay: rt.cfg.openrouter.maxCallsPerDay,
-      tokensToday: rt.budget.tokensToday(),
-      costToday: rt.budget.costToday(),
+      tokensToday,
+      costToday,
     },
     history: {
       source: rt.cfg.history.source,
       reachable:
         rt.cfg.history.source !== 'none' && rt.historyProbed ? rt.historyLive !== null : null,
-    },
-    // Retain the old status key for clients written before the provider
-    // selector. It now reflects whether QuestDB is the selected source.
-    questdb: {
-      enabled: rt.cfg.history.source === 'questdb',
-      reachable:
-        rt.cfg.history.source === 'questdb' && rt.historyProbed ? rt.historyLive !== null : null,
     },
     analyzers: ANALYZER_IDS.map((id) => {
       const section = rt.cfg.analyzers[id];
@@ -126,13 +121,12 @@ function buildStatus(rt: PluginRuntime): StatusResponse {
   };
 }
 
+// The catalog as this route serves it: each model's id and display name, the
+// two fields the panel's model picker reads. The upstream entries carry
+// descriptions, pricing, and architecture besides, which would otherwise sit
+// in the module cache and cross the wire to every admin tab.
 interface OpenRouterModelsResponse {
-  data: Array<{
-    id: string;
-    name?: string;
-    context_length?: number;
-    pricing?: { prompt?: string; completion?: string };
-  }>;
+  data: Array<{ id: string; name?: string }>;
 }
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
@@ -218,14 +212,27 @@ async function getOpenRouterModels(abortSignal?: AbortSignal): Promise<OpenRoute
 
 async function fetchOpenRouterModels(): Promise<OpenRouterModelsResponse> {
   const res = await fetchWithTimeout(OPENROUTER_MODELS_URL, {}, MODELS_FETCH_TIMEOUT_MS);
-  if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
-  const body = (await res.json()) as OpenRouterModelsResponse;
+  if (!res.ok) {
+    discardBody(res);
+    throw new Error(`upstream HTTP ${res.status}`);
+  }
+  const upstream = (await res.json()) as { data?: unknown } | null;
   // Validate the shape before caching: a malformed-but-valid-JSON response with
   // a non-array `data` field would otherwise poison the 1-hour module cache and
   // break the model picker until the TTL lapses.
-  if (!Array.isArray(body?.data)) {
+  if (!Array.isArray(upstream?.data)) {
     throw new Error('upstream returned an unexpected models payload');
   }
+  // Keep the two fields the picker reads, and skip a row without a string id
+  // rather than failing the whole catalog over it.
+  const data: OpenRouterModelsResponse['data'] = [];
+  for (const row of upstream.data as unknown[]) {
+    if (typeof row !== 'object' || row === null) continue;
+    const { id, name } = row as { id?: unknown; name?: unknown };
+    if (typeof id !== 'string') continue;
+    data.push(typeof name === 'string' ? { id, name } : { id });
+  }
+  const body: OpenRouterModelsResponse = { data };
   // Stamp with a fresh read, taken after the awaited fetch, so the TTL is not
   // shortened by the request's own latency. The cache is fresh from when the
   // data actually arrived.
@@ -233,76 +240,30 @@ async function fetchOpenRouterModels(): Promise<OpenRouterModelsResponse> {
   return body;
 }
 
-// How much of the tail of the report log one read takes. Ten entries, what the
-// panel asks for, fit in a small fraction of this; the window widens only when
-// a larger `limit` is not satisfied by it.
-const REPORTS_TAIL_WINDOW_BYTES = 256 * 1024;
-
-// The newest `limit` entries for one analyzer, newest first. The panel opens a
-// drawer per analyzer and refreshes after every fire, so this reads and parses
-// the tail of the log rather than all of it: the rotation ceiling is 8 MB, and
-// parsing that per request to keep ten rows is seconds of blocked event loop on
-// a Raspberry Pi. Entries older than the last rotation live in `<log>.1` and
-// are deliberately not read here; the panel shows recent history, not the
-// archive.
-async function tailReports(
-  logPath: string,
-  analyzerId: string,
-  limit: number,
-): Promise<JsonlEntry[]> {
-  let handle: Awaited<ReturnType<typeof open>>;
-  try {
-    handle = await open(logPath, 'r');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw err;
-  }
-  try {
-    const { size } = await handle.stat();
-    let window = REPORTS_TAIL_WINDOW_BYTES;
-    for (;;) {
-      const start = Math.max(0, size - window);
-      const length = size - start;
-      const buffer = Buffer.alloc(length);
-      if (length > 0) await handle.read(buffer, 0, length, start);
-      const lines = buffer.toString('utf-8').split('\n');
-      // A window that does not reach the start of the file almost certainly
-      // opens mid-line, so the first fragment is dropped rather than parsed as
-      // a row (it may also be half a UTF-8 sequence).
-      if (start > 0) lines.shift();
-      const out: JsonlEntry[] = [];
-      // Backwards, stopping at `limit`: the newest entries are at the end, and
-      // walking from there means the result is already newest-first and no
-      // older entry is parsed at all.
-      for (let i = lines.length - 1; i >= 0 && out.length < limit; i -= 1) {
-        const line = lines[i];
-        if (!line) continue;
-        try {
-          const entry = JSON.parse(line) as JsonlEntry;
-          if (entry.analyzer === analyzerId) out.push(entry);
-        } catch {
-          // skip malformed lines so a single corrupt entry doesn't poison tail
-        }
-      }
-      // A window short of `limit` matches for this analyzer widens rather than
-      // under-reporting: the other analyzers' rows are interleaved, so a large
-      // limit can need more of the log than the first window holds.
-      if (out.length >= limit || start === 0) return out;
-      window *= 4;
-    }
-  } finally {
-    await handle.close();
-  }
+// The failure envelope every route answers with: `{ ok: false, error }` plus
+// whatever the route adds, so the panel's fetchJson wrapper reads one shape
+// whichever guard tripped.
+function sendErr(res: RouteResponse, status: number, error: string, extra: object = {}): void {
+  res.status(status).json({ ok: false, ...extra, error });
 }
 
-// Whether a normalized request URL names the same InfluxDB the saved settings
-// do. Both sides go through the normalization the client itself applies, so
-// the gate compares the URL the probe will dial rather than a second reading
-// of it. The saved value is a raw config string, so an unparseable one
-// normalizes to something no absolute URL can equal and matches nothing.
-function sameInfluxTarget(savedUrl: string | undefined, normalized: string): boolean {
-  if (!savedUrl) return false;
-  return normalizeBaseUrl(savedUrl) === normalized;
+// The error text for each way a probe URL can be unusable. The product name
+// only appears where it tells the operator which field to fix.
+const BASE_URL_ERRORS: Record<BaseUrlProblem, (product: string) => string> = {
+  invalid: () => 'invalid URL',
+  scheme: () => 'unsupported URL scheme',
+  credentials: (product) => `${product} base URL must not include credentials`,
+  query: (product) => `${product} base URL must not include a query string or fragment`,
+};
+
+// Validate a probe URL before constructing a client: the admin gate keeps
+// unauthenticated callers out, but even an admin should not be able to probe
+// an arbitrary scheme (file://, gopher://, javascript:) from the Signal K host.
+// On success it returns the client's own normalization, so the URL a route
+// reports is exactly the one probe() dials.
+function validateProbeUrl(raw: string, product: string): { url: string } | { error: string } {
+  const problem = baseUrlProblem(raw);
+  return problem ? { error: BASE_URL_ERRORS[problem](product) } : { url: normalizeBaseUrl(raw) };
 }
 
 function requireRuntime(
@@ -311,10 +272,7 @@ function requireRuntime(
 ): PluginRuntime | null {
   const rt = getRuntime();
   if (!rt) {
-    // Consistent { ok, error } envelope across every route's failure paths
-    // so the panel's fetchJson wrapper sees the same shape regardless of
-    // which guard tripped.
-    res.status(503).json({ ok: false, error: 'plugin not started' });
+    sendErr(res, 503, 'plugin not started');
     return null;
   }
   return rt;
@@ -323,21 +281,17 @@ function requireRuntime(
 function requireAnalyzerId(req: RouteRequest, res: RouteResponse): AnalyzerId | null {
   const id = req.params?.id;
   if (!isAnalyzerId(id)) {
-    // Same { ok, error } envelope as requireRuntime so a single panel
-    // branch handles every failure path uniformly.
-    res.status(404).json({ ok: false, error: 'unknown analyzer' });
+    sendErr(res, 404, 'unknown analyzer');
     return null;
   }
   return id;
 }
 
 // Success envelope shared by every route's happy path: the same { ok, ... }
-// shape the panel's fetchJson wrapper reads on the guard failure paths above.
+// shape the panel's fetchJson wrapper reads on the failure paths above.
 function sendOk(res: RouteResponse, payload: object = {}): void {
   res.json({ ok: true, ...payload });
 }
-
-type RouteHandler = (req: RouteRequest, res: RouteResponse) => unknown;
 
 // One row per REST route. registerApiRoutes registers each row's handler and
 // the OpenAPI document is built from the same rows, so the published API docs
@@ -357,7 +311,7 @@ const ID_PATH_PARAM = {
   name: 'id',
   in: 'path',
   required: true,
-  description: 'Analyzer id (one of the seven analyzer ids).',
+  description: `Analyzer id: one of ${ANALYZER_IDS.join(', ')}.`,
   schema: { type: 'string' },
 } as const;
 
@@ -387,12 +341,8 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
     handler: (getRuntime) => async (_req, res) => {
       const rt = requireRuntime(getRuntime, res);
       if (!rt) return;
-      if (!rt.apiKeySet) {
-        res.status(400).json({ ok: false, error: 'API key not configured' });
-        return;
-      }
       if (openRouterTestFlight.cooling(OPENROUTER_TEST_COOLDOWN_MS)) {
-        res.status(429).json({ ok: false, error: 'a test just ran; wait a few seconds' });
+        sendErr(res, 429, 'a test just ran; wait a few seconds');
         return;
       }
       try {
@@ -417,7 +367,7 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         // (empty completion); neither is a valid HTTP error status to echo, so
         // anything below 400 collapses to 500.
         const status = err instanceof OpenRouterError && err.status >= 400 ? err.status : 500;
-        res.status(status).json({ ok: false, status, error: stringify(err) });
+        sendErr(res, status, stringify(err), { status });
       }
     },
   },
@@ -431,11 +381,11 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
       const rt = requireRuntime(getRuntime, res);
       if (!rt) return;
       if (!rt.router) {
-        res.status(503).json({ ok: false, error: 'plugin not started' });
+        sendErr(res, 503, 'plugin not started');
         return;
       }
       if (!rt.analyzers.some((a) => a.id === id)) {
-        res.status(409).json({ ok: false, error: 'analyzer not enabled' });
+        sendErr(res, 409, 'analyzer not enabled');
         return;
       }
       // Run the named analyzer directly. A manual fire uses a put-kind ctx; an
@@ -446,7 +396,7 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         const outcome = await rt.router.runById(id, manualPutCtx());
         sendOk(res, { analyzer: id, outcome });
       } catch (err) {
-        res.status(500).json({ ok: false, error: stringify(err) });
+        sendErr(res, 500, stringify(err));
       }
     },
   },
@@ -487,7 +437,7 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         const result = await getOpenRouterModels(getRuntime()?.signal);
         sendOk(res, result);
       } catch (err) {
-        res.status(502).json({ ok: false, error: stringify(err) });
+        sendErr(res, 502, stringify(err));
       }
     },
   },
@@ -498,67 +448,27 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
     handler: (getRuntime) => async (req, res) => {
       const body = (req.body ?? {}) as { url?: string };
       const rt = getRuntime();
-      const url = body.url || rt?.cfg.history.questdb.url;
-      if (!url) {
-        res.status(400).json({ ok: false, error: 'no URL provided and none in saved config' });
+      const raw = body.url || rt?.cfg.history.questdb.url;
+      if (!raw) {
+        sendErr(res, 400, 'no URL provided and none in saved config');
         return;
       }
-      // Validate the URL before constructing the client: the admin gate keeps
-      // unauthenticated callers out, but even an admin should not be able to
-      // probe an arbitrary scheme (file://, gopher://, javascript:) from the
-      // SK host. Restrict to http/https, the only schemes QuestDB serves.
-      let parsed: URL;
+      const checked = validateProbeUrl(raw, 'QuestDB');
+      if ('error' in checked) {
+        sendErr(res, 400, checked.error);
+        return;
+      }
+      const { url } = checked;
       try {
-        parsed = new URL(url);
-      } catch {
-        res.status(400).json({ ok: false, error: 'invalid URL' });
-        return;
-      }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
-        return;
-      }
-      if (parsed.username || parsed.password) {
-        res.status(400).json({
-          ok: false,
-          error: 'QuestDB base URL must not include credentials',
-        });
-        return;
-      }
-      if (parsed.search || parsed.hash) {
-        res.status(400).json({
-          ok: false,
-          error: 'QuestDB base URL must not include a query string or fragment',
-        });
-        return;
-      }
-      // The client's own normalization, so the URL this route reports is
-      // exactly the one probe() dials: no trailing slash, so it builds
-      // `${url}/exec?query=...` without a double slash on 'http://qdb:9000/'.
-      const normalized = normalizeBaseUrl(parsed.href);
-      try {
-        const client = new QuestDBClient({ url: normalized });
-        const reachable = await client.probe(rt?.signal);
+        const reachable = await new QuestDBClient({ url }).probe(rt?.signal);
         // A false probe means the server answered but not with a dataset (wrong
         // service, or QuestDB returning an error payload). Carry an `error` so
         // every ok:false response, transport fault or bad answer, has the same
         // shape for the panel to read.
-        if (reachable) {
-          sendOk(res, { url: normalized });
-        } else {
-          res.json({
-            ok: false,
-            url: normalized,
-            error: 'reachable but did not return a result set',
-          });
-        }
-      } catch (err) {
-        void err;
-        res.status(502).json({
-          ok: false,
-          url: normalized,
-          error: 'QuestDB is unreachable or returned an invalid response',
-        });
+        if (reachable) sendOk(res, { url });
+        else sendErr(res, 200, 'reachable but did not return a result set', { url });
+      } catch {
+        sendErr(res, 502, 'QuestDB is unreachable or returned an invalid response', { url });
       }
     },
   },
@@ -570,86 +480,44 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
       const body = (req.body ?? {}) as Partial<PluginOptions['history']['influxdb']>;
       const rt = getRuntime();
       const saved = rt?.cfg.history.influxdb;
-      const url = body.url ?? saved?.url;
+      const raw = body.url ?? saved?.url;
       const database = body.database ?? saved?.database;
       const version = body.version ?? saved?.version ?? '1';
-      if (!url || !database) {
-        res.status(400).json({
-          ok: false,
-          error: 'an InfluxDB URL and database are required',
-        });
+      if (!raw || !database) {
+        sendErr(res, 400, 'an InfluxDB URL and database are required');
         return;
       }
-      let parsed: URL;
-      try {
-        parsed = new URL(url);
-      } catch {
-        res.status(400).json({ ok: false, error: 'invalid URL' });
-        return;
-      }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        res.status(400).json({ ok: false, error: 'unsupported URL scheme' });
-        return;
-      }
-      if (parsed.username || parsed.password) {
-        res.status(400).json({
-          ok: false,
-          error: 'InfluxDB base URL must not include credentials',
-        });
-        return;
-      }
-      if (parsed.search || parsed.hash) {
-        res.status(400).json({
-          ok: false,
-          error: 'InfluxDB base URL must not include a query string or fragment',
-        });
+      const checked = validateProbeUrl(raw, 'InfluxDB');
+      if ('error' in checked) {
+        sendErr(res, 400, checked.error);
         return;
       }
       if (version !== '1' && version !== '2') {
-        res.status(400).json({ ok: false, error: 'unsupported InfluxDB version' });
+        sendErr(res, 400, 'unsupported InfluxDB version');
         return;
       }
-      const normalized = normalizeBaseUrl(parsed.href);
+      const { url } = checked;
       // The stored credential travels only to the stored host. A request that
       // names a different URL must carry its own credentials, an empty string
       // being a legitimate "no auth": without this, overriding the URL alone
       // turns one admin-authenticated probe into "post the vessel's InfluxDB
       // token to a host of my choosing". The admin gate and the JSON content
       // type keep that out of reach of an unauthenticated caller; it should not
-      // be within reach of an authenticated one either.
+      // be within reach of an authenticated one either. Both sides go through
+      // the client's own normalization, so the gate compares the URL the probe
+      // will dial; an unparseable saved value matches nothing.
       const useSavedCredentials =
-        body.url === undefined || sameInfluxTarget(saved?.url, normalized);
+        body.url === undefined || (saved?.url ? normalizeBaseUrl(saved.url) === url : false);
       const username = body.username ?? (useSavedCredentials ? (saved?.username ?? '') : '');
       const password = body.password ?? (useSavedCredentials ? (saved?.password ?? '') : '');
+      const echo = { url, database, version };
       try {
-        const client = new InfluxDBClient({
-          url: normalized,
-          database,
-          version,
-          username,
-          password,
-          selfContext: 'vessels.self',
-        });
+        const client = new InfluxDBClient({ url, database, version, username, password });
         const reachable = await client.probe(rt?.signal);
-        if (reachable) {
-          sendOk(res, { url: normalized, database, version });
-        } else {
-          res.json({
-            ok: false,
-            url: normalized,
-            database,
-            version,
-            error: 'reachable but did not return a result set',
-          });
-        }
+        if (reachable) sendOk(res, echo);
+        else sendErr(res, 200, 'reachable but did not return a result set', echo);
       } catch {
-        res.status(502).json({
-          ok: false,
-          url: normalized,
-          database,
-          version,
-          error: 'InfluxDB is unreachable or returned an invalid response',
-        });
+        sendErr(res, 502, 'InfluxDB is unreachable or returned an invalid response', echo);
       }
     },
   },
@@ -681,10 +549,10 @@ const API_ROUTES: ReadonlyArray<ApiRoute> = [
         ? Math.min(REPORTS_MAX_LIMIT, Math.max(1, parsed))
         : REPORTS_DEFAULT_LIMIT;
       try {
-        const reports = await tailReports(rt.logPath, id, limit);
+        const reports = await readReportTail(rt.logPath, id, limit);
         sendOk(res, { analyzer: id, reports });
       } catch (err) {
-        res.status(500).json({ ok: false, error: stringify(err) });
+        sendErr(res, 500, stringify(err));
       }
     },
   },

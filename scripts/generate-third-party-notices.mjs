@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { readPackageJson, repositoryDir } from './repository.mjs';
 
 /**
  * The configuration panel is a Module Federation remote whose dependency tree
@@ -16,14 +17,13 @@ import { createRequire } from 'node:module';
  * installed tree without paying for a rebuild, and runs inside `package:check`.
  */
 
-const repositoryDir = new URL('../', import.meta.url);
 const noticesUrl = new URL('THIRD_PARTY_NOTICES.md', repositoryDir);
 const statsUrl = new URL('.tmp/panel-stats.json', repositoryDir);
 const checkOnly = process.argv.includes('--check');
 
 const HEADER_MARKER = '<!-- generated-for-signalk-nearlcrews-ui:';
 
-const packageJson = JSON.parse(readFileSync(new URL('package.json', repositoryDir), 'utf8'));
+const packageJson = readPackageJson();
 // The marker records the shared UI release the notices were generated against.
 // It is the installed version, resolved the way the bundler resolves it;
 // `snui-check-consumer` separately proves the pin equals that version.

@@ -1,14 +1,14 @@
 import type { BatteryEventKind } from './analyzers/Analyzer.js';
+import { ANALYZER_TITLES, type AnalyzerId } from './analyzers/ids.js';
 import { MAX_CALLS_PER_DAY_CEILING } from './callBudget.js';
 import { CRON_PRESETS } from './cronPresets.js';
 import { SEVERITY_FLOOR_PRESETS } from './severityFloors.js';
 import {
-  ALERTS_SUPPORTED_EVENTS,
+  ANALYZER_BOUNDS,
+  ANALYZER_SUPPORTED_EVENTS,
   type AnalyzerTriggerCfg,
   DEFAULT_OPTIONS,
-  MAINTENANCE_SUPPORTED_EVENTS,
   type MaintenanceEventKind,
-  NO_EVENTS,
 } from './types.js';
 
 /**
@@ -230,27 +230,43 @@ function triggerSchema(opts: {
 
 /**
  * The per-analyzer schema node: the outer `type: 'object'`, title and
- * description, the top-level `enabled` boolean, and the enabled-true gate.
- * Only the titles, the `enabled` default, and the gated `whenEnabled` fields
- * vary per analyzer, so every analyzer block goes through here rather than
- * repeating the skeleton seven times.
+ * description, the top-level `enabled` boolean, and the enabled-true gate with
+ * the analyzer's trigger block first. The title, the `enabled` default, the
+ * trigger defaults, and the supported events all follow from the analyzer id,
+ * so only the copy and the analyzer's own `settings` vary per block.
  */
 function analyzerSchemaNode(opts: {
-  title: string;
+  id: AnalyzerId;
   description: string;
   enabledTitle: string;
-  enabledDefault: boolean;
-  whenEnabled: Record<string, unknown>;
+  settings?: Record<string, unknown>;
 }): EnabledGatedNode {
+  const defaults = DEFAULT_OPTIONS.analyzers[opts.id];
   return {
     type: 'object',
-    title: opts.title,
+    title: ANALYZER_TITLES[opts.id],
     description: opts.description,
     properties: {
-      enabled: { type: 'boolean', title: opts.enabledTitle, default: opts.enabledDefault },
+      enabled: { type: 'boolean', title: opts.enabledTitle, default: defaults.enabled },
     },
-    ...enabledGate({ whenEnabled: opts.whenEnabled }),
+    ...enabledGate({
+      whenEnabled: {
+        triggers: triggerSchema({
+          defaults: defaults.triggers,
+          supportedEvents: ANALYZER_SUPPORTED_EVENTS[opts.id],
+        }),
+        ...opts.settings,
+      },
+    }),
   };
+}
+
+// A bounded setting's minimum and maximum, read from ANALYZER_BOUNDS so the
+// form advertises exactly the range the option normalizer clamps to.
+function boundsOf(bound: { min: number; max?: number }): { minimum: number; maximum?: number } {
+  return bound.max === undefined
+    ? { minimum: bound.min }
+    : { minimum: bound.min, maximum: bound.max };
 }
 
 // PluginSchema and PluginUiSchema are file-private return-type aliases for
@@ -452,15 +468,10 @@ function buildSchemaInner(): PluginSchema {
         title: 'Analyzers',
         properties: {
           maintenance: analyzerSchemaNode({
-            title: 'Maintenance Advisor',
+            id: 'maintenance',
             description: 'Generates a plain-English engine session report when the engine stops.',
             enabledTitle: 'Enable engine maintenance reports',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.maintenance.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.maintenance.triggers,
-                supportedEvents: MAINTENANCE_SUPPORTED_EVENTS,
-              }),
+            settings: {
               engineStopRpmHzThreshold: {
                 type: 'number',
                 title: 'Engine-off RPM threshold (Hz)',
@@ -474,7 +485,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How long RPM must stay below the threshold before the engine is considered stopped. Default 10s.',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.engineStopSettleSeconds,
-                minimum: 1,
+                ...boundsOf(ANALYZER_BOUNDS.maintenance.engineStopSettleSeconds),
               },
               engineSilenceStopSeconds: {
                 type: 'integer',
@@ -482,7 +493,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How long the RPM feed can go fully silent before the session is treated as ended. A switched-off NMEA 2000 engine stops broadcasting entirely rather than reporting RPM 0. Default 300s.',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.engineSilenceStopSeconds,
-                minimum: 1,
+                ...boundsOf(ANALYZER_BOUNDS.maintenance.engineSilenceStopSeconds),
               },
               engineStartRpmHzThreshold: {
                 type: 'number',
@@ -497,14 +508,14 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How long RPM must stay above the threshold before the engine is considered running.',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.engineStartSettleSeconds,
-                minimum: 1,
+                ...boundsOf(ANALYZER_BOUNDS.maintenance.engineStartSettleSeconds),
               },
               minSessionSeconds: {
                 type: 'integer',
                 title: 'Minimum session length (seconds)',
                 description: 'Engine sessions shorter than this are ignored (no report generated).',
                 default: DEFAULT_OPTIONS.analyzers.maintenance.minSessionSeconds,
-                minimum: 0,
+                ...boundsOf(ANALYZER_BOUNDS.maintenance.minSessionSeconds),
               },
               extraWatchedPaths: {
                 type: 'array',
@@ -517,36 +528,23 @@ function buildSchemaInner(): PluginSchema {
             },
           }),
           health: analyzerSchemaNode({
-            title: 'Daily Battery Health Summary',
+            id: 'health',
             description: "Daily summary of every battery bank's health.",
             enabledTitle: 'Enable daily battery health summaries',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.health.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.health.triggers,
-                supportedEvents: NO_EVENTS,
-              }),
-            },
           }),
           aging: analyzerSchemaNode({
-            title: 'Battery Aging Tracker',
+            id: 'aging',
             description:
               'Monthly capacity-loss trend per battery bank, ranked by degradation rate.',
             enabledTitle: 'Enable battery aging tracker',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.aging.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.aging.triggers,
-                supportedEvents: NO_EVENTS,
-              }),
+            settings: {
               shortWindowDays: {
                 type: 'integer',
                 title: 'Short window (days)',
                 description:
                   'How far back to look for the near-term aging window. Default 30. The shorter window catches recent acceleration in capacity loss.',
                 default: DEFAULT_OPTIONS.analyzers.aging.shortWindowDays,
-                minimum: 7,
-                maximum: 365,
+                ...boundsOf(ANALYZER_BOUNDS.aging.shortWindowDays),
               },
               longWindowDays: {
                 type: 'integer',
@@ -554,51 +552,38 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'How far back to look for the longer-term aging window. Default 90. The longer window provides a more stable baseline for the projection to 80 percent of nominal capacity.',
                 default: DEFAULT_OPTIONS.analyzers.aging.longWindowDays,
-                minimum: 7,
-                maximum: 1095,
+                ...boundsOf(ANALYZER_BOUNDS.aging.longWindowDays),
               },
             },
           }),
           drift: analyzerSchemaNode({
-            title: 'Engine Performance Drift',
+            id: 'drift',
             description:
               'Weekly fuel-economy and per-RPM drift for engines vs a configurable trailing baseline.',
             enabledTitle: 'Enable engine performance drift analysis',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.drift.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.drift.triggers,
-                supportedEvents: NO_EVENTS,
-              }),
+            settings: {
               baselineDays: {
                 type: 'integer',
                 title: 'Baseline window (days)',
                 description:
                   'How many days of history to use as the baseline for the past-week vs baseline comparison. Default 30. The baseline ends where the past week begins (no overlap).',
                 default: DEFAULT_OPTIONS.analyzers.drift.baselineDays,
-                minimum: 14,
-                maximum: 365,
+                ...boundsOf(ANALYZER_BOUNDS.drift.baselineDays),
               },
             },
           }),
           alerts: analyzerSchemaNode({
-            title: 'Battery Threshold Alerts',
+            id: 'alerts',
             description:
               'Sends notifications when state-of-charge or cell-balance crosses configured thresholds. Note: the alert text is written by an OpenRouter call, so a crossing is reported only when the call succeeds and the shared daily budget (Max OpenRouter calls per day) is not yet exhausted. If the budget is spent or OpenRouter is unreachable, a crossing may not raise a notification. Do not rely on this as your sole battery safety alarm; pair it with a hardware or BMS alarm, and set the daily budget high enough to cover your expected crossings.',
             enabledTitle: 'Enable battery threshold alerts',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.alerts.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.alerts.triggers,
-                supportedEvents: ALERTS_SUPPORTED_EVENTS,
-              }),
+            settings: {
               lowSocPercent: {
                 type: 'number',
                 title: 'Low state-of-charge threshold (%)',
                 description: 'Fires a low-SoC alert when any bank drops below this value.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.lowSocPercent,
-                minimum: 0,
-                maximum: 100,
+                ...boundsOf(ANALYZER_BOUNDS.alerts.lowSocPercent),
               },
               socExitHysteresis: {
                 type: 'number',
@@ -606,7 +591,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'SoC must rise above (threshold + hysteresis) before the alert clears.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.socExitHysteresis,
-                minimum: 1,
+                ...boundsOf(ANALYZER_BOUNDS.alerts.socExitHysteresis),
               },
               cellImbalanceV: {
                 type: 'number',
@@ -614,7 +599,7 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'Voltage difference between highest and lowest cell that triggers an alert.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.cellImbalanceV,
-                minimum: 0.001,
+                ...boundsOf(ANALYZER_BOUNDS.alerts.cellImbalanceV),
               },
               imbalanceSettleSec: {
                 type: 'integer',
@@ -622,42 +607,32 @@ function buildSchemaInner(): PluginSchema {
                 description:
                   'Cell imbalance must persist for this many seconds before an alert fires.',
                 default: DEFAULT_OPTIONS.analyzers.alerts.imbalanceSettleSec,
-                minimum: 1,
+                ...boundsOf(ANALYZER_BOUNDS.alerts.imbalanceSettleSec),
               },
             },
           }),
           liveness: analyzerSchemaNode({
-            title: 'Sensor Liveness Monitor',
+            id: 'liveness',
             description:
               'Reports watched Signal K paths that have gone stale or are served by multiple sources.',
             enabledTitle: 'Enable sensor liveness monitoring',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.liveness.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.liveness.triggers,
-                supportedEvents: NO_EVENTS,
-              }),
+            settings: {
               stalenessThresholdSec: {
                 type: 'integer',
                 title: 'Staleness threshold (seconds)',
                 description:
                   'A watched path with no sample newer than this is reported as stale. Default 300.',
                 default: DEFAULT_OPTIONS.analyzers.liveness.stalenessThresholdSec,
-                minimum: 30,
+                ...boundsOf(ANALYZER_BOUNDS.liveness.stalenessThresholdSec),
               },
             },
           }),
           forecast: analyzerSchemaNode({
-            title: 'Weather Outlook Advisor',
+            id: 'forecast',
             description:
               'Reads how environmental conditions are changing and publishes a short-term weather outlook as a Signal K notification.',
             enabledTitle: 'Enable weather outlook advisor',
-            enabledDefault: DEFAULT_OPTIONS.analyzers.forecast.enabled,
-            whenEnabled: {
-              triggers: triggerSchema({
-                defaults: DEFAULT_OPTIONS.analyzers.forecast.triggers,
-                supportedEvents: NO_EVENTS,
-              }),
+            settings: {
               severityFloor: {
                 type: 'string',
                 title: 'Alarm severity floor',
@@ -739,22 +714,22 @@ function buildUiSchemaInner(): PluginUiSchema {
           'minSessionSeconds',
           'extraWatchedPaths',
         ],
-        triggers: triggerUiSchema({ supportedEvents: MAINTENANCE_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.maintenance }),
         extraWatchedPaths: {
           'ui:options': { orderable: false },
         },
       },
       health: {
         'ui:order': ['enabled', 'triggers'],
-        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.health }),
       },
       aging: {
         'ui:order': ['enabled', 'triggers', 'shortWindowDays', 'longWindowDays'],
-        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.aging }),
       },
       drift: {
         'ui:order': ['enabled', 'triggers', 'baselineDays'],
-        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.drift }),
       },
       alerts: {
         'ui:order': [
@@ -765,15 +740,15 @@ function buildUiSchemaInner(): PluginUiSchema {
           'cellImbalanceV',
           'imbalanceSettleSec',
         ],
-        triggers: triggerUiSchema({ supportedEvents: ALERTS_SUPPORTED_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.alerts }),
       },
       liveness: {
         'ui:order': ['enabled', 'triggers', 'stalenessThresholdSec'],
-        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.liveness }),
       },
       forecast: {
         'ui:order': ['enabled', 'triggers', 'severityFloor'],
-        triggers: triggerUiSchema({ supportedEvents: NO_EVENTS }),
+        triggers: triggerUiSchema({ supportedEvents: ANALYZER_SUPPORTED_EVENTS.forecast }),
       },
     },
   };

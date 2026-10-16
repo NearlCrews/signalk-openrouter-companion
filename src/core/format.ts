@@ -1,6 +1,7 @@
-// Shared time-unit constants in milliseconds. Kept here so the trend
-// analyzers (aging, drift, forecast) share one definition instead of each
-// redeclaring the same literal.
+// Shared time-unit constants in milliseconds, so a seconds-to-milliseconds
+// conversion or a window length reads as the unit it is rather than a literal.
+export const SECOND_MS = 1000;
+export const MINUTE_MS = 60_000;
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 
@@ -79,49 +80,6 @@ export function clampAtWord(text: string, max: number, opts: { ellipsis?: boolea
   const lastSpace = head.lastIndexOf(' ');
   const cut = (lastSpace > max / 2 ? head.slice(0, lastSpace) : head).trimEnd();
   return opts.ellipsis ? `${cut}…` : cut;
-}
-
-// Rolling-window stats clause shared by the battery prompt summary lines in
-// the maintenance and health analyzers, so the template cannot drift between
-// them. Structural parameter shape: BufferSummary satisfies it without this
-// module importing buffer.ts.
-function fmtStats(s: { min: number; max: number; mean: number; count: number }): string {
-  return `min=${fmtNumber(s.min)} max=${fmtNumber(s.max)} mean=${fmtNumber(s.mean)} count=${fmtNumber(s.count)}`;
-}
-
-// The per-bank battery block shared verbatim by the maintenance and health
-// prompts: header, the always-present readings, the optional readings, then
-// one stats line per labeled summary. The caller supplies the summary labels
-// ('voltage (session)' vs 'voltage 24h') and appends any analyzer-specific
-// lines after. Structural bank shape: BankSnapshot satisfies it without this
-// module importing skNode.ts.
-export function pushBankLines(
-  lines: string[],
-  id: string,
-  bank: {
-    voltage: number | null;
-    current: number | null;
-    stateOfCharge: number | null;
-    nominalCapacityJ: number | null;
-    cycles: number | null;
-    temperatureK: number | null;
-  },
-  summaries: ReadonlyArray<{
-    label: string;
-    summary: { min: number; max: number; mean: number; count: number } | null;
-  }>,
-): void {
-  lines.push(`### Bank: ${id}`);
-  lines.push(`- voltage now: ${fmtNumber(bank.voltage)}`);
-  lines.push(`- current now: ${fmtNumber(bank.current)}`);
-  lines.push(`- state of charge: ${fmtNumber(bank.stateOfCharge)}`);
-  if (bank.nominalCapacityJ != null)
-    lines.push(`- nominal capacity (J): ${fmtNumber(bank.nominalCapacityJ)}`);
-  if (bank.cycles != null) lines.push(`- cycles: ${fmtNumber(bank.cycles)}`);
-  if (bank.temperatureK != null) lines.push(`- temperature (K): ${fmtNumber(bank.temperatureK)}`);
-  for (const { label, summary } of summaries) {
-    if (summary) lines.push(`- ${label}: ${fmtStats(summary)}`);
-  }
 }
 
 // Signed number with `digits` precision, no unit. Used by the forecast

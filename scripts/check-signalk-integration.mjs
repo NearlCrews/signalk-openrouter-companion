@@ -1,11 +1,11 @@
-import { readFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
+import { readPackageJson } from './repository.mjs';
 
 // Checks the packed plugin inside a real, unsecured Signal K server: the server
 // loads and enables it, serves the production configurator remote, and Signal
 // K Admin mounts that remote in a browser. This is the check that catches a
 // panel the host refuses to mount, such as a strict React share on 2.24 Admin.
-const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
+const packageJson = readPackageJson();
 // No default: port 3000 on a development host is usually a live server, and
 // this check expects a disposable one with security off.
 if (!process.env.SIGNALK_URL) {

@@ -1,32 +1,38 @@
 import type { BufferSummary } from '../core/buffer.js';
 import {
+  BATTERY_SI_UNITS_INSTRUCTION,
+  generatedLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
   sanitizeProducerString,
 } from '../core/cfg.js';
-import { DAY_MS, fmtNumber, pushBankLines } from '../core/format.js';
-import { BATTERIES_PARENT_PATH, bankPaths } from '../core/paths.js';
+import { DAY_MS, fmtNumber } from '../core/format.js';
+import { bankPaths } from '../core/paths.js';
 import {
-  asTreeMap,
-  isBankNode,
+  pushBankLines,
+  readBankNodes,
   readBankSnapshot,
   readNumberAt,
   type BankSnapshot as SkBankSnapshot,
 } from '../core/skNode.js';
 import { buildTriggers } from '../core/triggers.js';
-import type { AnalyzerTriggerCfg } from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type {
+  AnalysisInput,
+  Analyzer,
+  AnalyzerBaseCfg,
+  AnalyzerDeps,
+  PromptPair,
+  TriggerCtx,
+  TriggerSpec,
+} from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
-export interface HealthCfg {
-  triggers: AnalyzerTriggerCfg;
-  customSystemPrompt?: string;
-}
+export type HealthCfg = AnalyzerBaseCfg;
 
 export const HEALTH_DEFAULT_SYSTEM_PROMPT = [
   'You are an experienced marine electrical specialist reading raw battery telemetry from a Signal K server.',
-  'All numeric values are in Signal K SI base units: voltage in V, current in A, temperature in K, capacity in J, SoC as a 0-1 ratio.',
+  BATTERY_SI_UNITS_INSTRUCTION,
   'Produce a concise plain-English daily report covering every battery bank.',
   'For each bank: state of charge, voltage and current trends, cycle count, and cell balance (if cell data is present).',
   'Stick to facts present in the data. Do not speculate beyond what the numbers show.',
@@ -65,14 +71,7 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
   }
 
   async collectContext(ctx: TriggerCtx, deps: AnalyzerDeps): Promise<HealthInput | null> {
-    const tree = asTreeMap(deps.app.getSelfPath(BATTERIES_PARENT_PATH));
-    if (!tree) return null;
-    // Skip any non-bank child of `electrical.batteries`: a future SK release
-    // could attach container-level metadata leaves (`meta`, `$source`,
-    // `value`, `timestamp`, ...). A real bank carries at least one of the
-    // canonical fields below; anything else is rejected so phantom bank ids
-    // never reach the prompt.
-    const banksRaw = Object.entries(tree).filter(([_, node]) => isBankNode(node));
+    const banksRaw = readBankNodes(deps.app);
     if (banksRaw.length === 0) return null;
 
     const endMs = ctx.firedAt.getTime();
@@ -94,17 +93,17 @@ export class HealthAnalyzer implements Analyzer<HealthInput> {
     };
   }
 
-  buildPrompt(input: HealthInput): { system: string; user: string } {
+  buildPrompt(input: HealthInput): PromptPair {
     const banks = input.banks;
 
     const lines: string[] = [];
-    lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(generatedLine(input.generatedAt));
     lines.push('');
     for (const b of banks) {
       pushBankLines(lines, sanitizeProducerString(b.id), b, [
         { label: 'voltage 24h', summary: b.voltage24h },
       ]);
-      if (b.cells && b.cells.length > 0) {
+      if (b.cells) {
         const cellLine = b.cells.map((c) => `${c.index}=${fmtNumber(c.voltage)}`).join(' ');
         lines.push(`- cells: ${cellLine}`);
       }

@@ -59,7 +59,6 @@ if (parameters.has('unsupported-css-scope')) {
 const statusPayload = {
   startedAt: 1_786_000_000_000,
   openrouter: {
-    apiKeySet: screenshotMode,
     model: 'anthropic/claude-sonnet-4',
     callsToday: 3,
     maxCallsPerDay: 50,

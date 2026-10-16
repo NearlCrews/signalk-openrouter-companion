@@ -411,6 +411,46 @@ describe('InfluxDBClient', () => {
     vi.useRealTimers();
   });
 
+  it('ends the other first-chunk fetch when one engine stream fails', async () => {
+    // Fuel and speed open together. A fuel failure must not leave the run
+    // waiting on a speed fetch nothing would cancel any more.
+    let sogSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation(async (input: string, init?: RequestInit) => {
+      const query = new URL(input).searchParams.get('q') ?? '';
+      if (query.includes('"rpm"')) {
+        return chunkedResult([{ columns: ['time', 'value'], values: [[0, 10]] }]);
+      }
+      if (query.includes('"fuel"')) return new Response('down', { status: 500 });
+      return new Promise<Response>((_resolve, reject) => {
+        sogSignal = init?.signal as AbortSignal | undefined;
+        sogSignal?.addEventListener('abort', () => reject(sogSignal?.reason), { once: true });
+      });
+    });
+    const client = new InfluxDBClient({
+      version: '2',
+      url: 'http://influx.local:8086',
+      database: 'signalk',
+      username: '',
+      password: '',
+    });
+
+    await expect(
+      client.binEngineWindow(
+        {
+          rpmPath: 'rpm',
+          fuelRatePath: 'fuel',
+          sogPath: 'sog',
+          runningThresholdHz: 5,
+          joinWindowMs: 5_000,
+          bins: [{ key: 'all', maxHz: Number.POSITIVE_INFINITY }],
+        },
+        0,
+        1_000,
+      ),
+    ).rejects.toThrow();
+    expect(sogSignal?.aborted).toBe(true);
+  });
+
   it('cancels an in-flight engine stream when the caller aborts', async () => {
     let requestSignal: AbortSignal | undefined;
     fetchMock.mockImplementation(

@@ -10,8 +10,10 @@ import {
   Stack,
   StatusIndicator,
   type StatusTone,
+  usePanelLocale,
 } from 'signalk-nearlcrews-ui';
 import type { PanelStatus, TestResult } from '../types.js';
+import { formatUsd, HISTORY_SOURCE_LABELS } from '../utils.js';
 import { useControlHint } from './ControlHint.js';
 
 interface Props {
@@ -21,8 +23,8 @@ interface Props {
   testing: boolean;
   testResult: TestResult | null;
   stale: boolean;
-  // Epoch milliseconds of the last good status snapshot, or null before the
-  // first one. RelativeAge owns the clock from here.
+  // Epoch milliseconds of the last good status snapshot while the snapshot is
+  // stale, else null. RelativeAge owns the clock from here.
   lastSuccessAt: number | null;
 }
 
@@ -42,15 +44,13 @@ export const StatusBlock = memo(function StatusBlock({
   stale,
   lastSuccessAt,
 }: Props): ReactElement {
+  const locale = usePanelLocale();
   // The test spends money the daily cap does not govern, so both facts sit
   // beside the button rather than in the collapsed OpenRouter section where the
   // cap is configured. Read before the branches below, since a hook cannot sit
   // behind an early return.
-  const apiKeySet = Boolean(status?.openrouter?.apiKeySet);
   const { hintId: testHintId, hint: testHint } = useControlHint(
-    apiKeySet
-      ? 'The test makes one paid OpenRouter call, and it does not count against the daily cap.'
-      : 'Save an API key to enable this test. It makes one paid OpenRouter call that does not count against the daily cap.',
+    'The test makes one paid OpenRouter call, and it does not count against the daily cap.',
   );
   // Nothing here is a live region: every element below mounts together with the
   // text it carries, which a screen reader may never observe as a change. The
@@ -63,23 +63,20 @@ export const StatusBlock = memo(function StatusBlock({
   const openrouter: Partial<PanelStatus['openrouter']> = status.openrouter ?? {};
   const history = status.history;
   const historyState = historyLabel(history);
-  const historyName =
-    history.source === 'questdb'
-      ? 'QuestDB'
-      : history.source === 'influxdb'
-        ? 'InfluxDB'
-        : 'History';
+  const historyName = history.source === 'none' ? 'History' : HISTORY_SOURCE_LABELS[history.source];
   const analyzers = status.analyzers ?? [];
   const enabledCount = analyzers.filter((analyzer) => analyzer.enabled).length;
 
   return (
     <Stack gap={3}>
       <MetricGrid>
+        {/* The plugin answers the status route only once a key is configured,
+         * so a snapshot here means the key is set. */}
         <Metric
           label="OpenRouter API key"
-          value={openrouter.apiKeySet ? 'Configured' : 'Missing'}
-          detail={openrouter.apiKeySet ? `Model: ${openrouter.model}` : 'Set a key below'}
-          tone={openrouter.apiKeySet ? 'success' : 'danger'}
+          value="Configured"
+          detail={`Model: ${openrouter.model}`}
+          tone="success"
         />
         <Metric
           label="Calls today"
@@ -88,12 +85,12 @@ export const StatusBlock = memo(function StatusBlock({
         />
         <Metric
           label="Tokens today"
-          value={(openrouter.tokensToday ?? 0).toLocaleString()}
+          value={(openrouter.tokensToday ?? 0).toLocaleString(locale)}
           detail="Prompt and completion"
         />
         <Metric
           label="Estimated cost today"
-          value={`$${(openrouter.costToday ?? 0).toFixed(4)}`}
+          value={formatUsd(openrouter.costToday ?? 0)}
           detail="OpenRouter usage cost"
         />
         <Metric
@@ -114,7 +111,6 @@ export const StatusBlock = memo(function StatusBlock({
             variant="primary"
             loading={testing}
             loadingLabel="Testing"
-            disabled={!openrouter.apiKeySet}
             aria-describedby={testHintId}
             onClick={onTest}
           >

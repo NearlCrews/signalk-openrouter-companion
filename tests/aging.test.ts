@@ -2,7 +2,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Analyzer, TriggerCtx } from '../src/analyzers/Analyzer.js';
 import { AgingAnalyzer } from '../src/analyzers/aging.js';
-import { RollingBuffer } from '../src/core/buffer.js';
 import { DAY_MS } from '../src/core/format.js';
 import { ReportPublisher } from '../src/core/publisher.js';
 import {
@@ -11,9 +10,11 @@ import {
   type MockApp,
   type MockQuestDB,
   makeAnalyzerDeps,
+  makeBuffer,
   makeMockApp,
   makeQuestDBStub,
   makeTmpDir,
+  makeTriggers,
 } from './_mocks.js';
 
 interface QuerySpec {
@@ -25,11 +26,7 @@ interface QuerySpec {
 
 function makeCfg(overrides: Partial<{ shortWindowDays: number; longWindowDays: number }> = {}) {
   return {
-    triggers: {
-      cron: { enabled: true, pattern: '0 8 1 * *', timezone: '' },
-      put: { enabled: true },
-      events: [] as string[],
-    },
+    triggers: makeTriggers({ cron: { enabled: true, pattern: '0 8 1 * *' } }),
     shortWindowDays: overrides.shortWindowDays ?? 30,
     longWindowDays: overrides.longWindowDays ?? 90,
   };
@@ -65,15 +62,6 @@ function stubQuestDB(perWindow: Partial<Record<number, QuerySpec[]>>): MockQuest
       dataset: rows.map((r) => [r.path, r.first, r.last, r.n]),
     };
   });
-}
-
-function makeDeps(
-  app: MockApp,
-  buffer: RollingBuffer,
-  questdb: MockQuestDB | null,
-  publisher?: ReportPublisher,
-) {
-  return makeAnalyzerDeps(app, buffer, { questdb, publisher });
 }
 
 describe('AgingAnalyzer', () => {
@@ -112,24 +100,24 @@ describe('AgingAnalyzer', () => {
   });
 
   it('collectContext returns null when QuestDB is unavailable', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
     const a = new AgingAnalyzer(makeCfg());
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    expect(await a.collectContext(ctx, makeDeps(app, buf, null))).toBeNull();
+    expect(await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: null }))).toBeNull();
   });
 
   it('collectContext returns null when no battery banks have been observed', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const a = new AgingAnalyzer(makeCfg());
     const stub = stubQuestDB({});
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    expect(await a.collectContext(ctx, makeDeps(app, buf, stub))).toBeNull();
+    expect(await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }))).toBeNull();
     expect(stub.calls).toHaveLength(0);
   });
 
   it('collectContext returns null when no bank has at least two samples in any window', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
     const a = new AgingAnalyzer(makeCfg());
     // Stub returns one sample for capacity, none for cycles, so insufficient data.
@@ -152,11 +140,11 @@ describe('AgingAnalyzer', () => {
       ],
     });
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    expect(await a.collectContext(ctx, makeDeps(app, buf, stub))).toBeNull();
+    expect(await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }))).toBeNull();
   });
 
   it('collectContext issues one query per window for all banks and computes deltas', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const now = Date.now();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, now, 'bms');
     buf.record('electrical.batteries.house.cycles', 100, now, 'bms');
@@ -185,7 +173,7 @@ describe('AgingAnalyzer', () => {
 
     const a = new AgingAnalyzer(makeCfg());
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
     expect(r).not.toBeNull();
     // starter has no capacity.actual/cycles data so it should be skipped.
     expect(r?.banks).toHaveLength(1);
@@ -223,7 +211,7 @@ describe('AgingAnalyzer', () => {
   });
 
   it('bounds each window query with explicit ts > and ts <= timestamps anchored to firedAt', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
     const stub = stubQuestDB({
       30: [
@@ -247,7 +235,10 @@ describe('AgingAnalyzer', () => {
     });
     const firedAt = new Date('2026-05-11T08:00:00Z');
     const a = new AgingAnalyzer(makeCfg());
-    await a.collectContext({ kind: 'cron', firedAt }, makeDeps(app, buf, stub));
+    await a.collectContext(
+      { kind: 'cron', firedAt },
+      makeAnalyzerDeps(app, buf, { questdb: stub }),
+    );
     expect(stub.calls).toHaveLength(2);
     for (const sql of stub.calls) {
       // No server-side now(): the upper bound is pinned to firedAt so samples
@@ -261,7 +252,7 @@ describe('AgingAnalyzer', () => {
   });
 
   it('collectContext still issues exactly 2 queries when many banks are present', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     const now = Date.now();
     const bankIds = ['house', 'starter', 'console', 'trolling'];
     for (const id of bankIds) {
@@ -287,7 +278,7 @@ describe('AgingAnalyzer', () => {
 
     const a = new AgingAnalyzer(makeCfg());
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
     expect(r).not.toBeNull();
     expect(r?.banks.map((b) => b.id).sort()).toEqual([...bankIds].sort());
     // Total query count is exactly 2 (one per window), independent of bank count.
@@ -295,7 +286,7 @@ describe('AgingAnalyzer', () => {
   });
 
   it('uses configured shortWindowDays and longWindowDays when set', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
     const stub = stubQuestDB({
       14: [
@@ -319,14 +310,14 @@ describe('AgingAnalyzer', () => {
     });
     const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 14, longWindowDays: 60 }));
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
     expect(r).not.toBeNull();
     expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([14, 60]);
     expect(stub.calls.map(windowDaysFromSql).sort((x, y) => x - y)).toEqual([14, 60]);
   });
 
   it('sorts windows ascending when user inverts short/long days', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
     const stub = stubQuestDB({
       30: [
@@ -350,14 +341,14 @@ describe('AgingAnalyzer', () => {
     });
     const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 90, longWindowDays: 30 }));
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
     expect(r).not.toBeNull();
     expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([30, 90]);
     expect(stub.calls).toHaveLength(2);
   });
 
   it('collapses to a single window when shortWindowDays == longWindowDays', async () => {
-    const buf = new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 });
+    const buf = makeBuffer();
     buf.record('electrical.batteries.house.capacity.actual', 5_400_000, Date.now(), 'bms');
     const stub = stubQuestDB({
       45: [
@@ -372,7 +363,7 @@ describe('AgingAnalyzer', () => {
     });
     const a = new AgingAnalyzer(makeCfg({ shortWindowDays: 45, longWindowDays: 45 }));
     const ctx: TriggerCtx = { kind: 'cron', firedAt: new Date('2026-05-11T08:00:00Z') };
-    const r = await a.collectContext(ctx, makeDeps(app, buf, stub));
+    const r = await a.collectContext(ctx, makeAnalyzerDeps(app, buf, { questdb: stub }));
     expect(r).not.toBeNull();
     expect(r?.banks[0]?.windows.map((w) => w.days)).toEqual([45]);
     expect(stub.calls).toHaveLength(1);

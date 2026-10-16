@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RouteRequest, RouteResponse, RouterLike } from '../src/core/api.js';
+import { RollingBuffer } from '../src/core/buffer.js';
 import { CronScheduler } from '../src/core/cronScheduler.js';
 import { QuestDBClient } from '../src/core/questdb.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
@@ -247,6 +248,36 @@ describe('plugin lifecycle', () => {
     app.availablePaths = ['propulsion.port.revolutions', 'electrical.alternators.1.voltage'];
     await vi.advanceTimersByTimeAsync(60_000);
     expect(app.buses.has('electrical.alternators.1.voltage')).toBe(true);
+
+    await plugin.stop();
+  });
+
+  it('feeds the detector from a buffered extra RPM path without buffering it twice', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-10T12:00:00Z'));
+    const record = vi.spyOn(RollingBuffer.prototype, 'record');
+    const rpm = 'propulsion.port.revolutions';
+    const plugin = createPlugin(app as never);
+    plugin.start(
+      {
+        openrouter: { apiKey: 'sk-x' },
+        questdb: { enabled: false },
+        analyzers: { maintenance: { extraWatchedPaths: [rpm] } },
+      } as never,
+      () => {},
+    );
+    await plugin._whenReady();
+    expect(app.busFor(rpm).listenerCount()).toBe(1);
+
+    // The engine starts after the plugin, so the rescan discovers it on a
+    // path the operator's extra already buffers.
+    app.availablePaths = [rpm];
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(app.busFor(rpm).listenerCount()).toBe(2);
+
+    record.mockClear();
+    app.busFor(rpm).push({ value: 12, $source: 'n2k.1' });
+    expect(record.mock.calls.filter(([path]) => path === rpm)).toHaveLength(1);
 
     await plugin.stop();
   });

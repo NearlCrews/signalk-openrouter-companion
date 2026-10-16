@@ -1,5 +1,5 @@
 import {
-  clampPositiveInt,
+  generatedLine,
   REPORT_BODY_INSTRUCTION,
   REPORT_HEADLINE_INSTRUCTION,
   resolveSystemPrompt,
@@ -10,19 +10,20 @@ import { DAY_MS, fmtNumber } from '../core/format.js';
 import type { PathWindowSummary } from '../core/history.js';
 import { bankPaths } from '../core/paths.js';
 import { buildTriggers } from '../core/triggers.js';
-import {
-  AGING_DEFAULT_LONG_DAYS,
-  AGING_DEFAULT_SHORT_DAYS,
-  type AnalyzerTriggerCfg,
-} from '../types.js';
-import type { AnalysisInput, Analyzer, AnalyzerDeps, TriggerCtx, TriggerSpec } from './Analyzer.js';
+import type {
+  AnalysisInput,
+  Analyzer,
+  AnalyzerBaseCfg,
+  AnalyzerDeps,
+  PromptPair,
+  TriggerCtx,
+  TriggerSpec,
+} from './Analyzer.js';
 import { ANALYZER_TITLES } from './ids.js';
 
-export interface AgingCfg {
-  triggers: AnalyzerTriggerCfg;
+export interface AgingCfg extends AnalyzerBaseCfg {
   shortWindowDays: number;
   longWindowDays: number;
-  customSystemPrompt?: string;
 }
 
 // Static: window lengths come through the user prompt's data block, not the
@@ -68,17 +69,10 @@ export interface AgingInput extends AnalysisInput {
   banks: BankAging[];
 }
 
+// The configured windows, shortest first, with a duplicate collapsed. The
+// lengths themselves arrive already clamped by the option normalizer.
 function resolveWindowDays(cfg: AgingCfg): readonly number[] {
-  // Bounds mirror the schema so a value from a hand-edited JSON config is
-  // clamped at runtime too (shortWindowDays 7..365, longWindowDays 7..1095).
-  const short = clampPositiveInt(cfg.shortWindowDays, AGING_DEFAULT_SHORT_DAYS, {
-    min: 7,
-    max: 365,
-  });
-  const long = clampPositiveInt(cfg.longWindowDays, AGING_DEFAULT_LONG_DAYS, {
-    min: 7,
-    max: 1095,
-  });
+  const { shortWindowDays: short, longWindowDays: long } = cfg;
   const [a, b] = short <= long ? [short, long] : [long, short];
   return a === b ? [a] : [a, b];
 }
@@ -103,11 +97,8 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
 
     const history = deps.history;
 
-    const allPaths: string[] = [];
-    for (const id of bankIds) {
-      const { capacityActual: cap, cycles: cyc } = bankPaths(id);
-      allPaths.push(cap, cyc);
-    }
+    const pathsByBank = bankIds.map((id) => ({ id, ...bankPaths(id) }));
+    const allPaths = pathsByBank.flatMap((p) => [p.capacityActual, p.cycles]);
 
     const firedMs = ctx.firedAt.getTime();
     const summariesByWindow = await Promise.all(
@@ -123,8 +114,7 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     );
 
     const banks: BankAging[] = [];
-    for (const id of bankIds) {
-      const { capacityActual: cap, cycles: cyc } = bankPaths(id);
+    for (const { id, capacityActual: cap, cycles: cyc } of pathsByBank) {
       const windows: WindowEntry[] = [];
       let hasData = false;
       for (const { days, summaries } of summariesByWindow) {
@@ -142,12 +132,12 @@ export class AgingAnalyzer implements Analyzer<AgingInput> {
     };
   }
 
-  buildPrompt(input: AgingInput): { system: string; user: string } {
+  buildPrompt(input: AgingInput): PromptPair {
     // By the time buildPrompt runs, each bank's windows match this.windowDays
     // one for one (collectContext builds them from the same list).
     const windowDesc = this.windowDays.map((d) => `${d}-day`).join(' and ');
     const lines: string[] = [];
-    lines.push(`## Generated ${input.generatedAt}`);
+    lines.push(generatedLine(input.generatedAt));
     lines.push(`Configured windows: ${windowDesc} (longest = ${this.windowDays.at(-1)} days)`);
     lines.push('');
     for (const b of input.banks) {

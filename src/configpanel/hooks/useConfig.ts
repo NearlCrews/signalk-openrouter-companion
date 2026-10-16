@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { legacyHistorySource } from '../../historyConfig.js';
 import type { AnalyzerConfig, PanelConfig } from '../types.js';
 import { jsonEqual } from '../utils.js';
 
+// Fold a legacy top-level QuestDB block into `history`, the same migration the
+// plugin applies, so the panel edits and saves the shape the plugin reads.
 function normalizePanelConfig(configuration: PanelConfig | undefined): PanelConfig {
   const next = structuredClone(configuration ?? {});
   const legacy = next.questdb;
   if (legacy) {
     next.history = {
       ...next.history,
-      source: next.history?.source ?? (legacy.enabled === false ? 'none' : 'questdb'),
+      source: next.history?.source ?? legacyHistorySource(legacy),
       questdb: {
         ...(legacy.url ? { url: legacy.url } : {}),
         ...next.history?.questdb,

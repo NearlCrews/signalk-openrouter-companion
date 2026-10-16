@@ -10,7 +10,7 @@ import type { CompleteResult } from '../src/core/openrouter.js';
 import type { ReportPublisher, SignalKNotificationValue } from '../src/core/publisher.js';
 import { type QueryResult, QuestDBClient } from '../src/core/questdb.js';
 import { TriggerRouter } from '../src/core/triggerRouter.js';
-import { DEFAULT_OPTIONS } from '../src/types.js';
+import { type AnalyzerTriggerCfg, DEFAULT_OPTIONS } from '../src/types.js';
 
 type Listener<T> = (v: T) => void;
 
@@ -58,7 +58,6 @@ export interface MockApp {
   errorMessages: string[];
   debugMessages: unknown[];
   appErrorMessages: string[];
-  adminMiddlewarePaths: string[];
   unsubscribes: Array<() => void>;
   availablePaths: string[];
   selfPaths: Map<string, unknown>;
@@ -83,11 +82,6 @@ export interface MockApp {
   getSelfPath(path: string): unknown;
   busFor<T = unknown>(path: string): MockBus<T>;
   setSelfPath(path: string, value: unknown): void;
-  securityStrategy?: {
-    addAdminMiddleware(path: string): void;
-    addAdminWriteMiddleware(path: string): void;
-    addWriteMiddleware(path: string): void;
-  };
 }
 
 export function makeMockApp(dataDir: string): MockApp {
@@ -98,7 +92,6 @@ export function makeMockApp(dataDir: string): MockApp {
     errorMessages: [],
     debugMessages: [],
     appErrorMessages: [],
-    adminMiddlewarePaths: [],
     unsubscribes: [],
     availablePaths: [],
     selfPaths: new Map(),
@@ -135,13 +128,6 @@ export function makeMockApp(dataDir: string): MockApp {
     error(msg) {
       app.appErrorMessages.push(msg);
     },
-    securityStrategy: {
-      addAdminMiddleware(path) {
-        app.adminMiddlewarePaths.push(path);
-      },
-      addAdminWriteMiddleware() {},
-      addWriteMiddleware() {},
-    },
     getDataDirPath() {
       return dataDir;
     },
@@ -156,6 +142,21 @@ export function makeMockApp(dataDir: string): MockApp {
     },
   };
   return app;
+}
+
+// Shared trigger fixture: cron off, PUT on, no events unless overridden.
+export function makeTriggers(
+  overrides: {
+    cron?: Partial<AnalyzerTriggerCfg['cron']>;
+    put?: Partial<AnalyzerTriggerCfg['put']>;
+    events?: string[];
+  } = {},
+): AnalyzerTriggerCfg {
+  return {
+    cron: { enabled: false, pattern: '', timezone: '', ...overrides.cron },
+    put: { enabled: true, ...overrides.put },
+    events: overrides.events ?? [],
+  };
 }
 
 // Standard RollingBuffer for analyzer tests: 24h retention, generous cap.
@@ -204,7 +205,6 @@ export function makeAnalyzerDeps(
 // zero-cost stubs. Replaces six near-identical literals that had grown
 // across tests/api.test.ts.
 export interface MakePluginRuntimeOpts {
-  apiKeySet?: boolean;
   analyzers?: Analyzer[];
   historyLive?: PluginRuntime['historyLive'];
   historyProbed?: boolean;
@@ -245,14 +245,11 @@ export function makePluginRuntime(opts: MakePluginRuntimeOpts = {}): PluginRunti
     llm: (opts.llm ?? ({} as never)) as PluginRuntime['llm'],
     budget: (opts.budget ??
       ({
-        callsToday: () => 0,
-        tokensToday: () => 0,
-        costToday: () => 0,
+        snapshot: () => ({ callsToday: 0, tokensToday: 0, costToday: 0 }),
       } as never)) as PluginRuntime['budget'],
     historyLive: opts.historyLive ?? null,
     historyProbed: opts.historyProbed ?? false,
     analyzers: opts.analyzers ?? [],
-    apiKeySet: opts.apiKeySet ?? true,
     router: opts.router ?? null,
     logPath: opts.logPath ?? '/tmp/unused.jsonl',
     signal: opts.signal ?? new AbortController().signal,
@@ -308,7 +305,7 @@ export function makeRouterDeps(
   };
   const deps: AnalyzerDeps = {
     app: { getSelfPath: mocks.getSelfPath as never, selfContext: MOCK_SELF_CONTEXT },
-    buffer: new RollingBuffer({ maxAgeMs: 86_400_000, maxEntriesPerPath: 10_000 }),
+    buffer: makeBuffer(),
     history: null,
     publisher: {
       publishReport: mocks.publishReport,
