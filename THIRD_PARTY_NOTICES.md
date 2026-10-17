@@ -1,6 +1,6 @@
 # Third-party notices
 
-<!-- generated-for-signalk-nearlcrews-ui:0.14.0 -->
+<!-- generated-for-signalk-nearlcrews-ui:0.14.1 -->
 
 This file is generated. Run `npm run licenses` to regenerate it after any
 change to either bundle's dependency tree, and `npm run package:check` to

@@ -213,7 +213,7 @@ Outputs:
 
 esbuild externalizes only `@signalk/server-api`; everything else in the
 backend, including `croner`, is bundled. The panel bundles the exact-pinned
-`signalk-nearlcrews-ui` 0.14.0 component library and shares React 19 and React
+`signalk-nearlcrews-ui` 0.14.1 component library and shares React 19 and React
 DOM as Module Federation singletons supplied by the Signal K admin host. The
 share map is read from `signalk-nearlcrews-ui/federation`, so it cannot drift
 from the release the panel bundles. The shares carry no strict version check:
@@ -577,7 +577,7 @@ published, non-prerelease GitHub release.
 - `croner` 10 (only runtime dep)
 - esbuild 0.28 (backend bundle)
 - Webpack 5 with native CSS Modules, esbuild-loader 4, React 19, React DOM
-  19, and `signalk-nearlcrews-ui` 0.14.0
+  19, and `signalk-nearlcrews-ui` 0.14.1
 - Biome 2.5, ESLint 10, dependency-cruiser 18, and Knip 6
 - Vitest 5 with v8 coverage and Playwright cross-browser checks
 

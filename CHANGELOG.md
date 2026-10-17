@@ -6,6 +6,13 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The configuration panel moves to `signalk-nearlcrews-ui` 0.14.1, whose bundle
+  check works with webpack 5.112.0, so the panel now builds with webpack
+  5.112.0 as well. The panel looks and behaves as in 0.8.1; the newer build
+  only writes some of its CSS differently.
+
 <a id="v081"></a>
 
 ## [0.8.1] - 2026-10-17
