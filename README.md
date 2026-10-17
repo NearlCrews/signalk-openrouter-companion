@@ -18,31 +18,19 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.8.1
+## What's new in 0.8.2
 
-0.8.1 makes every report cover the whole window it names, moves the
-configuration panel to shared UI 0.14.0, and adds a CI check that mounts the
-panel in a real Signal K Admin.
+0.8.2 is a maintenance release. The configuration panel builds on shared UI
+0.14.1 and webpack 5.112.0, and the development tools are current. Reports,
+settings, and the panel's behavior are unchanged from 0.8.1.
 
-- **Reports cover their whole window.** The rolling buffer's caps used to cut
-  the oldest samples, so on a vessel with a few dozen paths at 1 Hz the health
-  report's 24 hour voltage summary covered only the last few hours. Older
-  samples now fold into a per-minute summary for each source instead, so
-  minimum, maximum, mean, and count stay exact across the full window.
-- **Shared UI 0.14.0 panel.** The Save bar reads "Nothing to save" when there
-  are no edits, a blocked save sends focus straight to the refused field, the
-  API key reveal button is named "Show API key" and "Hide API key", and the
-  panel bundle is about 2.5 KB smaller.
-- **Mounted in Signal K Admin in CI.** Every push installs the packed plugin
-  into Signal K 2.25.0 and the latest server and mounts the production panel
-  through Admin in a real browser. The REST routes rely on the admin
-  authentication Signal K already mounts over `/plugins` and stay admin-only.
-- **Smaller fixes.** An engine RPM path listed among the maintenance extra
-  watched paths is no longer buffered twice, editing a history setting
-  discards a connection test still running against the old settings, and with
-  no analyzer enabled the plugin no longer subscribes to vessel data.
+- **Shared UI 0.14.1 panel.** The panel looks and behaves as in 0.8.1. The
+  newer webpack only reorders some of the panel's CSS declarations.
+- **Current development tools.** ESLint 10.13, typescript-eslint 8.71.2,
+  Vitest 5.0.5, Playwright 1.64.1, and markdownlint 0.42 run the checks. None
+  of them ship in the plugin.
 
-See the [v0.8.1 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v081) and the
+See the [v0.8.2 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v082) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does

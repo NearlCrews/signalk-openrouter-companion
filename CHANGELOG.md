@@ -6,12 +6,21 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v082"></a>
+
+## [0.8.2] - 2026-10-17
+
 ### Changed
 
 - The configuration panel moves to `signalk-nearlcrews-ui` 0.14.1, whose bundle
   check works with webpack 5.112.0, so the panel now builds with webpack
   5.112.0 as well. The panel looks and behaves as in 0.8.1; the newer build
   only writes some of its CSS differently.
+- Development tools move to ESLint 10.13.0, typescript-eslint 8.71.2, Vitest
+  and its coverage provider 5.0.5, Playwright 1.64.1 with the axe-core
+  Playwright integration 4.14.0, markdownlint 0.42.0, dependency-cruiser
+  18.6.0, and React and React DOM 19.3.1 for the tests. None of these ship in
+  the plugin.
 
 <a id="v081"></a>
 
@@ -1862,7 +1871,8 @@ The changes were derived from a study of
   real tag, and 0.5.4 compares straight back to 0.5.2.
 -->
 
-[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.4...v0.7.5
