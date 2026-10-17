@@ -37,15 +37,18 @@ import { mergeWithDefaults, type PluginOptions } from './types.js';
 const PLUGIN_NAME = 'OpenRouter Companion';
 
 const BUFFER_MAX_AGE_MS = 26 * HOUR_MS;
-// Raw samples per path. Older samples still read through their minute
-// buckets, so this bounds memory, not the window a report covers.
-const BUFFER_MAX_ENTRIES_PER_PATH = 50_000;
-// Ceiling across every buffered path together, raw samples and minute buckets
-// alike, so a vessel with many busy electrical and propulsion paths cannot
-// multiply the per-path cap into hundreds of megabytes on a Raspberry Pi.
-// Roughly 40 MB. One source's full window is about 1,600 minute buckets, so
-// the cap takes raw samples, which fall back to buckets, long before it has
-// to shorten any window.
+// Raw samples per path, an hour at 1 Hz. Past it the oldest fold into
+// per-source minute buckets, so this sets how much of a path reads sample by
+// sample, not the window a report covers.
+const BUFFER_MAX_ENTRIES_PER_PATH = 3600;
+// Ceiling across every buffered path together, so a vessel with many busy
+// electrical and propulsion paths cannot multiply the per-path cap into
+// hundreds of megabytes on a Raspberry Pi. Counted in raw samples, with a
+// minute bucket costing two and a source's bucket map three, it holds 30 to
+// 45 MB whatever the mix. Under it the oldest raw samples fold into buckets
+// before any window shortens, so a path with one source needs about 3,100 for
+// the full window (some 1,560 buckets), and about 125 such paths fit before
+// the cap shortens the window of the costliest one.
 const BUFFER_MAX_TOTAL_ENTRIES = 400_000;
 const ENGINE_SOURCE_WINDOW_MS = SECOND_MS;
 const BATTERY_SOURCE_WINDOW_MS = 5000;

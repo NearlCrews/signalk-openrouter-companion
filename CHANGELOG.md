@@ -69,11 +69,16 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
   The rolling buffer capped each path at 50,000 samples and the whole buffer
   at 400,000, so on a vessel with a few dozen paths at 1 Hz the health
   report's 24 hour voltage summary covered only the last few hours, and a
-  10 Hz RPM feed held under an hour and a half. Every sample now also folds
-  into a per-minute summary for each source, and a read falls back to those
-  summaries for any span the caps trimmed. Minimum, maximum, mean, and count
-  stay exact there, and a window edge loses at most one minute rather than
-  reading a sample from outside the window.
+  10 Hz RPM feed held under an hour and a half. Each path now keeps its
+  newest 3,600 samples, an hour at 1 Hz, and folds older ones into a
+  per-minute summary for each source instead of dropping them. Minimum,
+  maximum, mean, and count stay exact across the window, and a window edge
+  loses at most one minute rather than reading a sample from outside the
+  window. When the whole buffer reaches its cap, raw samples fold into those
+  summaries before any window shortens, so about 125 paths keep their full
+  window in the same memory. A path that stops sending, such as the engine
+  after a stop, ages out with the rest and keeps only its newest sample, so
+  the liveness report still says how long it has been quiet.
 - An engine RPM path listed in the maintenance extra watched paths, whose
   engine came online after the plugin started, is no longer buffered twice.
 - Editing a history setting while its connection test runs discards that
