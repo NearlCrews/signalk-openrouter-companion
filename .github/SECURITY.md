@@ -67,7 +67,7 @@ When using this plugin:
 
 1. **Use a dedicated API key**: give this plugin its own OpenRouter API
    key so you can revoke it without impacting other tools.
-2. **Cap the spend**: set "Max calls per day" to a hard cap on analyzer
+2. **Cap the spend**: set "Maximum calls per day" to a hard cap on analyzer
    runs, so a stuck loop cannot burn through credit. It accepts 1 to 1000,
    and the runtime clamps anything outside that range, so the bound cannot
    be edited away. Read it as a cap on analyzer runs only. The panel's

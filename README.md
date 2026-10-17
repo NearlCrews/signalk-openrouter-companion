@@ -76,8 +76,8 @@ in the Signal K admin UI.
 - **Plain-prose reports** published as Signal K notifications, readable in
   the Data Browser, each led by a headline short enough for a chartplotter
   alert.
-- **Three trigger kinds per analyzer**: a cron schedule, a Signal K PUT,
-  or a vessel event.
+- **Three trigger kinds**: a cron schedule, a Signal K PUT, or a vessel event
+  (an engine stop or a battery threshold crossing), each enabled per analyzer.
 - **A per-day OpenRouter call cap** (default 20 calls per UTC day) to
   bound spend.
 - **A JSONL report log**: every run is appended to `reports.jsonl` in the
@@ -181,7 +181,7 @@ plugin form. The main settings:
 | --------- | ------------- | --------- |
 | OpenRouter API key | Required. Key from openrouter.ai. | n/a |
 | Model | OpenRouter model slug. | anthropic/claude-haiku-4.5 |
-| Max calls per day | Hard cap on analyzer OpenRouter calls per UTC day, to bound spend. Accepts 1 to 1000. The panel's Test button is exempt and makes a billed call of its own, rate-limited separately. | 20 |
+| Maximum calls per day | Hard cap on analyzer OpenRouter calls per UTC day, to bound spend. Accepts 1 to 1000. The panel's Test button is exempt and makes a billed call of its own, rate-limited separately. | 20 |
 | History source | Disabled, QuestDB, or InfluxDB for the trend analyzers. | QuestDB; `http://localhost:9000` |
 | Analyzers | Each of the seven can be enabled or disabled independently. | six on by default; the weather outlook is opt-in |
 
@@ -276,7 +276,7 @@ uncorroborated grade is capped at `alert` and published visual only.
 > [!IMPORTANT]
 > The `alerts` analyzer writes its alert text with an OpenRouter call, so
 > a battery crossing is reported only when that call succeeds and the
-> shared daily budget (Max calls per day) is not yet exhausted. If the
+> shared daily budget (Maximum calls per day) is not yet exhausted. If the
 > budget is spent, or OpenRouter is unreachable, a crossing may not raise
 > a notification at the helm. The underlying detection still runs, but the
 > operator-facing alarm depends on a cloud call. Do not rely on this as

@@ -33,6 +33,12 @@ src/
 │   └── forecast.ts           Trend: weather outlook from buffer + optional history
 ├── configpanel/
 │   ├── PluginConfigurationPanel.tsx  Module Federation panel exposed as `./PluginConfigurationPanel`
+│   ├── api.ts                apiFetch and the fetchJson envelope every panel request uses
+│   ├── fireOutcome.ts        Text for a Fire now outcome
+│   ├── reportTrigger.ts      Label for the trigger that produced a report
+│   ├── scheduleOptions.ts    Schedule dropdown options built from the cron presets
+│   ├── types.ts              Panel config, status, report, and per-analyzer UI state types
+│   ├── utils.ts              Pure helpers: jsonEqual, history validity, labels, and formatUsd
 │   ├── components/           Shared UI composition plus plugin-specific CSS Modules
 │   └── hooks/                Config, save, model-list, live-status, probe, open-section, and per-analyzer state
 └── core/
@@ -58,7 +64,7 @@ src/
     ├── skNode.ts             SK tree readers, bank enumeration and prompt lines, deltaTimestampMs
     ├── paths.ts              Notification + PUT + bank/engine path builders, parent-path constants
     ├── triggers.ts           buildTriggers(analyzerId, cfg, eventMapper?) + manualPutCtx(path?)
-    ├── readings.ts           Per-source rolling map helpers: evictStale, fuseMin, fuseMax, evictStaleSpan
+    ├── readings.ts           Per-source rolling map helpers: fuseMin, fuseMax, evictStaleSpan
     ├── format.ts             Number formatters, asFiniteNumber, compositeKey, and duration constants
     ├── cfg.ts                clamp and default helpers, resolveSystemPrompt, and the prompt sanitizers and row cap
     └── logger.ts             Wraps app.debug / app.error / stringify
