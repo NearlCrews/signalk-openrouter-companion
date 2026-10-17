@@ -1,11 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": [
-    "src/configpanel/PluginConfigurationPanel.tsx",
-    "scripts/*.mjs",
-    "fixtures/browser/main.tsx",
-    "fixtures/browser/vite.config.ts"
-  ],
+  "entry": ["src/configpanel/PluginConfigurationPanel.tsx", "scripts/*.mjs"],
   "project": [
     "src/**/*.{ts,tsx}",
     "tests/**/*.{ts,tsx}",
@@ -15,7 +10,8 @@
     "*.{ts,js,cjs,mjs}"
   ],
   // The CI Signal K Admin job installs these into a separate host directory,
-  // where link-signalk-admin.mjs resolves them, so they are never dependencies
-  // of this package.
-  "ignoreDependencies": ["signalk-server", "@signalk/server-admin-ui"]
+  // where link-signalk-admin.mjs resolves them and the job starts the
+  // signalk-server binary, so they are never dependencies of this package.
+  "ignoreDependencies": ["signalk-server", "@signalk/server-admin-ui"],
+  "ignoreBinaries": ["signalk-server"]
 }
