@@ -339,7 +339,7 @@ for every edge rather than exempting type ones.
 
 Biome owns formatting and its recommended lint rules. ESLint adds typed promise
 checks and React Hooks rules. The documentation gate uses exact-pinned
-markdownlint 0.41.1, cspell 10.4.0, and Linkinator 8.1.0. Local files and
+markdownlint 0.42.0, cspell 10.4.0, and Linkinator 8.1.0. Local files and
 fragments block the commit gate. External links run in a scheduled workflow
 with bounded concurrency, retries, and rate-limit warnings because remote rate
 limits and bot protection make them unsuitable for the merge gate. The repo
