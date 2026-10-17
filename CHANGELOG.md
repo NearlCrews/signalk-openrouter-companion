@@ -6,6 +6,10 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+<a id="v081"></a>
+
+## [0.8.1] - 2026-10-17
+
 ### Changed
 
 - The configuration panel moves to `signalk-nearlcrews-ui` 0.14.0. The Save
@@ -42,6 +46,9 @@ All notable changes will be documented in this file. Format follows [Keep a Chan
 - With no analyzer enabled, the plugin no longer subscribes to vessel data or
   runs its periodic path rescan.
 - Development builds against `@signalk/server-api` 2.33.0.
+- Development tooling moves to Biome 2.5.15, ESLint 10.12.0, Vitest 5.0.3,
+  knip 6.41.0, size-limit 14.2.0, and Playwright 1.64.0. The CodeQL, Codecov,
+  and zizmor actions move to 4.38.2, 7.1.1, and 0.6.4.
 - Pushes and pull requests now gate on the runtime dependency audit the
   plugin registry scores. The development-tree audit moved to the weekly
   checks workflow, beside the external link check, and still runs before
@@ -1848,7 +1855,8 @@ The changes were derived from a study of
   real tag, and 0.5.4 compares straight back to 0.5.2.
 -->
 
-[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/NearlCrews/signalk-openrouter-companion/compare/v0.7.3...v0.7.4

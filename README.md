@@ -18,39 +18,31 @@ results back as plain-prose Signal K notifications. Requires an
 > spent or OpenRouter is unreachable. Do not rely on this plugin as your
 > sole battery safety alarm: pair it with a hardware or BMS alarm.
 
-## What's new in 0.8.0
+## What's new in 0.8.1
 
-0.8.0 rebuilds the configuration panel on shared UI 0.11.1, clears an alert on
-the chartplotter once the condition passes, stops analyzer runs from being lost
-or double-billed, and weighs a graded weather outlook against the vessel's own
-telemetry.
+0.8.1 makes every report cover the whole window it names, moves the
+configuration panel to shared UI 0.14.0, and adds a CI check that mounts the
+panel in a real Signal K Admin.
 
-- **Shared UI 0.11.1 panel.** The panel frame, the Save and Discard bar, the
-  calls-per-day field, and the reports and prompt drawers all come from the
-  library now. A panel error offers "Try again" and "Reload page" instead of a
-  blank card, the save bar keeps its buttons in the tab order and says why a
-  save is blocked, every status change is spoken through one pair of live
-  regions, and the reports drawer reads only the tail of the report log
-  instead of parsing all of it.
-- **A recovery clears the alert.** The first settled report after an alert, or
-  after a failure notice, publishes `state: normal` rather than `nominal`, so a
-  bridge that put the alert on a chartplotter has the state it needs to clear
-  it. A failed run no longer lowers an alarm that still stands.
-- **No lost vessel events.** A battery or engine event that arrives during
-  startup, or while the same analyzer is still running, is now held and run
-  rather than dropped, and battery alerts serialize per bank so two banks
-  crossing one threshold no longer contend.
-- **A weather alarm has to be corroborated.** An outlook graded above alert
-  sounds only when the observed pressure, wind, or dew point trend supports it.
-  An uncorroborated grade still publishes, capped at alert and visual only, so
-  it stays readable without beeping at the helm.
-- **Tighter spend bounds.** The daily cap accepts 1 to 1000 and cannot be
-  edited away, a retry after a request timeout counts against it, the "Test API
-  key" button coalesces overlapping presses and refuses a repeat for five
-  seconds, and an overloaded OpenRouter provider is retried instead of failing
-  the run.
+- **Reports cover their whole window.** The rolling buffer's caps used to cut
+  the oldest samples, so on a vessel with a few dozen paths at 1 Hz the health
+  report's 24 hour voltage summary covered only the last few hours. Older
+  samples now fold into a per-minute summary for each source instead, so
+  minimum, maximum, mean, and count stay exact across the full window.
+- **Shared UI 0.14.0 panel.** The Save bar reads "Nothing to save" when there
+  are no edits, a blocked save sends focus straight to the refused field, the
+  API key reveal button is named "Show API key" and "Hide API key", and the
+  panel bundle is about 2.5 KB smaller.
+- **Mounted in Signal K Admin in CI.** Every push installs the packed plugin
+  into Signal K 2.25.0 and the latest server and mounts the production panel
+  through Admin in a real browser. The REST routes rely on the admin
+  authentication Signal K already mounts over `/plugins` and stay admin-only.
+- **Smaller fixes.** An engine RPM path listed among the maintenance extra
+  watched paths is no longer buffered twice, editing a history setting
+  discards a connection test still running against the old settings, and with
+  no analyzer enabled the plugin no longer subscribes to vessel data.
 
-See the [v0.8.0 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v080) and the
+See the [v0.8.1 changelog entry](https://github.com/NearlCrews/signalk-openrouter-companion/blob/main/CHANGELOG.md#v081) and the
 [full release history](https://github.com/NearlCrews/signalk-openrouter-companion/releases).
 
 ## What it does
