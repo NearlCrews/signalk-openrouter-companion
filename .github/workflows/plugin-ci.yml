@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   validate:
-    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@faab2be886fa7d52f926e7d2acf91c910623d4d7
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@55466a958cf2958542208fed559d70911888f1bb
     # ci.yml already checks formatting and coverage once, and its Signal K Admin
     # job installs the packed tarball into real servers and mounts the panel,
     # so the reusable format, coverage, and integration lanes stay off.
