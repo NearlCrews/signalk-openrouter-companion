@@ -90,7 +90,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "croner": "^10.0.1"
+    "croner": "^11.0.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
